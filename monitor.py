@@ -82,6 +82,8 @@ def input_name(j: int) -> str:
     j -= 2
     if j < 4:
         return ("plat dx", "plat dy", "plat vx", "plat vy")[j]
+    if j == 4:
+        return "jump held"
     return f"in {j}"
 
 

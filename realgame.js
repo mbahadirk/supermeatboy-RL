@@ -325,13 +325,19 @@ function tileChanges() {
 // ---- inputs through the game's own handlers: thiscall(char, {state 1 press / 2 held / 3 release, ms}) -------
 const inBuf = Memory.alloc(8);
 function press(c, off, state, ms) { inBuf.writeU32(state); inBuf.add(4).writeU32(ms); vcall(c, off, inBuf); }
+const WALL_REPRESS = 6;
 function applyInput(i, a) {                        // a = [left, right, jump, run]
   const c = agents[i], h = held[i];
   [[0, V_LEFT], [1, V_RIGHT], [3, V_RUN]].forEach(([k, off]) => {
     if (a[k]) { h[k]++; press(c, off, h[k] === 1 ? 1 : 2, Math.round(h[k] * 1000 / 60)); }
     else if (h[k]) { h[k] = 0; press(c, off, 3, 0); }
   });
-  if (a[2]) { h[2]++; press(c, V_JUMP, h[2] === 1 ? 1 : 2, Math.round(h[2] * 1000 / 60)); }
+  // a wall jump needs a new press: jump kept held while in the air against a wall (flags 0x200 wall, 0x2
+  // airborne) for WALL_REPRESS frames or more is let go for this frame and pressed again on the next, so
+  // "jump" on a wall always jumps off it (realgame.py mirrors this for the agents' "jump held" input)
+  const fl = c.add(0x7b4).readU32();
+  if (a[2] && h[2] >= WALL_REPRESS && (fl & 0x200) && (fl & 2)) { h[2] = 0; press(c, V_JUMP, 3, 0); }
+  else if (a[2]) { h[2]++; press(c, V_JUMP, h[2] === 1 ? 1 : 2, Math.round(h[2] * 1000 / 60)); }
   else if (h[2]) { h[2] = 0; press(c, V_JUMP, 3, 0); }
 }
 

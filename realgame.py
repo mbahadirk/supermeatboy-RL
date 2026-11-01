@@ -93,7 +93,10 @@ N_FX = 6                                # wind here (x, y), in a wind column, ne
 N_SURF = (2 * K + 1) ** 2               # second local map: what kind of surface each solid cell offers
 N_STUCK = 2                             # time stuck in one spot (/ STALL_GRACE + STALL_RAMP), jumps there (/ 5)
 N_PLAT = 4                              # nearest moving platform: offset (/200), velocity (/300)
-OBS = N_STATE + (2 * K + 1) ** 2 + N_PATH + N_HAZ + N_WALL + N_FX + N_SURF + N_STUCK + N_PLAT
+N_HELD = 1                              # frames the jump key has been held (/ 20, at most 1): a jump, and a wall
+                                        # jump, starts only on a new press
+WALL_REPRESS = 6                        # realgame.js: jump held this long in the air against a wall is pressed anew
+OBS = N_STATE + (2 * K + 1) ** 2 + N_PATH + N_HAZ + N_WALL + N_FX + N_SURF + N_STUCK + N_PLAT + N_HELD
 # surface codes (second local map): which sides of a solid cell are open
 S_FLOOR, S_WALL, S_LEDGE, S_CEIL, S_CEIL_WALL, S_INSIDE = 1.0, -1.0, 0.5, -0.5, -0.75, 0.25
 WALL_SLIDE = 9                          # character state while sliding down a wall
@@ -597,7 +600,7 @@ def identify_level(info: dict, tiles: bytes) -> str | None:
 
 
 def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float, haz=None, opened=(),
-            stuck=(0.0, 0.0)) -> np.ndarray:
+            stuck=(0.0, 0.0), held: int = 0) -> np.ndarray:
     x, y, vx, vy, flags = s[:5]
     gx, gy = lv.goals[0] if lv.goals else lv.spawn
     d = lv.goal_dist(x, y)
@@ -654,7 +657,7 @@ def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float,
             vx_, vy_ = lv.plat_vel[k] if k < len(lv.plat_vel) else (0.0, 0.0)
             plv[:] = np.clip([(px - x) / 200.0, (py - y) / 200.0, vx_ / 300.0, vy_ / 300.0], -2, 2)
     return np.concatenate([vec, patch[::-1].ravel(), pv, hv, wv, fv, sp[::-1].ravel(),   # patch rows top-down
-                           np.asarray(stuck, np.float32), plv])
+                           np.asarray(stuck, np.float32), plv, np.array([min(1.0, held / 20.0)], np.float32)])
 
 
 def wall_touch(lv: Level, x: float, y: float, side: int, opened=()) -> float:
@@ -889,6 +892,7 @@ class Trainer:
         self.acts = [[] for _ in range(n)]
         self.alive = [True] * n
         self.ground_at_act = [False] * n   # on the ground when the last action was chosen
+        self.jump_held = [0] * n           # frames the jump key is held (as realgame.js applies the actions)
         self.hops = [0] * n
         self.prev_xy = [None] * n          # last frame's position (teleport = portal)
         self.best_k = [[None] * len(self.paths) for _ in range(n)]   # best progress on each route
@@ -1072,7 +1076,7 @@ class Trainer:
             obs = np.stack([observe(lv, grid, states[i], self.route(i), self.cur_s[i], self.cur_off[i],
                                     moving_features(states[i][0], states[i][1], pos, self.hz_vel, moving),
                                     lv.opened_cells(self.keys_of[i]) if self.keys_of[i] else (),
-                                    self.stuck_inputs(i, m["frame"])) for i in live])
+                                    self.stuck_inputs(i, m["frame"]), self.jump_held[i]) for i in live])
             if self.args.test:
                 a = np.array([self.scripted(m["frame"], i) for i in live])
                 lp = v = np.zeros(len(live), np.float32)
@@ -1086,6 +1090,13 @@ class Trainer:
                 tr["o"].append(obs[j]); tr["a"].append(int(a[j])); tr["lp"].append(float(lp[j])); tr["v"].append(float(v[j]))
                 acts[i] = list(ACTIONS[int(a[j])])
                 self.ground_at_act[i] = not (states[i][4] & 2)
+                fl = states[i][4]                              # the jump key as realgame.js holds it
+                if not acts[i][2]:
+                    self.jump_held[i] = 0
+                elif self.jump_held[i] >= WALL_REPRESS and (fl & 0x200) and (fl & 2):
+                    self.jump_held[i] = 0                      # let go on a wall: pressed anew next frame
+                else:
+                    self.jump_held[i] += 1
                 self.acts[i].append(int(a[j]))
             if self.paths:
                 leader = max(live, key=lambda i: self.frac[i] or 0.0)
