@@ -101,6 +101,7 @@ C_EMPTY, C_SOLID, C_HAZARD, C_GOAL = 0.0, 1.0, -1.0, 0.75
 C_WIND, C_ORB, C_ACCEL = 0.3, -0.4, 0.55  # map codes: in a fan's wind column, inside an orb, accelerator tile
 C_PLATFORM = 0.85                         # map code: a moving platform (solid, but it moves)
 PLAT_HALF = (30.0, 10.0)                  # a platform is a 60 x 20 bar (20 x 60 when upright), realgame.js platforms()
+PLAT_STILL = 240                          # frames: a platform seen in place this long is a fixed one (a wall for routes)
 ACCEL_TILE = 98                           # Salt Factory surface tile (no special bit); what it does is not traced
 
 # rewards
@@ -206,6 +207,7 @@ class Level:
         self.set_fields(info.get("fx"))
         self.plats, self.plat_vel, self.plat_cells, self.plat_set = [], [], [], set()
         self.plat_seen = np.zeros((self.H, self.W), dtype=bool)   # every cell a platform has covered
+        self.plat_owner = {}                                       # (r, c) -> platforms that covered it
         self.set_platforms(info.get("pf"))
         self.dist = self._bfs()
         self.diag = float(np.hypot(self.W, self.H))
@@ -237,8 +239,9 @@ class Level:
 
     def set_platforms(self, pf) -> bool:
         """Moving platforms now ([x, y, upright] from the game): boxes, velocities (by order, from the last
-        frame), the cells they cover and every cell they have covered. True when they covered new cells (the
-        routes can then ride them)."""
+        frame), the cells they cover, every cell they have covered, and which of them move (a platform seen in
+        place for PLAT_STILL frames is a fixed one). True when the routes should be rebuilt: a platform
+        covered new cells, started moving, or turned out to be fixed."""
         if not pf:
             return False
         boxes = [(x, y) + ((PLAT_HALF[1], PLAT_HALF[0]) if up else PLAT_HALF) + (bool(up),) for x, y, up in pf]
@@ -246,23 +249,51 @@ class Level:
             self.plat_vel = [((b[0] - a[0]) * HZ, (b[1] - a[1]) * HZ) for a, b in zip(self.plats, boxes)]
         else:
             self.plat_vel = [(0.0, 0.0)] * len(boxes)
+        changed = False
+        if len(getattr(self, "plat_start", [])) != len(boxes):   # (the level's platforms)
+            self.plat_start = [b[:2] for b in boxes]
+            self.plat_moved = [False] * len(boxes)
+            self.plat_frames = 0
+        self.plat_frames += 1
+        for k, b in enumerate(boxes):
+            if not self.plat_moved[k] and math.hypot(b[0] - self.plat_start[k][0], b[1] - self.plat_start[k][1]) > 2.0:
+                self.plat_moved[k] = changed = True
+        if self.plat_frames == PLAT_STILL and not all(self.plat_moved):
+            changed = True                             # the ones still in place now count as fixed
         self.plats = boxes
-        cells, new = [], False
-        for x, y, hw, hh, up in boxes:                 # cells the bar covers (more than 5 units of each side)
+        cells = []
+        for k, (x, y, hw, hh, up) in enumerate(boxes):   # cells the bar covers (more than 5 units of each side)
             c0, c1 = int((x - hw + 5 - self.ox) // TILE), int((x + hw - 5 - self.ox) // TILE)
             r0, r1 = int((y - hh + 5 - self.oy) // TILE), int((y + hh - 5 - self.oy) // TILE)
             for r in range(max(0, r0), min(self.H, r1 + 1)):
                 for c in range(max(0, c0), min(self.W, c1 + 1)):
                     cells.append((r, c, up))
                     if not self.plat_seen[r, c]:
-                        self.plat_seen[r, c] = new = True
+                        self.plat_seen[r, c] = changed = True
+                    self.plat_owner.setdefault((r, c), set()).add(k)
         self.plat_cells = cells
         self.plat_set = {(r, c) for r, c, _ in cells}
-        return new
+        return changed
+
+    def plat_fixed(self, k: int) -> bool:
+        return self.plat_frames >= PLAT_STILL and not self.plat_moved[k]
+
+    def plat_blocks(self) -> np.ndarray:
+        """Cells of the fixed platforms: walls for the routes."""
+        out = np.zeros((self.H, self.W), dtype=bool)
+        for (r, c), ks in self.plat_owner.items():
+            if all(self.plat_fixed(k) for k in ks):
+                out[r, c] = True
+        return out
+
+    def plat_doors(self) -> np.ndarray:
+        """Every cell a moving (or not yet known) platform has covered: the routes cross them only when there
+        is no way around, like a moving saw's sweep (it may be in the way, or carry the player)."""
+        return self.plat_seen & ~self.plat_blocks()
 
     def plat_support(self) -> np.ndarray:
         """Open cells a route may stand in thanks to a platform: just above anywhere one has been (riding
-        it), and beside anywhere an upright one has been (a wall to jump off)."""
+        it), and beside anywhere one has been (a wall to jump off)."""
         seen = self.plat_seen
         out = np.zeros_like(seen)
         out[1:, :] |= seen[:-1, :]
@@ -1157,8 +1188,8 @@ class Trainer:
         t = time.time()
         sweeps = [(x, y, hw, hh, a) for x, y, hw, hh, a in sorted(self.sweep)]
         self.paths = Planner(lv.words0, lv.ox, lv.oy, lv.spawn, lv.goals, static, sweeps, lv.keys, lv.bandages,
-                             list(lv.portals) + list(self.links),
-                             lift=lv.wind | lv.plat_support()).find(self.args.paths)
+                             list(lv.portals) + list(self.links), lift=lv.wind | lv.plat_support(),
+                             blocks=lv.plat_blocks(), doors=lv.plat_doors()).find(self.args.paths)
         self.route_stats = []
         if hasattr(self, "best_k"):          # new routes: progress on them starts again (no reward for that)
             self.best_k = [[None] * len(self.paths) for _ in self.best_k]

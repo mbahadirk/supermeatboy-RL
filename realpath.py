@@ -126,15 +126,19 @@ def box_distance(px, py, box) -> np.ndarray:
 
 class Planner:
     def __init__(self, words: np.ndarray, ox: float, oy: float, spawn, goals, hazards, sweeps=(), keys=(),
-                 bandages=(), portals=(), lift=None):
+                 bandages=(), portals=(), lift=None, blocks=None, doors=None):
         """words: H x W collision tile words; hazards: [(x, y, half w, half h, angle)] of pieces that stay put;
         sweeps: the same for every position a moving hazard was seen at; keys / bandages: [(x, y)]; portals:
-        [((x, y), (x, y))] pairs (touching one end puts the player at the other)."""
+        [((x, y), (x, y))] pairs (touching one end puts the player at the other). H x W masks: lift, cells
+        where standing is free (wind, above platforms); blocks, extra walls (fixed platforms, sealed pockets);
+        doors, cells crossed only with timing (where moving platforms go: closed in the clear mode)."""
         self.cls = tile_classes(words)
         k = self.cls
         self.ox, self.oy = ox, oy
         self.H, self.W = words.shape
         self.wall = k["full"] | k["half"]                          # never open
+        if blocks is not None:                                     # fixed platforms: walls too
+            self.wall = self.wall | blocks
         self.corner = self.wall                                    # no diagonal step past these
         self.sopen = slope_open_corner(words)                      # slopes: open only toward one corner
         self.spawn, self.goals = tuple(spawn), [tuple(g) for g in goals]
@@ -143,6 +147,8 @@ class Planner:
         self.lift = lift if lift is not None else np.zeros(words.shape, dtype=bool)   # wind: rising is free
         self.hard_static, self.soft_static, near_static = self._hazard_cells(hazards)
         self.hard_sweep, self.soft_sweep, near_sweep = self._hazard_cells(sweeps)
+        if doors is not None:                                      # where moving platforms go: only with timing
+            self.hard_sweep = self.hard_sweep | doors
         self.near = near_static | near_sweep
         # below the map is death (the player falls out): a route may not run along the bottom row
         self.pit = np.zeros((self.H, self.W), dtype=bool)
