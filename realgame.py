@@ -42,9 +42,12 @@ pays a little (R_RUN), so agents run instead of hopping all the time.
 Standing still: an agent that stays within a tile of one spot for STILL_KILL seconds is killed (a death,
 R_DEATH; the game script stops it like any dead agent).
 
-Stuck: an agent that stays within STALL_RADIUS tiles of one spot without new progress for more than
-STALL_GRACE seconds pays R_STALL every frame (rising to twice that), and every jump from the ground there after
-the first HOP_FREE costs R_HOP_SPAM more (both together at most STALL_CAP per spot, less than a death). Exploring: the first visit in a life to each 2x2-tile block pays
+Progress pays both ways: every frame the change of the agent's progress (closeness to the routes) is paid,
+so going back costs what going forward paid and turning back is never free. Fitness uses the best progress.
+
+Stuck: an agent with no new best progress and no newly visited block for more than STALL_GRACE seconds pays
+R_STALL every frame (rising to twice that), and every jump from the ground after the first HOP_FREE costs
+R_HOP_SPAM more (both together at most STALL_CAP per stuck stretch, less than a death). Exploring: the first visit in a life to each 2x2-tile block pays
 R_EXPLORE, less for blocks many agents have already been to on this level (1 / sqrt(1 + visits per agent)), so
 unvisited corners and other ways pay most. Agents see how long they have been stuck and how often they jumped
 there (the last two inputs).
@@ -101,8 +104,10 @@ C_WIND, C_ORB, C_ACCEL = 0.3, -0.4, 0.55  # map codes: in a fan's wind column, i
 ACCEL_TILE = 98                           # Salt Factory surface tile (no special bit); what it does is not traced
 
 # rewards
-R_PROGRESS = 1.0       # per tile of new progress toward the goal (best so far this life), measured by closeness to
-                       # a route (realpath FIELD_*): anywhere near the route counts, not only on the line
+R_PROGRESS = 1.0       # per tile of progress toward the goal, both ways: going back costs what going forward paid
+                       # (so turning back is never free and back-and-forth earns nothing). Progress is measured by
+                       # closeness to the routes (realpath FIELD_*; the furthest route at the agent's spot): anywhere
+                       # near a route counts, not only on the line
 R_TETHER = -0.003      # per tile away from the route beyond TETHER_FREE tiles (up to 6 more), every frame
 TETHER_FREE = 6.0      # tiles: within this an agent may leave the line freely
 R_DEATH = -15.0        # dying (also: killed for standing still, STILL_KILL)
@@ -119,13 +124,13 @@ R_KEY = 10.0           # picking up a key (each key once per life)
 STILL_KILL = 1.0       # seconds: an agent that stays within STILL_R of one spot this long is killed (R_DEATH)
 STILL_R = 1.0 * 20.0   # game units (one tile)
 WAYPOINT_R = 1.5 * 20.0  # touching a key / bandage (game units): the route after it starts counting
-R_STALL = -0.02        # every frame stuck (no new progress, still within STALL_RADIUS of one spot after STALL_GRACE)
-STALL_RADIUS = 2.0     # tiles
-STALL_GRACE = 1.0      # seconds (waiting for a saw to pass is fine); the cost doubles over the next STALL_RAMP
+R_STALL = -0.02        # every frame stuck: no new best progress and no new block (exploring) for STALL_GRACE.
+                       # Stepping away does not end it (it used to, which made walking back the way to wait)
+STALL_GRACE = 1.5      # seconds (waiting for a saw to pass is fine); the cost doubles over the next STALL_RAMP
 STALL_RAMP = 3.0       # seconds
-R_HOP_SPAM = -0.15     # extra for every jump from the ground in one stuck spot after the first HOP_FREE
+R_HOP_SPAM = -0.15     # extra for every jump from the ground while stuck, after the first HOP_FREE
 HOP_FREE = 2
-STALL_CAP = 4.0        # at most this much (stuck + jumping) per stuck spot: less than R_DEATH, so dying is never the
+STALL_CAP = 4.0        # at most this much (stuck + jumping) per stuck stretch: less than R_DEATH, so dying is never the
                        # cheaper way out
 R_EXPLORE = 0.25       # first visit this life to a 2x2-tile block, / sqrt(1 + visits there per agent on this level)
 EXPLORE_BLOCK = 2      # tiles
@@ -736,8 +741,9 @@ class Trainer:
         self.best_k = [[None] * len(self.paths) for _ in range(n)]   # best progress on each route
         self.frac = [None] * n             # best share of any route's length so far (what progress pays for)
         self.keys_of = [0] * n
-        self.anchor = [None] * n           # (x, y, frame) where the agent's current stuck spot started
+        self.anchor = [None] * n           # frame of the agent's last new best progress / new block (stuck timer)
         self.hops_here = [0] * n           # jumps from the ground since then
+        self.phi = [None] * n              # progress at the agent's spot last frame (share of the shortest route)
         self.stall_paid = [0.0] * n        # stuck costs paid there (up to STALL_CAP)
         self.seen = [set() for _ in range(n)]   # blocks visited this life
         self.reached = [set() for _ in range(n)]   # key / bandage positions touched this life (route legs)
@@ -800,7 +806,8 @@ class Trainer:
                                                for s in states[:4]), flush=True)
         # where every agent is on the routes (only points it can see count): its own route every frame, the
         # others every 6th; it follows whichever route it is furthest along
-        new_frac = [None] * n
+        new_frac = [None] * n             # best share of any route so far (fitness, stuck timer)
+        new_phi = [None] * n              # share at the agent's spot now (the progress reward, both ways)
         for i, s in enumerate(states):
             if not self.alive[i]:
                 continue
@@ -817,23 +824,20 @@ class Trainer:
                 if w not in self.reached[i] and math.hypot(s[0] - w[0], s[1] - w[1]) < WAYPOINT_R:
                     self.reached[i].add(w)
             rc = self.reached[i]
-            prog, off = p.project(s[0], s[1], rc)
-            self.cur_s[i], self.cur_off[i] = prog, off
-            bk[own] = prog if bk[own] is None else max(bk[own], prog)
-            if len(self.paths) > 1 and (m["frame"] + i) % 6 == 0:
-                for j, q in enumerate(self.paths):
-                    if j == own:
-                        continue
-                    pj, oj = q.project(s[0], s[1], rc)
-                    if pj > 0.0 or bk[j] is not None:     # near that route (its closeness field reaches here)
-                        bk[j] = pj if bk[j] is None else max(bk[j], pj)
-                fr = [(b or 0.0) / q.length for b, q in zip(bk, self.paths)]
-                j = int(np.argmax(fr))
-                if j != own and fr[j] > fr[own] + 0.03:      # it is on another route, further along: follow that
-                    self.path_of[i] = j
-                    self.cur_s[i], self.cur_off[i] = self.paths[j].project(s[0], s[1], rc)
+            vals = [q.value(s[0], s[1], rc) for q in self.paths]   # progress on every route at this spot
+            for j, v in enumerate(vals):
+                if v is not None:
+                    bk[j] = v if bk[j] is None else max(bk[j], v)
+            fr = [v / q.length if v is not None else -1.0 for v, q in zip(vals, self.paths)]
+            j = int(np.argmax(fr))
+            if j != own and fr[j] > fr[own] + 0.03:          # further along another route here: follow that one
+                self.path_of[i] = own = j
+            if vals[own] is not None:
+                self.cur_s[i] = vals[own]
+            self.cur_off[i] = self.paths[own].offset(s[0], s[1])
+            new_phi[i] = max(fr) if max(fr) >= 0.0 else None   # progress here (None: no route near)
             new_frac[i] = max((b or 0.0) / q.length for b, q in zip(bk, self.paths))
-            self.best_s[i] = bk[self.path_of[i]]
+            self.best_s[i] = bk[own]
         # finish the previous step: rewards for what happened since the last frame
         step_cost = R_STEP_SPEED if self.phase == "speed" else R_STEP
         kills = []                                             # agents killed for standing still (sent to the game)
@@ -853,10 +857,12 @@ class Trainer:
             p = self.route(i)
             moved = False                                      # new progress this frame (ends being stuck)
             if p is not None:
-                if new_frac[i] is not None:                    # new progress on any route (share x shortest route)
-                    if self.frac[i] is not None and new_frac[i] > self.frac[i]:
-                        r += R_PROGRESS * (new_frac[i] - self.frac[i]) * self.paths[0].length / TILE
-                        moved = new_frac[i] - self.frac[i] > 1e-4
+                if new_phi[i] is not None:                     # progress both ways (share x shortest route)
+                    if self.phi[i] is not None:
+                        r += R_PROGRESS * (new_phi[i] - self.phi[i]) * self.paths[0].length / TILE
+                    self.phi[i] = new_phi[i]
+                if new_frac[i] is not None:                    # best so far: fitness, the stuck timer
+                    moved = self.frac[i] is not None and new_frac[i] - self.frac[i] > 1e-4
                     self.frac[i] = new_frac[i] if self.frac[i] is None else max(self.frac[i], new_frac[i])
                 r += R_TETHER * min(max(0.0, self.cur_off[i] / TILE - TETHER_FREE), 6.0)
                 if not (s[4] & 2):                             # on the ground: running toward the route pays
@@ -864,24 +870,16 @@ class Trainer:
                     r += R_RUN * min(1.5, max(0.0, s[2] * (1.0 if ax >= x else -1.0) / 400.0))
             else:                                              # no route: closest path distance to the goal
                 d = lv.goal_dist(x, y)
+                if self.phi[i] is not None:                    # both ways here too
+                    r += R_PROGRESS * (self.phi[i] - d)
+                self.phi[i] = d
                 if self.best_d[i] is None or d < self.best_d[i]:
-                    r += R_PROGRESS * ((self.best_d[i] if self.best_d[i] is not None else d) - d)
                     moved = self.best_d[i] is not None and d < self.best_d[i] - 0.5
                     self.best_d[i] = d
             got = (s[7] if len(s) > 7 else 0) & ~self.keys_of[i]  # keys picked up since the last frame
             if got:
                 r += R_KEY * bin(got).count("1")
                 self.keys_of[i] |= got
-            # stuck: no new progress and still near one spot (a new spot or new progress starts over)
-            an = self.anchor[i]
-            if an is None or moved or math.hypot(x - an[0], y - an[1]) > STALL_RADIUS * TILE:
-                self.anchor[i], self.hops_here[i], self.stall_paid[i] = (x, y, m["frame"]), 0, 0.0
-            pen = 0.0
-            if an is not None and self.anchor[i] is an:
-                t = (m["frame"] - an[2]) / HZ - STALL_GRACE
-                if t > 0:
-                    pen += -R_STALL * (1.0 + min(1.0, t / STALL_RAMP))
-                    self.stuck_frames += 1
             # exploring: the first visit this life to a block, more where few agents have been
             blk = (int((x - lv.ox) // (EXPLORE_BLOCK * TILE)), int((y - lv.oy) // (EXPLORE_BLOCK * TILE)))
             if blk not in self.seen[i]:
@@ -889,14 +887,23 @@ class Trainer:
                     v = self.visits.get(blk, 0)
                     r += R_EXPLORE / math.sqrt(1.0 + v / max(1, n))
                     self.new_blocks += 1
+                    moved = True
                 self.seen[i].add(blk)
                 self.visits[blk] = self.visits.get(blk, 0) + 1
+            # stuck: no new best progress and no new block for STALL_GRACE (stepping away does not end it)
+            if self.anchor[i] is None or moved:
+                self.anchor[i], self.hops_here[i], self.stall_paid[i] = m["frame"], 0, 0.0
+            pen = 0.0
+            t = (m["frame"] - self.anchor[i]) / HZ - STALL_GRACE
+            if t > 0:
+                pen += -R_STALL * (1.0 + min(1.0, t / STALL_RAMP))
+                self.stuck_frames += 1
             a_now = tr["a"][-1]                                # a jump started from the ground (a hop) costs
             if ACTIONS[a_now][2] and self.ground_at_act[i] and not (len(tr["a"]) > 1 and ACTIONS[tr["a"][-2]][2]):
                 r += R_HOP
                 self.hops[i] += 1
                 self.hops_here[i] += 1
-                if self.hops_here[i] > HOP_FREE:               # jumping again and again in one stuck spot
+                if self.hops_here[i] > HOP_FREE:               # jumping again and again, getting nowhere
                     pen += -R_HOP_SPAM
             pen = min(pen, STALL_CAP - self.stall_paid[i])
             if pen > 0:
@@ -952,7 +959,7 @@ class Trainer:
         an = self.anchor[i]
         if an is None:
             return 0.0, 0.0
-        return (min(1.0, (frame - an[2]) / HZ / (STALL_GRACE + STALL_RAMP)), min(1.0, self.hops_here[i] / 5.0))
+        return (min(1.0, (frame - an) / HZ / (STALL_GRACE + STALL_RAMP)), min(1.0, self.hops_here[i] / 5.0))
 
     def finish_reward(self, frame: int) -> float:
         t = (frame + 1) / HZ
@@ -1111,6 +1118,7 @@ class Trainer:
         self.route_stats = []
         if hasattr(self, "best_k"):          # new routes: progress on them starts again (no reward for that)
             self.best_k = [[None] * len(self.paths) for _ in self.best_k]
+            self.phi = [None] * len(self.best_k)   # the progress reward picks up from the new routes' values
         self.paths_built, self.path_dirty, self.built_wave = True, False, self.waves
         print(f"[path] {lv.name}: " + (", ".join(f"path {k + 1} {p.length / TILE:.0f} tiles ({p.mode})" for k, p in enumerate(self.paths))
                                        if self.paths else "no route found")

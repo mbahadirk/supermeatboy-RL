@@ -626,20 +626,13 @@ class RewardPath:
             n += 1
         return n
 
-    def project(self, x: float, y: float, reached=()):
-        """(progress, distance from the route) for a point, by closeness: the closeness field of the agent's leg
-        (the route up to the next key / bandage it has not touched) at the point. Moving toward the goal pays
-        anywhere near the route, not only on the line; walls make the way longer, climbing counts double, and
-        the value of a spot is fixed (no gain from waiting there). The distance is the straight one to the
-        nearest route point."""
+    def value(self, x: float, y: float, reached=()):
+        """Progress at a point, by closeness: the closeness field of the agent's leg (the route up to the next
+        key / bandage it has not touched) at the point. Moving toward the goal pays anywhere near the route, not
+        only on the line; walls make the way longer, climbing counts double, and a spot's value is fixed (no
+        gain from waiting there). None where the field does not reach (more than FIELD_RADIUS away)."""
         if len(self.points) < 2:
-            return 0.0, float(math.hypot(x - self.points[0][0], y - self.points[0][1]))
-        p0 = self.points[:-1]
-        v = self.points[1:] - p0
-        L2 = np.maximum((v ** 2).sum(1), 1e-9)
-        t = np.clip(((x - p0[:, 0]) * v[:, 0] + (y - p0[:, 1]) * v[:, 1]) / L2, 0.0, 1.0)
-        d = np.where(self.warp, np.inf, np.hypot(x - (p0[:, 0] + t * v[:, 0]), y - (p0[:, 1] + t * v[:, 1])))
-        off = float(d.min())
+            return 0.0
         if getattr(self, "_field", None) is None:
             self._build_field()
         f = self._field[min(self.leg(reached), len(self._field) - 1)]
@@ -661,8 +654,14 @@ class RewardPath:
                     way = math.hypot(x - cx, y - cy) + (FIELD_UP - 1.0) * max(0.0, cy - y)
                     val = max(val, float(fv) - FIELD_DECAY * way)
         if val == -math.inf:
-            return 0.0, off
-        return float(min(max(val, 0.0), self.length)), off
+            return None
+        return float(min(max(val, 0.0), self.length))
+
+    def offset(self, x: float, y: float) -> float:
+        """Straight distance from a point to the nearest route point."""
+        if len(self.points) < 2:
+            return float(math.hypot(x - self.points[0][0], y - self.points[0][1]))
+        return self._route_dist(x, y)
 
     def pieces(self) -> list[np.ndarray]:
         """The polyline split at portal jumps (for drawing)."""
