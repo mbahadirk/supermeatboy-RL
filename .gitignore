@@ -1,0 +1,10 @@
+# Keep original game levels/assets OUT of version control (personal/educational use only).
+imported/
+levels_original/
+*.smbl
+*.dat
+assets_original/
+__pycache__/
+*.pyc
+runs/
+checkpoints/
