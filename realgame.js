@@ -443,7 +443,6 @@ function stepAgents() {
     return;
   }
   if (act.reset) { endWave('reset'); return; }
-  if (act.kill) for (const i of act.kill) if (status[i] === 0) status[i] = 1;   // killed by the trainer (standing still)
   const mask = w.add(0xdb4), m0 = mask.readU32();
   mask.writeU32(m0 & ~0x18);                        // agents: no bandage / key pickup (row flags 0x08 / 0x40 are
                                                     // gated by mask bit 0x10, FUN_004cd350) and no warps (0x08)

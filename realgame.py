@@ -39,9 +39,6 @@ and half the agents move to the route of the fastest finisher.
 Hops: starting a jump from the ground costs a little (R_HOP) and running on the ground toward the route
 pays a little (R_RUN), so agents run instead of hopping all the time.
 
-Standing still: an agent that stays within a tile of one spot for STILL_KILL seconds is killed (a death,
-R_DEATH; the game script stops it like any dead agent).
-
 Progress pays both ways: every frame the change of the agent's progress (closeness to the routes) is paid,
 so going back costs what going forward paid and turning back is never free. Fitness uses the best progress.
 
@@ -110,7 +107,7 @@ R_PROGRESS = 1.0       # per tile of progress toward the goal, both ways: going 
                        # near a route counts, not only on the line
 R_TETHER = -0.003      # per tile away from the route beyond TETHER_FREE tiles (up to 6 more), every frame
 TETHER_FREE = 6.0      # tiles: within this an agent may leave the line freely
-R_DEATH = -15.0        # dying (also: killed for standing still, STILL_KILL)
+R_DEATH = -15.0        # dying
 R_WIN = 50.0
 R_FAST = 20.0          # FINISH phase: + this x (1 - finish time / wave length)
 R_STEP = -0.002        # FINISH phase, every frame
@@ -121,8 +118,6 @@ R_HOP = -0.08          # starting a jump from the ground: stops constant short h
                        # pays for itself through progress)
 R_RUN = 0.004          # every frame on the ground: x horizontal speed toward the route (/400 units/s, up to 1.5)
 R_KEY = 10.0           # picking up a key (each key once per life)
-STILL_KILL = 1.0       # seconds: an agent that stays within STILL_R of one spot this long is killed (R_DEATH)
-STILL_R = 1.0 * 20.0   # game units (one tile)
 WAYPOINT_R = 1.5 * 20.0  # touching a key / bandage (game units): the route after it starts counting
 R_STALL = -0.02        # every frame stuck: no new best progress and no new block (exploring) for STALL_GRACE.
                        # Stepping away does not end it (it used to, which made walking back the way to wait)
@@ -747,8 +742,6 @@ class Trainer:
         self.stall_paid = [0.0] * n        # stuck costs paid there (up to STALL_CAP)
         self.seen = [set() for _ in range(n)]   # blocks visited this life
         self.reached = [set() for _ in range(n)]   # key / bandage positions touched this life (route legs)
-        self.still_at = [None] * n         # (x, y, frame) where the agent last stood still (STILL_KILL)
-        self.killed = 0
         self.stuck_frames, self.new_blocks = 0, 0
         self.path_of = self.assign_paths(n)
 
@@ -840,18 +833,11 @@ class Trainer:
             self.best_s[i] = bk[own]
         # finish the previous step: rewards for what happened since the last frame
         step_cost = R_STEP_SPEED if self.phase == "speed" else R_STEP
-        kills = []                                             # agents killed for standing still (sent to the game)
         for i, s in enumerate(states):
             tr = self.traj[i]
             if not self.alive[i] or not tr["a"]:
                 continue
             x, y, st = s[0], s[1], s[6]
-            sa = self.still_at[i]                              # standing still for STILL_KILL: killed (a death)
-            if sa is None or math.hypot(x - sa[0], y - sa[1]) > STILL_R:
-                self.still_at[i] = (x, y, m["frame"])
-            elif st == 0 and m["frame"] - sa[2] >= STILL_KILL * HZ:
-                st = 1
-                kills.append(i)
             r = step_cost
             self.frames[i] += 1
             p = self.route(i)
@@ -952,8 +938,7 @@ class Trainer:
         if won:
             leader = won[0]
         self.leader = leader
-        self.killed += len(kills)
-        return {"a": acts, "leader": leader, "kill": kills}
+        return {"a": acts, "leader": leader}
 
     def stuck_inputs(self, i: int, frame: int) -> tuple[float, float]:
         an = self.anchor[i]
@@ -1002,7 +987,6 @@ class Trainer:
         fin = [(f, i) for i, (st, f) in enumerate(zip(m["status"], m["finish"])) if st == 2 and f >= 0]
         dead = sum(1 for st in m["status"] if st == 1)
         line = f"[wave {m['wave']}] {lv.name if lv else '?'}: {len(fin)}/{n} finished, {dead} dead"
-        line += f" ({self.killed} for standing still)" if self.killed else ""
         fastest = None
         if fin:
             f, i = min(fin)
