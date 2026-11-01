@@ -92,12 +92,15 @@ N_WALL = 3                              # wall touching on the left, on the righ
 N_FX = 6                                # wind here (x, y), in a wind column, nearest orb (dx, dy), inside an orb
 N_SURF = (2 * K + 1) ** 2               # second local map: what kind of surface each solid cell offers
 N_STUCK = 2                             # time stuck in one spot (/ STALL_GRACE + STALL_RAMP), jumps there (/ 5)
-OBS = N_STATE + (2 * K + 1) ** 2 + N_PATH + N_HAZ + N_WALL + N_FX + N_SURF + N_STUCK
+N_PLAT = 4                              # nearest moving platform: offset (/200), velocity (/300)
+OBS = N_STATE + (2 * K + 1) ** 2 + N_PATH + N_HAZ + N_WALL + N_FX + N_SURF + N_STUCK + N_PLAT
 # surface codes (second local map): which sides of a solid cell are open
 S_FLOOR, S_WALL, S_LEDGE, S_CEIL, S_CEIL_WALL, S_INSIDE = 1.0, -1.0, 0.5, -0.5, -0.75, 0.25
 WALL_SLIDE = 9                          # character state while sliding down a wall
 C_EMPTY, C_SOLID, C_HAZARD, C_GOAL = 0.0, 1.0, -1.0, 0.75
 C_WIND, C_ORB, C_ACCEL = 0.3, -0.4, 0.55  # map codes: in a fan's wind column, inside an orb, accelerator tile
+C_PLATFORM = 0.85                         # map code: a moving platform (solid, but it moves)
+PLAT_HALF = (30.0, 10.0)                  # a platform is a 60 x 20 bar (20 x 60 when upright), realgame.js platforms()
 ACCEL_TILE = 98                           # Salt Factory surface tile (no special bit); what it does is not traced
 
 # rewards
@@ -201,6 +204,9 @@ class Level:
             if 0 <= c < self.W and 0 <= r < self.H:
                 self.base[r, c] = C_GOAL
         self.set_fields(info.get("fx"))
+        self.plats, self.plat_vel, self.plat_cells, self.plat_set = [], [], [], set()
+        self.plat_seen = np.zeros((self.H, self.W), dtype=bool)   # every cell a platform has covered
+        self.set_platforms(info.get("pf"))
         self.dist = self._bfs()
         self.diag = float(np.hypot(self.W, self.H))
 
@@ -228,6 +234,41 @@ class Level:
             self.orb_cells |= np.hypot(X - x, Y - y) <= max(r1, r2)
         self.fx_ver = getattr(self, "fx_ver", 0) + 1
         self.tile_ver += 1
+
+    def set_platforms(self, pf) -> bool:
+        """Moving platforms now ([x, y, upright] from the game): boxes, velocities (by order, from the last
+        frame), the cells they cover and every cell they have covered. True when they covered new cells (the
+        routes can then ride them)."""
+        if not pf:
+            return False
+        boxes = [(x, y) + ((PLAT_HALF[1], PLAT_HALF[0]) if up else PLAT_HALF) + (bool(up),) for x, y, up in pf]
+        if len(self.plats) == len(boxes):
+            self.plat_vel = [((b[0] - a[0]) * HZ, (b[1] - a[1]) * HZ) for a, b in zip(self.plats, boxes)]
+        else:
+            self.plat_vel = [(0.0, 0.0)] * len(boxes)
+        self.plats = boxes
+        cells, new = [], False
+        for x, y, hw, hh, up in boxes:                 # cells the bar covers (more than 5 units of each side)
+            c0, c1 = int((x - hw + 5 - self.ox) // TILE), int((x + hw - 5 - self.ox) // TILE)
+            r0, r1 = int((y - hh + 5 - self.oy) // TILE), int((y + hh - 5 - self.oy) // TILE)
+            for r in range(max(0, r0), min(self.H, r1 + 1)):
+                for c in range(max(0, c0), min(self.W, c1 + 1)):
+                    cells.append((r, c, up))
+                    if not self.plat_seen[r, c]:
+                        self.plat_seen[r, c] = new = True
+        self.plat_cells = cells
+        self.plat_set = {(r, c) for r, c, _ in cells}
+        return new
+
+    def plat_support(self) -> np.ndarray:
+        """Open cells a route may stand in thanks to a platform: just above anywhere one has been (riding
+        it), and beside anywhere an upright one has been (a wall to jump off)."""
+        seen = self.plat_seen
+        out = np.zeros_like(seen)
+        out[1:, :] |= seen[:-1, :]
+        out[:, 1:] |= seen[:, :-1]
+        out[:, :-1] |= seen[:, 1:]
+        return out & ~self.solid & ~seen
 
     def surfaces(self) -> np.ndarray:
         """Per cell, what a solid tile offers the player (live tiles): a floor to run on (open above), a wall to
@@ -366,6 +407,9 @@ class Level:
             g[self.wind & (g == C_EMPTY)] = C_WIND
         if self.orb_cells.any():
             g[self.orb_cells & (g == C_EMPTY)] = C_ORB
+        for r, c, _ in self.plat_cells:              # moving platforms where they are now
+            if g[r, c] != C_SOLID:
+                g[r, c] = C_PLATFORM
         cx = self.ox + (np.arange(self.W) + 0.5) * TILE
         cy = self.oy + (np.arange(self.H) + 0.5) * TILE
         for b in boxes:
@@ -495,8 +539,21 @@ def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float,
     sp = np.pad(lv.surfaces(), K, constant_values=S_INSIDE)[rr - K:rr + K + 1, cc - K:cc + K + 1]
     if sp.shape != (2 * K + 1, 2 * K + 1):
         sp = np.full((2 * K + 1, 2 * K + 1), S_INSIDE, dtype=np.float32)
+    if lv.plat_cells:                              # platforms: a floor to ride (upright ones: a wall)
+        sp = sp.copy()
+        for pr, pc_, up in lv.plat_cells:
+            i, j = pr + K - (rr - K), pc_ + K - (cc - K)
+            if 0 <= i < 2 * K + 1 and 0 <= j < 2 * K + 1:
+                sp[i, j] = S_WALL if up else S_FLOOR
+    plv = np.zeros(N_PLAT, np.float32)             # the nearest platform within 10 tiles: offset, velocity
+    if lv.plats:
+        k = min(range(len(lv.plats)), key=lambda q: (lv.plats[q][0] - x) ** 2 + (lv.plats[q][1] - y) ** 2)
+        px, py = lv.plats[k][:2]
+        if np.hypot(px - x, py - y) < 10 * TILE:
+            vx_, vy_ = lv.plat_vel[k] if k < len(lv.plat_vel) else (0.0, 0.0)
+            plv[:] = np.clip([(px - x) / 200.0, (py - y) / 200.0, vx_ / 300.0, vy_ / 300.0], -2, 2)
     return np.concatenate([vec, patch[::-1].ravel(), pv, hv, wv, fv, sp[::-1].ravel(),   # patch rows top-down
-                           np.asarray(stuck, np.float32)])
+                           np.asarray(stuck, np.float32), plv])
 
 
 def wall_touch(lv: Level, x: float, y: float, side: int, opened=()) -> float:
@@ -504,7 +561,7 @@ def wall_touch(lv: Level, x: float, y: float, side: int, opened=()) -> float:
     upper or lower part: the wall a wall jump pushes off."""
     for dy in (-4.0, 0.0, 4.0):
         c, r = lv.cell(x + side * 8.0, y + dy)
-        if 0 <= c < lv.W and 0 <= r < lv.H and lv.solid[r, c] and (r, c) not in opened:
+        if 0 <= c < lv.W and 0 <= r < lv.H and ((lv.solid[r, c] and (r, c) not in opened) or (r, c) in lv.plat_set):
             return 1.0
     return 0.0
 
@@ -759,6 +816,8 @@ class Trainer:
             lv.apply_tiles(m["tc"])
         if m.get("fx"):
             lv.set_fields(m["fx"])
+        if m.get("pf") and lv.set_platforms(m["pf"]) and self.paths_built:
+            self.path_dirty = True           # a platform reached new cells: the routes may ride it there
         if m.get("lt"):                      # pieces came or went (shots): the hazard list changed
             before = len(lv.hz_ids)
             lv.set_lethal(m["lt"]["types"], m["lt"]["ids"])
@@ -1098,7 +1157,8 @@ class Trainer:
         t = time.time()
         sweeps = [(x, y, hw, hh, a) for x, y, hw, hh, a in sorted(self.sweep)]
         self.paths = Planner(lv.words0, lv.ox, lv.oy, lv.spawn, lv.goals, static, sweeps, lv.keys, lv.bandages,
-                             list(lv.portals) + list(self.links), lift=lv.wind).find(self.args.paths)
+                             list(lv.portals) + list(self.links),
+                             lift=lv.wind | lv.plat_support()).find(self.args.paths)
         self.route_stats = []
         if hasattr(self, "best_k"):          # new routes: progress on them starts again (no reward for that)
             self.best_k = [[None] * len(self.paths) for _ in self.best_k]

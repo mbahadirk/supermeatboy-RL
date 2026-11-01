@@ -48,6 +48,7 @@ PORTAL = (170, 90, 255)
 WIND = (40, 70, 95)          # fan wind columns (map background)
 ACCEL = (190, 70, 200)       # accelerator tiles
 ORB = (120, 200, 255)
+PLATFORM = (230, 190, 90)
 N_ROUTES = 4                 # 3 main routes + the bandage route
 POS, NEG = (235, 80, 70), (70, 140, 255)
 ACTION_NAMES = ["idle", "left", "right", "jump", "L+jump", "R+jump", "R+run", "R+run+J", "L+run", "L+run+J"]
@@ -77,6 +78,9 @@ def input_name(j: int) -> str:
     j -= n
     if j < 2:
         return ("stuck time", "jumps stuck")[j]
+    j -= 2
+    if j < 4:
+        return ("plat dx", "plat dy", "plat vx", "plat vy")[j]
     return f"in {j}"
 
 
@@ -319,6 +323,9 @@ class Monitor:
             pygame.draw.polygon(scr, KEY, [(px, py - 7), (px + 5, py), (px, py + 7), (px - 5, py)])
         for bx, by in getattr(lv, "bandages", []):
             pygame.draw.circle(scr, (255, 255, 255), self.pt(bx, by), 6, 2)
+        for x, y, hw, hh, _ in list(getattr(lv, "plats", [])):   # moving platforms
+            (x0, y0), (x1, y1) = self.pt(x - hw, y + hh), self.pt(x + hw, y - hh)
+            pygame.draw.rect(scr, PLATFORM, pygame.Rect(min(x0, x1), min(y0, y1), max(2, abs(x1 - x0)), max(2, abs(y1 - y0))))
         for x, y, r1, r2, s1, s2 in list(getattr(lv, "orbs", [])):
             pygame.draw.circle(scr, ORB, self.pt(x, y), max(3, int(max(r1, r2) * self.sc)), 1)
         for a, b in list(getattr(lv, "portals", [])) + list(getattr(t, "links", [])):

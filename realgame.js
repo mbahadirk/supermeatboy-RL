@@ -181,7 +181,7 @@ function sendLevelInfo() {
   send({ ev: 'info', name: curName, W, H, ox, oy, goals: goalPieces, spawn: [sp.readFloat(), sp.add(4).readFloat()],
          agents: agents.length, lethal: lethal.length, hz: hazards(), objs,
          lethalTypes: lethal.map(pc => pc.add(0x10).readU16() & 0xff), lethalIds: lethalInfo().ids,
-         fx: rd(() => forceFields(w)), portalTypes: rd(() => portalTypes(w)) || [] }, tiles);
+         fx: rd(() => forceFields(w)), portalTypes: rd(() => portalTypes(w)) || [], pf: rd(() => platforms(w)) || [] }, tiles);
   waitGo();                                          // Python builds the reward paths now
   return true;
 }
@@ -283,6 +283,23 @@ function forceFields(w) {
     }
   }
   return { fans, orbs };
+}
+// Moving platforms: the level build (FUN_004c8c10) puts every piece of the world's platform type (+0x2ffc) in
+// a ResizeableArray (count u16 world+0x2dc4, data +0x2dd4, 0x14 bytes: +0 piece, +4..+0xc three tile shapes,
+// +0x10 = 1 when cos(angle) is ~0, i.e. upright). Collision (around 0x4cde59) tests the three shapes at the
+// piece's position and 20 units either side along x (or along y when upright): a 60 x 20 solid bar. The piece
+// moves, so its position is re-read every frame. [x, y, upright 0/1]
+function platforms(w) {
+  const n = w.add(0x2dc4).readU16();
+  const out = [];
+  if (!n || n > 256) return out;
+  const a = w.add(0x2dd4).readPointer();
+  for (let i = 0; i < n; i++) {
+    const e = a.add(i * 0x14), pc = e.readPointer();
+    if (pc.isNull()) continue;
+    out.push([+pc.add(0x14).readFloat().toFixed(1), +pc.add(0x18).readFloat().toFixed(1), e.add(0x10).readU32() ? 1 : 0]);
+  }
+  return out;
 }
 // world type ids of portal pieces (portalidle/enter/exit, paired in piece order by the level build FUN_004c8c10)
 function portalTypes(w) { return [0x2fe4, 0x2fe8, 0x2fec].map(o => w.add(o).readS32()).filter(t => t >= 0); }
@@ -409,6 +426,8 @@ function exchange(w) {                              // lockstep: send states, wa
   if (changed) buildLethal(w);                       // pieces came or went: the hazard list changes
   const msg = { ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards(), sh: rd(() => shots(w)) || [] };
   if ((frame & 7) === 0) msg.fx = rd(() => forceFields(w));   // fans / orbs (they rarely move)
+  const pf = rd(() => platforms(w));
+  if (pf && pf.length) msg.pf = pf;                  // moving platforms: every frame
   if (changed) msg.lt = lethalInfo();
   const tc = tileChanges();
   if (tc) msg.tc = tc;
