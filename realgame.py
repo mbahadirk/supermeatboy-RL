@@ -102,6 +102,8 @@ C_WIND, C_ORB, C_ACCEL = 0.3, -0.4, 0.55  # map codes: in a fan's wind column, i
 C_PLATFORM = 0.85                         # map code: a moving platform (solid, but it moves)
 PLAT_HALF = (30.0, 10.0)                  # a platform is a 60 x 20 bar (20 x 60 when upright), realgame.js platforms()
 PLAT_STILL = 240                          # frames: a platform seen in place this long is a fixed one (a wall for routes)
+SEALED_MAX = 150                          # cells: a pocket the player cannot get into larger than this is left open
+                                          # (a moving saw at its start position could look like a seal)
 ACCEL_TILE = 98                           # Salt Factory surface tile (no special bit); what it does is not traced
 
 # rewards
@@ -208,6 +210,8 @@ class Level:
         self.plats, self.plat_vel, self.plat_cells, self.plat_set = [], [], [], set()
         self.plat_seen = np.zeros((self.H, self.W), dtype=bool)   # every cell a platform has covered
         self.plat_owner = {}                                       # (r, c) -> platforms that covered it
+        self.sealed_haz = np.zeros((self.H, self.W), dtype=bool)  # pockets inside hazards (lava pits): hazard
+        self.sealed_wall = np.zeros((self.H, self.W), dtype=bool) # pockets inside walls: solid
         self.set_platforms(info.get("pf"))
         self.dist = self._bfs()
         self.diag = float(np.hypot(self.W, self.H))
@@ -274,6 +278,70 @@ class Level:
         self.plat_cells = cells
         self.plat_set = {(r, c) for r, c, _ in cells}
         return changed
+
+    def hazard_mask(self, boxes) -> np.ndarray:
+        """Open cells a hazard box reaches (the body would touch it there), as in the agents' map."""
+        out = np.zeros((self.H, self.W), dtype=bool)
+        cx = self.ox + (np.arange(self.W) + 0.5) * TILE
+        cy = self.oy + (np.arange(self.H) + 0.5) * TILE
+        for b in boxes:
+            x, y, hw, hh, _ = b
+            far = float(np.hypot(hw, hh)) + 6.0
+            c0, c1 = max(0, int((x - far - self.ox) // TILE)), min(self.W, int((x + far - self.ox) // TILE) + 1)
+            r0, r1 = max(0, int((y - far - self.oy) // TILE)), min(self.H, int((y + far - self.oy) // TILE) + 1)
+            if c0 < c1 and r0 < r1:
+                out[r0:r1, c0:c1] |= box_distance(cx[None, c0:c1], cy[r0:r1, None], b) < 6.0
+            c, r = self.cell(x, y)
+            if 0 <= c < self.W and 0 <= r < self.H:
+                out[r, c] = True
+        return out & ~self.solid0
+
+    def set_sealed(self, boxes, seeds) -> int:
+        """Open cells the player cannot get into: not reachable from the spawn, goals, keys or portals without
+        going through a wall or a hazard (boxes: the hazards that stay put). Lava pits are drawn as a few
+        stacked lava pieces whose boxes leave gaps between them; in the game the pit is all lava. A pocket
+        that touches a hazard counts as hazard, one closed in by walls as solid (agents' map, routes,
+        monitor). Pockets over SEALED_MAX cells are left open. Returns the number of sealed cells."""
+        haz = self.hazard_mask(boxes)
+        passable = (~self.solid0 | self.special) & ~haz
+        seen = np.zeros((self.H, self.W), dtype=bool)
+        todo = []
+        for x, y in seeds:
+            c, r = self.cell(x, y)
+            if 0 <= c < self.W and 0 <= r < self.H and not seen[r, c]:
+                seen[r, c] = True
+                todo.append((r, c))
+        while todo:
+            r, c = todo.pop()
+            for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+                if 0 <= nr < self.H and 0 <= nc < self.W and not seen[nr, nc] and passable[nr, nc]:
+                    seen[nr, nc] = True
+                    todo.append((nr, nc))
+        pocket = ~self.solid0 & ~seen & ~haz
+        self.sealed_haz[:] = False
+        self.sealed_wall[:] = False
+        done = np.zeros_like(pocket)
+        for r0, c0 in zip(*np.nonzero(pocket)):
+            if done[r0, c0]:
+                continue
+            comp, todo, touch = [], [(r0, c0)], False
+            done[r0, c0] = True
+            while todo:
+                r, c = todo.pop()
+                comp.append((r, c))
+                for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+                    if 0 <= nr < self.H and 0 <= nc < self.W:
+                        if haz[nr, nc]:
+                            touch = True
+                        elif pocket[nr, nc] and not done[nr, nc]:
+                            done[nr, nc] = True
+                            todo.append((nr, nc))
+            if len(comp) > SEALED_MAX:
+                continue
+            rr, cc = zip(*comp)
+            (self.sealed_haz if touch else self.sealed_wall)[list(rr), list(cc)] = True
+        self.tile_ver += 1
+        return int(self.sealed_haz.sum() + self.sealed_wall.sum())
 
     def plat_fixed(self, k: int) -> bool:
         return self.plat_frames >= PLAT_STILL and not self.plat_moved[k]
@@ -438,6 +506,8 @@ class Level:
             g[self.wind & (g == C_EMPTY)] = C_WIND
         if self.orb_cells.any():
             g[self.orb_cells & (g == C_EMPTY)] = C_ORB
+        g[self.sealed_haz & (g != C_SOLID)] = C_HAZARD   # pockets the player cannot get into (lava pits)
+        g[self.sealed_wall & (g != C_SOLID)] = C_SOLID
         for r, c, _ in self.plat_cells:              # moving platforms where they are now
             if g[r, c] != C_SOLID:
                 g[r, c] = C_PLATFORM
@@ -1187,9 +1257,16 @@ class Trainer:
         static = [b for hid, b in (self.hz_start or {}).items() if hid not in self.moving]
         t = time.time()
         sweeps = [(x, y, hw, hh, a) for x, y, hw, hh, a in sorted(self.sweep)]
+        seeds = [lv.spawn] + list(lv.goals) + list(lv.keys) + list(lv.bandages) +             [p for pair in list(lv.portals) + list(self.links) for p in pair]
+        n_sealed = lv.set_sealed(static, seeds)
+        if n_sealed and not getattr(lv, "sealed_shown", False):
+            lv.sealed_shown = True
+            print(f"[level] {lv.name}: {n_sealed} cells nobody can get into (inside lava pits / walls) filled in",
+                  flush=True)
         self.paths = Planner(lv.words0, lv.ox, lv.oy, lv.spawn, lv.goals, static, sweeps, lv.keys, lv.bandages,
                              list(lv.portals) + list(self.links), lift=lv.wind | lv.plat_support(),
-                             blocks=lv.plat_blocks(), doors=lv.plat_doors()).find(self.args.paths)
+                             blocks=lv.plat_blocks() | lv.sealed_haz | lv.sealed_wall,
+                             doors=lv.plat_doors()).find(self.args.paths)
         self.route_stats = []
         if hasattr(self, "best_k"):          # new routes: progress on them starts again (no reward for that)
             self.best_k = [[None] * len(self.paths) for _ in self.best_k]

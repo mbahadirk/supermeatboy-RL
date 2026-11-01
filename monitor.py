@@ -49,6 +49,7 @@ WIND = (40, 70, 95)          # fan wind columns (map background)
 ACCEL = (190, 70, 200)       # accelerator tiles
 ORB = (120, 200, 255)
 PLATFORM = (230, 190, 90)
+SEALED = (150, 50, 45)          # inside a lava pit (no space there in the game)
 N_ROUTES = 4                 # 3 main routes + the bandage route
 POS, NEG = (235, 80, 70), (70, 140, 255)
 ACTION_NAMES = ["idle", "left", "right", "jump", "L+jump", "R+jump", "R+run", "R+run+J", "L+run", "L+run+J"]
@@ -254,6 +255,11 @@ class Monitor:
                 if wind is not None and wind[r, c] and not lv.solid[r, c]:
                     x0, y0 = self.ox0 + c * ts, self.oy0 + (lv.H - 1 - r) * ts
                     surf.fill(WIND, pygame.Rect(int(x0), int(y0), max(1, int(x0 + ts) - int(x0)), max(1, int(y0 + ts) - int(y0))))
+                sh, sw_ = getattr(lv, "sealed_haz", None), getattr(lv, "sealed_wall", None)
+                if (sh is not None and sh[r, c]) or (sw_ is not None and sw_[r, c]):   # nobody gets in (lava pits)
+                    x0, y0 = self.ox0 + c * ts, self.oy0 + (lv.H - 1 - r) * ts
+                    surf.fill(SEALED if sh[r, c] else SOLID,
+                              pygame.Rect(int(x0), int(y0), max(1, int(x0 + ts) - int(x0)), max(1, int(y0 + ts) - int(y0))))
                 if lv.solid[r, c]:                # live: broken crumble blocks and opened locks are gone
                     x0, y0 = self.ox0 + c * ts, self.oy0 + (lv.H - 1 - r) * ts
                     col = SPECIAL if special is not None and special[r, c] else                         ACCEL if getattr(lv, "accel", None) is not None and lv.accel[r, c] else SOLID
