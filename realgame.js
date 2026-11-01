@@ -14,16 +14,23 @@
 //   death: the update asks vtable+0x70 (FUN_0051e7d0, "return 1") whether a lethal contact kills; for an
 //          agent we record the death and answer 0, so the game's own death code never runs for it.
 //   goal:  FUN_004c1910 / FUN_004a5c50 (level end) are swallowed while an agent updates and count as that
-//          agent's finish. Keys, bandages and warp portals are off for agents (world+0xdb4 bits 0x8/0x10)
-//          until per-agent keys are done.
+//          agent's finish. Bandages, keys and warps are off for agents (world+0xdb4 bits 0x8/0x10; the
+//          game's key pickup is gated by 0x10): keys are per agent instead (below).
+//   keys:  each agent picks up a key by touching it (within KEY_R of the key piece); the lock tiles that
+//          key opens (groups from Python) are opened only while that agent updates (tile words swapped
+//          before its update and put back after every agent), so one agent's key opens nothing for others.
 //   the real character: hidden and frozen, used as the camera (parked on the leading agent) and for the
 //          level reset; S (game focused) saves the best agent and finishes the level the game's way.
 //   paths: the reward paths from Python are drawn over the picture through Direct3D 9 (see below).
+//   map:   every frame the collision tile layer is compared with the last frame and changed cells are sent
+//          (crumble blocks breaking, locks opening, the level reset putting them back), so Python's map of
+//          the level (agents' view, monitor) stays live. Pieces (TileLevelSetPiece): type +0x10, x +0x14,
+//          y +0x18, scale x/y +0x24/+0x28, angle +0x2c (radians).
 //   time:  the game's time step includes any wait on Python, so long work (paths, PPO) only happens at
 //          the level start and between waves, and agents are held still for the frame after a long wait.
 //
 // Addresses are image VAs (base 0x400000), resolved against the ASLR base at runtime.
-const CFG = __CONFIG__;   // {agents, wave_frames, finish_frames}
+const CFG = __CONFIG__;   // {agents, pool, wave_frames, finish_frames, finish_quota}
 const base = Process.getModuleByName('SuperMeatBoy.exe').base;
 const img = a => base.add(a - 0x400000);
 const rd = fn => { try { return fn(); } catch (e) { return null; } };
@@ -48,6 +55,7 @@ rpc.exports = { shutdown() { if (active) { active = false; releaseMain(); } retu
 
 // ---- level / main character -------------------------------------------------------------------
 let curName = null, main = null, settle = 0, agents = [], agentSet = new Set(), ready = false;
+let crowd = [], wantAgents = CFG.agents;           // all usable pool characters; the first wantAgents are agents
 let wave = 0, frame = 0, status = [], held = [], prevJump = [], finishFrame = [];
 let curAgent = -1, leader = -1, best = null, finishing = 0, finishRequested = false, hud = null;
 let goalPieces = [];
@@ -58,32 +66,69 @@ function levelObj() { return rd(() => GAME.readPointer().add(0x24).readPointer()
 Interceptor.attach(img(0x4e9020), { onEnter(a) {
   const n = rd(() => a[0].readPointer().readCString());
   if (!n) return;
-  curName = n; main = null; settle = 0; ready = false; agents = []; agentSet = new Set(); pendingWave = false; holdFrames = 0;
+  curName = n; main = null; settle = 0; ready = false; agents = []; crowd = []; agentSet = new Set(); pendingWave = false; holdFrames = 0;
+  keyPos = []; keyLocks = []; lockWord = new Map(); lockOpen = new Map(); keysOf = [];
   finishing = 0; finishRequested = false; best = null; leader = -1; wave = 0; frame = 0;
-  tilemap = null; levelOY = null; paths = [];   // the new level has its own tile map, pool and paths
+  tilemap = null; levelOY = null; paths = []; prevTiles = null;   // the new level has its own tile map, pool and paths
   send({ ev: 'level', name: n });
 } });
 
+
+// More than the game's 40: right after the game builds its pool (FUN_0051eb60: pool[i] =
+// FUN_00527190(main, i), thiscall on the factory [0x704678], i < 40) more characters are built the same
+// way (indices 40...), during the level load like the game's own. The clone keeps the index only for the
+// replay (+0xa44). They are kept here (the game's pool array has 40 slots) and never freed (a little memory
+// per level load).
+// The clone constructor (FUN_0051e950) logs "Cloning Charactor" through OutputDebugStringA, which works by
+// raising a debug-print exception (0x40010006) that Windows handles inside that call. With Frida's default
+// ('steal') the exception is taken as a crash of the call ("system error") and nothing is built, so
+// exceptions here go to the game's own handlers ('propagate').
+const CLONE = new NativeFunction(img(0x527190), 'pointer', ['pointer', 'pointer', 'int'],
+                                 { abi: 'thiscall', exceptions: 'propagate' });
+let extra = [], extraFor = null;
+function buildExtra(m, when) {
+  const want = Math.min(160, (CFG.pool || 40) - 40);
+  extra = []; extraFor = m;
+  if (!active || want <= 0) return;
+  try {
+    for (let i = 0; i < want; i++) {
+      const c = CLONE(img(0x704678).readPointer(), m, 40 + i);
+      if (c.isNull()) break;
+      c.add(0x9e0).writeU32(1);                      // like the pool: not the player
+      extra.push(c);
+    }
+  } catch (e) { send({ ev: 'error', msg: 'extra characters: ' + e.message }); }
+  send({ ev: 'debug', msg: `built ${extra.length} extra characters (pool ${40 + extra.length}, ${when})` });
+}
+Interceptor.attach(img(0x51eb60), {
+  onEnter() { this.m = this.context.ecx; },
+  onLeave() { buildExtra(this.m, 'level load'); }
+});
 
 function setupAgents() {
   const pool = rd(() => main.add(0x7c0).readPointer());
   if (!pool || pool.isNull()) return false;
   const read = () => {
     const out = [];
-    for (let i = 0; i < 40 && out.length < CFG.agents; i++) {
+    for (let i = 0; i < 40; i++) {
       const c = rd(() => pool.add(4 * i).readPointer());
       if (c && !c.isNull()) out.push(c);
     }
     return out;
   };
-  agents = read();
+  crowd = read();
+  // attached in the middle of a level: its pool was built before this script ran. Clone the rest now, from the
+  // game thread (this runs inside the player's update), the same way the pool builder does.
+  if (crowd.length && (CFG.pool || 40) > 40 && !(extraFor && extraFor.equals(main))) buildExtra(main, 'attached mid-level');
+  if (extraFor && main && extraFor.equals(main)) crowd = crowd.concat(extra);   // built with this level's pool
+  agents = crowd.slice(0, Math.max(1, Math.min(wantAgents, crowd.length)));
   // (no pool yet: wait for the game to build it; building it ourselves calls the character factory outside
   // the level load, which is not safe)
   if (!agents.length) return false;
-  agentSet = new Set(agents.map(c => c.toString()));
-  agents.forEach(c => c.add(0x9e0).writeU32(2));
-  status = agents.map(() => 1); held = agents.map(() => [0, 0, 0, 0]); prevJump = agents.map(() => false);
-  finishFrame = agents.map(() => -1);
+  // every pool character is ours (never updated or drawn by the game), so the count can change between waves
+  agentSet = new Set(crowd.map(c => c.toString()));
+  crowd.forEach(c => c.add(0x9e0).writeU32(2));
+  resetArrays();
   return sendLevelInfo();
 }
 
@@ -121,15 +166,22 @@ function sendLevelInfo() {
   const ox = G.add(0x18).readFloat(), oy = G.add(0x1c).readFloat();
   levelOY = oy;
   const tiles = G.readPointer().readByteArray(W * H * 4);
+  tileCount = W * H; prevTiles = new Uint32Array(tiles.slice(0));
   goalPieces = [];
+  const objs = [];                                   // [type, x, y, type-table flags or -1] (keys 0x40, bandages 0x08)
   for (const pc of pieces(w)) {
     const t = pc.add(0x10).readU16() & 0xff, fl = typeFlags(w, t);
-    if (fl !== null && (fl & 2)) goalPieces.push([pc.add(0x14).readFloat(), pc.add(0x18).readFloat()]);
+    const x = pc.add(0x14).readFloat(), y = pc.add(0x18).readFloat();
+    objs.push([t, x, y, fl === null ? -1 : fl]);
+    if (fl !== null && (fl & 2)) goalPieces.push([x, y]);
   }
   const sp = levelObj().add(0x1d2c);
+  spawnX = sp.readFloat(); spawnY = sp.add(4).readFloat();
   buildLethal(w);
   send({ ev: 'info', name: curName, W, H, ox, oy, goals: goalPieces, spawn: [sp.readFloat(), sp.add(4).readFloat()],
-         agents: agents.length, lethal: lethal.length, hz: hazards() }, tiles);
+         agents: agents.length, lethal: lethal.length, hz: hazards(), objs,
+         lethalTypes: lethal.map(pc => pc.add(0x10).readU16() & 0xff), lethalIds: lethalInfo().ids,
+         fx: rd(() => forceFields(w)), portalTypes: rd(() => portalTypes(w)) || [] }, tiles);
   waitGo();                                          // Python builds the reward paths now
   return true;
 }
@@ -152,18 +204,105 @@ function buildLethal(w) {
   const g = img(0x703794).readPointer();
   const skip = new Set([0x2ffc, 0x2eec, 0x2fe4, 0x2fe8, 0x2fec].map(o => w.add(o).readU32())
     .concat([0x34, 0x38, 0x3c, 0x40, 0x44].map(o => g.add(o).readU32())));
+  const old = new Map(lethal.map((pc, k) => [pc.toString(), lethalSize[k]]));
+  const all = pieces(w);
+  pieceSig = sig(all);
   lethal = [];
-  for (const pc of pieces(w)) {
+  for (const pc of all) {
     const t = pc.add(0x10).readU16() & 0xff;
     if (skip.has(t)) continue;
     const fl = typeFlags(w, t);
     if (fl === null || (fl & 1)) lethal.push(pc);
   }
-  lethalSize = lethal.map(pc => pieceSize(w, pc));
+  lethalSize = lethal.map(pc => old.get(pc.toString()) || pieceSize(w, pc));
 }
-function hazards() {                               // [x, y, size w, size h, scale] per lethal piece, now
+// pieces can be added or removed while the level runs (shots): the list is checked every frame
+let pieceSig = '';
+function sig(all) { return all.length + ':' + (all.length ? all[0] + ',' + all[all.length - 1] : ''); }
+function lethalInfo() {   // types and ids (addresses) of the lethal pieces, in the order hazards() lists them
+  return { types: lethal.map(pc => pc.add(0x10).readU16() & 0xff), ids: lethal.map(pc => pc.toString()) };
+}
+function hazards() {                    // [x, y, size w, size h, scale x, scale y, angle] per lethal piece, now
   return lethal.map((pc, k) => [pc.add(0x14).readFloat(), pc.add(0x18).readFloat(), lethalSize[k][0],
-                                lethalSize[k][1], pc.add(0x2c).readFloat()]);
+                                lethalSize[k][1], pc.add(0x24).readFloat(), pc.add(0x28).readFloat(),
+                                pc.add(0x2c).readFloat()]);
+}
+// Shots (thrown saws, missiles): not pieces. Each shooter / launcher is an entity in the world's array
+// (u16 count +0x2c30, pointer +0x2c40, 0x9d4 bytes each; +0 its piece, +0x14 kind) with 10 shot slots of
+// 0xf8 bytes: position +0xa8/+0xac, state +0xfc (0 = flying, the only state that kills). Radius per kind
+// (world +0x2f20 kinds 0/3, +0x2f40 kind 1, +0x2f60 kind 2, +0x2fb8 kind 4) x the piece's scale
+// (FUN_004cd350 tests exactly these). [[id, x, y, radius], ...] of the flying ones.
+const SHOT_R = { 0: 0x2f20, 3: 0x2f20, 1: 0x2f40, 2: 0x2f60, 4: 0x2fb8 };
+function shots(w) {
+  const out = [];
+  const n = w.add(0x2c30).readU16();
+  if (!n || n > 64) return out;
+  const arr = w.add(0x2c40).readPointer();
+  if (arr.isNull()) return out;
+  for (let i = 0; i < n; i++) {
+    const e = arr.add(i * 0x9d4), kind = e.add(0x14).readS32();
+    const ro = SHOT_R[kind];
+    if (ro === undefined) continue;
+    const pc = e.readPointer();
+    const r = w.add(ro).readFloat() * (pc.isNull() ? 1 : Math.abs(pc.add(0x24).readFloat() || 1));
+    for (let j = 0; j < 10; j++) {
+      const o = e.add(j * 0xf8);
+      if (o.add(0xfc).readU32() !== 0) continue;
+      out.push([i * 10 + j, o.add(0xa8).readFloat(), o.add(0xac).readFloat(), r]);
+    }
+  }
+  return out;
+}
+// Fans and orbs (FUN_004c40e0, run in each character's update):
+//   fans: array at world+0x2cb4 (u16 count +0x2ccc, data pointer +0x2cdc, 0x24 bytes each): +0 the fan
+//         piece, +4 its x axis, +0x14 (half width, 0) turned by its angle, +0x1c its up axis. Wind acts in
+//         front of the fan (up axis) for piece+0x40 units, strength piece+0x3c (x5 in the near half).
+//   orbs: world+0x2e14 (u16 count +0x2e2c, data pointer +0x2e3c, 4-byte piece pointers): a round field,
+//         inner radius s32 piece+0x44 (strength +0x3c), outer radius s32 piece+0x48 (strength +0x40).
+function forceFields(w) {
+  const fans = [], orbs = [];
+  const nf = w.add(0x2ccc).readU16();
+  if (nf && nf < 64) {
+    const a = w.add(0x2cdc).readPointer();
+    for (let i = 0; i < nf; i++) {
+      const e = a.add(i * 0x24), pc = e.readPointer();
+      if (pc.isNull()) continue;
+      const hx = e.add(0x14).readFloat(), hy = e.add(0x18).readFloat();
+      fans.push([pc.add(0x14).readFloat(), pc.add(0x18).readFloat(), e.add(0x1c).readFloat(), e.add(0x20).readFloat(),
+                 Math.hypot(hx, hy), pc.add(0x40).readFloat(), pc.add(0x3c).readFloat()]);
+    }
+  }
+  const no = w.add(0x2e2c).readU16();
+  if (no && no < 64) {
+    const a = w.add(0x2e3c).readPointer();
+    for (let i = 0; i < no; i++) {
+      const pc = a.add(4 * i).readPointer();
+      if (pc.isNull()) continue;
+      orbs.push([pc.add(0x14).readFloat(), pc.add(0x18).readFloat(), pc.add(0x44).readS32(), pc.add(0x48).readS32(),
+                 pc.add(0x3c).readFloat(), pc.add(0x40).readFloat()]);
+    }
+  }
+  return { fans, orbs };
+}
+// world type ids of portal pieces (portalidle/enter/exit, paired in piece order by the level build FUN_004c8c10)
+function portalTypes(w) { return [0x2fe4, 0x2fe8, 0x2fec].map(o => w.add(o).readS32()).filter(t => t >= 0); }
+
+// collision tiles that changed since the last frame: [[cell index, new word], ...]
+let prevTiles = null, tileCount = 0;
+function tileChanges() {
+  if (!prevTiles || !tilemap) return null;
+  const a = rd(() => tilemap.readPointer());
+  if (!a || a.isNull()) return null;
+  const now = new Uint32Array(a.readByteArray(tileCount * 4));
+  let out = null;
+  for (let i = 0; i < tileCount; i++) {
+    if (now[i] !== prevTiles[i]) {
+      if (!out) out = [];
+      if (out.length < 2000) out.push([i, now[i]]);
+    }
+  }
+  prevTiles = now;
+  return out;
 }
 
 // ---- inputs through the game's own handlers: thiscall(char, {state 1 press / 2 held / 3 release, ms}) -------
@@ -188,7 +327,13 @@ function releaseMain() {
   for (const o of [0x84, 0x81c, 0x824]) { main.add(o).writeFloat(sp.readFloat()); main.add(o + 4).writeFloat(sp.add(4).readFloat()); }
 }
 
+function resetArrays() {
+  status = agents.map(() => 1); held = agents.map(() => [0, 0, 0, 0]); prevJump = agents.map(() => false);
+  finishFrame = agents.map(() => -1);
+}
 function startWave() {
+  const want = Math.max(1, Math.min(wantAgents, crowd.length));
+  if (want !== agents.length) { agents = crowd.slice(0, want); resetArrays(); leader = 0; }   // monitor slider
   wave++; frame = 0;
   vcall(main, V_RESPAWN);                          // resets the level's moving parts
   agents.forEach((c, i) => {
@@ -205,14 +350,40 @@ function startWave() {
     c.add(0x9e0).writeU32(2);
     c.add(0x7b4).writeU32(0x50081 | (fl & 0x10000000));
     setState(c, 0);
-    status[i] = 0; held[i] = [0, 0, 0, 0]; finishFrame[i] = -1;
+    status[i] = 0; held[i] = [0, 0, 0, 0]; finishFrame[i] = -1; keysOf[i] = 0;
   });
   send({ ev: 'wave', wave });
 }
 
 function agentState(c, i) {
   return [c.add(0x84).readFloat(), c.add(0x88).readFloat(), c.add(0x9c).readFloat(), c.add(0xa0).readFloat(),
-          c.add(0x7b4).readU32(), c.add(0x7b0).readU32(), status[i]];
+          c.add(0x7b4).readU32(), c.add(0x7b0).readU32(), status[i], keysOf[i] || 0];
+}
+
+// ---- per-agent keys ---------------------------------------------------------------------------------------
+const KEY_R = 22;                                   // touching a key: centre within this of the key piece
+let keyPos = [], keyLocks = [], lockWord = new Map(), keysOf = [], lockOpen = new Map();
+function onKeys(p) {                                // from Python with the level info: keys and their lock cells
+  keyPos = (p && p.keys) || []; keyLocks = (p && p.locks) || [];
+  lockWord = new Map(); lockOpen = new Map();
+  const a = rd(() => tilemap.readPointer());
+  if (a && !a.isNull()) keyLocks.forEach(g => g.forEach(ci => { if (!lockWord.has(ci)) { lockWord.set(ci, a.add(4 * ci).readU32()); lockOpen.set(ci, false); } }));
+}
+function setLocks(a, mask) {                        // lock tiles as agent `mask` (bit k = has key k) sees them
+  for (let k = 0; k < keyLocks.length; k++) {
+    const open = ((mask >> k) & 1) === 1;
+    for (const ci of keyLocks[k]) {
+      if (lockOpen.get(ci) === open) continue;
+      a.add(4 * ci).writeU32(open ? 0x100 : lockWord.get(ci));
+      lockOpen.set(ci, open);
+    }
+  }
+}
+function pickKeys(c, i) {
+  if (!keyPos.length) return;
+  const x = c.add(0x84).readFloat(), y = c.add(0x88).readFloat();
+  for (let k = 0; k < keyPos.length; k++)
+    if (Math.hypot(x - keyPos[k][0], y - keyPos[k][1]) < KEY_R) keysOf[i] = (keysOf[i] || 0) | (1 << k);
 }
 
 // Long waits on Python. The game measures the time between its frames, so the frame after a long wait
@@ -221,55 +392,97 @@ function agentState(c, i) {
 // waves, and after any long wait one frame passes with the agents held still before they move again.
 let holdFrames = 0, pendingWave = false;
 function afterWait(t0) { if (Date.now() - t0 > 50) holdFrames = Math.max(holdFrames, 1); }
-function waitGo() { const t0 = Date.now(); recv('go', () => {}).wait(); afterWait(t0); }
+function waitGo() {                                // Python's answer may carry a new agent count (next wave)
+  const t0 = Date.now();
+  recv('go', m => {
+    if (m.payload && m.payload.agents) wantAgents = m.payload.agents;
+    if (m.payload && m.payload.keys) onKeys(m.payload);
+  }).wait();
+  afterWait(t0);
+}
 let actions = null;
 function onAct(m) { actions = m.payload; }
 function exchange(w) {                              // lockstep: send states, wait for Python's inputs
   actions = null;
   const t0 = Date.now();
-  send({ ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards() });
+  const changed = sig(pieces(w)) !== pieceSig;
+  if (changed) buildLethal(w);                       // pieces came or went: the hazard list changes
+  const msg = { ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards(), sh: rd(() => shots(w)) || [] };
+  if ((frame & 7) === 0) msg.fx = rd(() => forceFields(w));   // fans / orbs (they rarely move)
+  if (changed) msg.lt = lethalInfo();
+  const tc = tileChanges();
+  if (tc) msg.tc = tc;
+  send(msg);
   recv('act', onAct).wait();
   afterWait(t0);
   return actions;
 }
 
+// A frame that came much later than the last one (the game hitched, or ran slowly in the background) moves
+// everything by speed x the whole gap: agents are held still on such a frame instead.
+let lastStep = 0, longFrames = 0;
 function stepAgents() {
   const w = world();
   if (!w) return;
+  const now = Date.now(), gap = now - lastStep;
+  lastStep = now;
   if (holdFrames > 0) { holdFrames--; return; }
+  if (gap > 80 && gap < 60000 && frame > 0) {
+    if ((longFrames++ % 50) === 0) send({ ev: 'debug', msg: `long frame (${gap} ms): agents held still (${longFrames} so far)` });
+    return;
+  }
   if (pendingWave || (frame === 0 && wave === 0)) { pendingWave = false; startWave(); }
   const act = exchange(w);
   if (!act) return;
   leader = act.leader;
   if (act.stop) {                                   // hand the characters back to the game
     active = false;
-    agents.forEach(c => c.add(0x9e0).writeU32(1));
+    crowd.forEach(c => c.add(0x9e0).writeU32(1));
     releaseMain();
     send({ ev: 'stopped' });
     return;
   }
   if (act.reset) { endWave('reset'); return; }
+  if (act.kill) for (const i of act.kill) if (status[i] === 0) status[i] = 1;   // killed by the trainer (standing still)
   const mask = w.add(0xdb4), m0 = mask.readU32();
-  mask.writeU32(m0 & ~0x18);                        // no keys / bandages / warps for agents yet
+  mask.writeU32(m0 & ~0x18);                        // agents: no bandage / key pickup (row flags 0x08 / 0x40 are
+                                                    // gated by mask bit 0x10, FUN_004cd350) and no warps (0x08)
+  const ta = keyLocks.length ? rd(() => tilemap.readPointer()) : null;
   try {
     for (let i = 0; i < agents.length; i++) {
       if (status[i] !== 0) continue;
       applyInput(i, act.a[i]);
       vcall(agents[i], 0x58);                       // run/walk acceleration (the update does this only for the player)
+      if (ta) setLocks(ta, keysOf[i] || 0);
       curAgent = i;
       const x0 = agents[i].add(0x84).readFloat(), y0 = agents[i].add(0x88).readFloat();
       updateChar(agents[i]);
       curAgent = -1;
-      if (frame < 30) {
-        const x1 = agents[i].add(0x84).readFloat(), y1 = agents[i].add(0x88).readFloat();
-        if (Math.hypot(x1 - x0, y1 - y0) > 150 && (jumpDbg++ < 40))   // (falling tops out near 50 per frame)
-          send({ ev: 'debug', msg: `jump: agent ${i} wave ${wave} frame ${frame}: (${x0.toFixed(0)}, ${y0.toFixed(0)}) -> (${x1.toFixed(0)}, ${y1.toFixed(0)}) status ${status[i]}` });
+      pickKeys(agents[i], i);
+      const x1 = agents[i].add(0x84).readFloat(), y1 = agents[i].add(0x88).readFloat();
+      // the game moved it back to the spawn: it died some way our death hook does not see (counted as a death)
+      if (status[i] === 0 && frame > 2 && Math.hypot(x1 - x0, y1 - y0) > 90 && Math.hypot(x1 - spawnX, y1 - spawnY) < 40) {
+        status[i] = 1;
+        if ((respawnDbg++ % 200) === 0) send({ ev: 'debug', msg: `agent ${i}: the game put it back on the spawn (a death the hook missed; ${respawnDbg} so far)` });
       }
+      if (Math.hypot(x1 - x0, y1 - y0) > 150 && (jumpDbg++ < 40))   // (falling tops out near 50 per frame)
+        send({ ev: 'debug', msg: `jump: agent ${i} wave ${wave} frame ${frame}: (${x0.toFixed(0)}, ${y0.toFixed(0)}) -> (${x1.toFixed(0)}, ${y1.toFixed(0)}) status ${status[i]}, frame gap ${gap} ms` });
       if (status[i] === 0 && agents[i].add(0x88).readFloat() < levelOY - 60) status[i] = 1;
     }
-  } finally { curAgent = -1; mask.writeU32(m0); }
+  } finally {
+    curAgent = -1; mask.writeU32(m0);
+    if (ta) {                                       // locks closed again for drawing and the next frame (also
+      for (const [ci, wd] of lockWord) {            // if the game itself started opening one)
+        if (ta.add(4 * ci).readU32() !== wd) ta.add(4 * ci).writeU32(wd);
+        lockOpen.set(ci, false);
+      }
+    }
+  }
   frame++;
-  if (status.every(s => s !== 0) || frame >= CFG.wave_frames) endWave(frame >= CFG.wave_frames ? 'time' : 'done');
+  // the wave ends when everyone is dead or finished, after wave_frames, or once finish_quota agents finished
+  const quota = CFG.finish_quota > 0 ? Math.min(CFG.finish_quota, agents.length) : Infinity;
+  if (status.filter(s => s === 2).length >= quota) endWave('quota');
+  else if (status.every(s => s !== 0) || frame >= CFG.wave_frames) endWave(frame >= CFG.wave_frames ? 'time' : 'done');
 }
 function endWave(why) {
   send({ ev: 'wave_end', wave, frame, why, status: status.slice(), finish: finishFrame.slice() });
@@ -286,7 +499,7 @@ Interceptor.replace(CANDIE, new NativeCallback(function (self) {
 
 // level end: an agent touching the goal finishes (for itself only)
 const LE1 = img(0x4c1910), LE2 = img(0x4a5c50);
-let badFinish = 0, jumpDbg = 0;
+let badFinish = 0, jumpDbg = 0, respawnDbg = 0, spawnX = 0, spawnY = 0;
 const levelEnd1 = new NativeFunction(LE1, 'void', ['pointer', 'int'], 'thiscall');
 const levelEnd2 = new NativeFunction(LE2, 'void', ['pointer', 'int'], 'thiscall');
 function goalHook(orig) {
