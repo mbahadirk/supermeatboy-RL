@@ -57,11 +57,11 @@ Interceptor.attach(img(0x4e9020), { onEnter(a) {
   if (!n) return;
   curName = n; main = null; settle = 0; ready = false; agents = []; agentSet = new Set();
   finishing = 0; finishRequested = false; best = null; leader = -1; wave = 0; frame = 0;
-  tilemap = null; poolBuilt = false; levelOY = null;   // the new level has its own tile map and pool
+  tilemap = null; levelOY = null;   // the new level has its own tile map and pool
   send({ ev: 'level', name: n });
 } });
 
-let poolBuilt = false;
+
 function setupAgents() {
   const pool = rd(() => main.add(0x7c0).readPointer());
   if (!pool || pool.isNull()) return false;
@@ -74,12 +74,8 @@ function setupAgents() {
     return out;
   };
   agents = read();
-  if (!agents.length && !poolBuilt) {               // the game builds the replay pool on demand: build it now
-    poolBuilt = true;
-    vcall(main, 0x2c);
-    agents = read();
-    send({ ev: 'debug', msg: `built the character pool: ${agents.length}` });
-  }
+  // (no pool yet: wait for the game to build it; building it ourselves calls the character factory outside
+  // the level load, which is not safe)
   if (!agents.length) return false;
   agentSet = new Set(agents.map(c => c.toString()));
   agents.forEach(c => c.add(0x9e0).writeU32(2));
@@ -136,7 +132,18 @@ function sendLevelInfo() {
 // lethal pieces, decided like FUN_004cd350: some types never collide (world +0x2ffc/+0x2eec/+0x2fe4/
 // +0x2fe8/+0x2fec, global table +0x34..+0x44); a type with a type-table row is lethal when its flags have
 // bit 0; a type without a row is lethal. Built once per level; positions are re-read every frame (movers).
-let lethal = [];
+let lethal = [], lethalSize = [];
+const sizeBuf = Memory.alloc(16), flagBuf = Memory.alloc(16), offBuf = Memory.alloc(16);
+function pieceSize(w, pc) {   // the game's own size query (world+8 vtable +0x1c = FUN_004ca860): [w, h] at scale 1
+  try {
+    const obj = w.add(8), fn = obj.readPointer().add(0x1c).readPointer();
+    const k = 'size:' + fn;
+    if (!vfn[k]) vfn[k] = new NativeFunction(fn, 'void', ['pointer', 'pointer', 'pointer', 'pointer', 'pointer'], 'thiscall');
+    sizeBuf.writeFloat(0); sizeBuf.add(4).writeFloat(0);
+    vfn[k](obj, pc, sizeBuf, flagBuf, offBuf);
+    return [sizeBuf.readFloat(), sizeBuf.add(4).readFloat()];
+  } catch (e) { return [0, 0]; }
+}
 function buildLethal(w) {
   const g = img(0x703794).readPointer();
   const skip = new Set([0x2ffc, 0x2eec, 0x2fe4, 0x2fe8, 0x2fec].map(o => w.add(o).readU32())
@@ -148,10 +155,11 @@ function buildLethal(w) {
     const fl = typeFlags(w, t);
     if (fl === null || (fl & 1)) lethal.push(pc);
   }
+  lethalSize = lethal.map(pc => pieceSize(w, pc));
 }
-function hazards() {                               // [x, y, +0x1c, +0x20, scale] per lethal piece, now
-  return lethal.map(pc => [pc.add(0x14).readFloat(), pc.add(0x18).readFloat(), pc.add(0x1c).readFloat(),
-                           pc.add(0x20).readFloat(), pc.add(0x2c).readFloat()]);
+function hazards() {                               // [x, y, size w, size h, scale] per lethal piece, now
+  return lethal.map((pc, k) => [pc.add(0x14).readFloat(), pc.add(0x18).readFloat(), lethalSize[k][0],
+                                lethalSize[k][1], pc.add(0x2c).readFloat()]);
 }
 
 // ---- inputs through the game's own handlers: thiscall(char, {state 1 press / 2 held / 3 release, ms}) -------
@@ -181,11 +189,10 @@ function startWave() {
   vcall(main, V_RESPAWN);                          // resets the level's moving parts
   agents.forEach((c, i) => {
     vcall(c, V_RESPAWN);
-    // respawn moves the character (+0x84) but not where it is drawn: the previous (+0x81c) and render
-    // (+0x824) positions only follow in its next update, so without this the frame drawn right after the
-    // reset (and frozen during a PPO update) shows each agent where it died
-    const x = c.add(0x84).readFloat(), y = c.add(0x88).readFloat();
-    for (const o of [0x81c, 0x824]) { c.add(o).writeFloat(x); c.add(o + 4).writeFloat(y); }
+    // respawn moves the character (+0x84) but not where it is drawn: the render position (+0x824, copied
+    // from +0x84 at the end of each update) only follows in its next update, so without this the frame drawn
+    // right after the reset (and frozen during a PPO update) shows each agent where it died
+    c.add(0x824).writeFloat(c.add(0x84).readFloat()); c.add(0x828).writeFloat(c.add(0x88).readFloat());
     c.add(0x9e0).writeU32(2);
     const fl = c.add(0x7b4).readU32();
     c.add(0x7b4).writeU32(0x50081 | (fl & 0x10000000));
@@ -212,6 +219,7 @@ function exchange(w) {                              // lockstep: send states, wa
 function stepAgents() {
   const w = world();
   if (!w) return;
+  if (pathAll.length && !(markerOwner && markerOwner.equals(main))) ensureMarkers();
   if (frame === 0 && wave === 0) startWave();
   const act = exchange(w);
   if (!act) return;
@@ -219,6 +227,7 @@ function stepAgents() {
   if (act.stop) {                                   // hand the characters back to the game
     active = false;
     agents.forEach(c => c.add(0x9e0).writeU32(1));
+    markers.forEach(c => c.add(0x9e0).writeU32(1));
     releaseMain();
     send({ ev: 'stopped' });
     return;
@@ -299,7 +308,7 @@ Interceptor.replace(UPD, new NativeCallback(function (self) {
   for (const o of [0x84, 0x81c, 0x824]) { self.add(o).writeFloat(camX); self.add(o + 4).writeFloat(camY); }
 }, 'void', ['pointer'], 'thiscall'));
 
-// draw: no main character; every agent with its own animation (dead ones faded, leader solid)
+// draw: no main character; every agent with its own animation (leader and finished solid, others faded)
 let drawingAgents = false;
 Interceptor.replace(DRAW, new NativeCallback(function (drawer, ch, sprite, flag) {
   if (!active || drawingAgents || finishing > 0 || !main || !ch.equals(main)) {
@@ -312,12 +321,46 @@ Interceptor.replace(DRAW, new NativeCallback(function (drawer, ch, sprite, flag)
   drawingAgents = true;
   try {
     agents.forEach((c, i) => {
-      c.add(0xa40).writeU8(i === leader || status[i] === 2 ? 0 : 1);
+      c.add(0xa40).writeU8(i === leader || status[i] === 2 ? 0 : 1);   // leader / finished solid, rest faded
       drawChar(drawer, c, ptr(0), 1);
     });
+    drawPath(drawer);
   } catch (e) { send({ ev: 'error', msg: 'draw: ' + e.message }); }
-  drawingAgents = false;
+  finally { drawingAgents = false; }   // must always reset, or no agent is drawn again
 }, 'void', ['pointer', 'pointer', 'pointer', 'int'], 'thiscall'));
+
+// reward path (from Python): small faded Meat Boys along it. The markers are the replay-pool characters the
+// agents do not use (40 - agents), placed evenly along the path and never updated. (Building more characters
+// with the game's factory, FUN_00527190, fails outside the level load and left the game unstable: not used.)
+const PATH_SCALE = CFG.path_scale || 0.3, PATH_FADED = CFG.path_faded === false ? 0 : 1;
+let pathAll = [], pathPts = [], markers = [], markerOwner = null, pathDbg = 0;
+function onPath(m) { pathAll = m.payload || []; markerOwner = null; recv('path', onPath); }
+recv('path', onPath);
+function ensureMarkers() {                           // called from the update hook
+  if (!main || (markerOwner && markerOwner.equals(main))) return;
+  markerOwner = main;
+  markers = [];
+  const pool = rd(() => main.add(0x7c0).readPointer());
+  for (let i = 0; pool && i < 40; i++) {
+    const c = rd(() => pool.add(4 * i).readPointer());
+    if (c && !c.isNull() && !agentSet.has(c.toString())) { setState(c, 0); markers.push(c); }
+  }
+  const n = pathAll.length, k = Math.min(markers.length, n);
+  pathPts = k > 1 ? Array.from({ length: k }, (_, j) => pathAll[Math.round(j * (n - 1) / (k - 1))]) : pathAll.slice(0, k);
+  send({ ev: 'debug', msg: `path markers: ${k} (spare pool characters)` });
+}
+function drawPath(drawer) {
+  if (CFG.debug && (pathDbg++ % 300) === 0) send({ ev: 'debug', msg: `path: ${pathPts.length} points, ${markers.length} markers` });
+  if (!pathPts.length || !main) return;
+  for (let j = 0; j < pathPts.length && j < markers.length; j++) {
+    const R = markers[j], [x, y] = pathPts[j];
+    R.add(0x84).writeFloat(x); R.add(0x88).writeFloat(y);
+    R.add(0x824).writeFloat(x); R.add(0x828).writeFloat(y);
+    R.add(0xb4).writeFloat(PATH_SCALE); R.add(0xb8).writeFloat(PATH_SCALE); R.add(0xbc).writeFloat(0.0);
+    R.add(0xa40).writeU8(PATH_FADED);
+    drawChar(drawer, R, ptr(0), 1);
+  }
+}
 
 // ---- HUD: best time on the timer sign; continue past the level-complete screen after S -------------
 const TIMER_TEXT = img(0x702d0c);

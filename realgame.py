@@ -13,6 +13,13 @@ life and waits where it died; the next wave starts when every agent is dead or f
 time on this level. S in the game (window focused): save the agent and finish the level the game's way;
 training continues on the next level the game loads. Ctrl+C (or a file runs/<name>/STOP): save and detach.
 
+Reward path (realpath.py): the shortest route from the spawn to the goal that stays clear of every solid
+tile and every lethal object (sizes from the game itself; moving hazards everywhere they were seen). Agents
+are rewarded for new progress along it (R_PROGRESS per tile) and lightly for staying near it (R_TETHER);
+the wave report gives each agent's fitness = 1000 if finished + 500 x path fraction reached - 0.05 x frames
+- 50 if dead. In the game the path is marked with the replay-pool characters the agents do not use
+(40 - agents of them; --path-scale, --path-solid).
+
 Saved in runs/<name>/: model.pt (latest), levels/<level>/best.pt + best.json (fastest finish).
 """
 from __future__ import annotations
@@ -29,6 +36,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from realpath import RewardPath, fitness
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 JS = os.path.join(HERE, "realgame.js")
 GAME_EXE = "SuperMeatBoy.exe"
@@ -44,7 +53,8 @@ OBS = N_STATE + (2 * K + 1) ** 2
 C_EMPTY, C_SOLID, C_HAZARD, C_GOAL = 0.0, 1.0, -1.0, 0.75
 
 # rewards
-R_PROGRESS = 1.0       # per tile of new closest path distance to the goal
+R_PROGRESS = 1.0       # per tile of new progress along the reward path (best so far this life)
+R_TETHER = -0.005      # per tile away from the path (up to 6 tiles), every frame
 R_WIN = 50.0
 R_FAST = 20.0           # + this x (1 - finish time / wave length)
 R_DEATH = -5.0
@@ -61,6 +71,11 @@ class Level:
         t = np.frombuffer(tiles, dtype="<u4").reshape(self.H, self.W)        # row 0 = bottom
         tid = t & 0xff
         self.solid = ((tid > 0) & (tid < 100)) | (((t >> 8) & 1).astype(bool) & (tid > 0) & (tid <= 100))
+        # tiles the reward path cannot go through: full blocks only (slopes and half blocks have room,
+        # crumble blocks - ids 64, 96, 97, 99, 100 - break)
+        shaped = ((t >> 18) & 3) != 0
+        crumble = np.isin(tid, (64, 96, 97, 99, 100))
+        self.path_solid = (tid > 0) & (tid <= 100) & ~shaped & ~crumble
         self.goals = [tuple(g) for g in info["goals"]]
         self.spawn = tuple(info["spawn"])
         self.base = np.where(self.solid, C_SOLID, C_EMPTY).astype(np.float32)
@@ -98,11 +113,11 @@ class Level:
         gx, gy = min(self.goals, key=lambda g: (g[0] - x) ** 2 + (g[1] - y) ** 2) if self.goals else self.spawn
         return float(np.hypot(gx - x, gy - y) / TILE) + self.diag   # off the known paths: worse than any path
 
-    def grid_with_hazards(self, hz: list) -> np.ndarray:
+    def grid_with_hazards(self, circles: list) -> np.ndarray:
         """Cell codes now: tiles, goals, and the lethal pieces at their current positions."""
         g = self.base.copy()
-        for x, y, _a, _b, s in hz:
-            rad = max(0.6, 0.9 * abs(s or 1.0))           # tiles; the piece shapes are not read yet
+        for x, y, radius in circles:
+            rad = max(0.5, radius / TILE)
             c, r = self.cell(x, y)
             k = int(np.ceil(rad))
             r0, r1, c0, c1 = max(0, r - k), min(self.H, r + k + 1), max(0, c - k), min(self.W, c + k + 1)
@@ -112,6 +127,17 @@ class Level:
             m = (np.hypot(rr - r, cc - c) <= rad) & (g[r0:r1, c0:c1] != C_SOLID)
             g[r0:r1, c0:c1][m] = C_HAZARD
         return g
+
+
+def hazard_circles(hz: list) -> list[tuple[float, float, float]]:
+    """Lethal pieces [x, y, size w, size h, scale] (realgame.js) as circles: the game first tests a circle around
+    the piece of half its scaled diagonal (FUN_004cd350 with sizes from FUN_004ca860)."""
+    out = []
+    for x, y, w, h, s in hz:
+        s = abs(s or 1.0)
+        r = 0.5 * s * float(np.hypot(w, h)) if (w > 0 or h > 0) else 18.0 * s
+        out.append((x, y, r))
+    return out
 
 
 def other_trainers() -> list[str]:
@@ -271,6 +297,8 @@ class Trainer:
             info["name"] = identify_level(info, tiles) or "unknown"
         self.level = Level(info, tiles)
         self.best_time = None
+        self.path, self.hz_start, self.moving, self.sweep, self.path_dirty = None, None, set(), set(), True
+        self.best_fit = None
         n = info["agents"]
         print(f"[level] {info['name']}: {self.level.W}x{self.level.H}, {len(self.level.goals)} goal(s), "
               f"{info['lethal']} lethal pieces, {n} agents", flush=True)
@@ -279,9 +307,14 @@ class Trainer:
     def new_wave(self, n: int):
         self.traj = [{"o": [], "a": [], "lp": [], "v": [], "r": [], "done": False} for _ in range(n)]
         self.best_d = [None] * n
+        self.best_s = [None] * n       # best progress along the reward path this life (game units)
+        self.cur_s = [0.0] * n
+        self.frames = [0] * n
+        self.fit = [None] * n
         self.acts = [[] for _ in range(n)]
         self.alive = [True] * n
         self.stagnation = [0] * n
+        self.prev_pos = {}         # positions of the previous frame (stagnation)
 
     def on_frame(self, m: dict) -> dict:
         lv, states = self.level, m["s"]
@@ -290,7 +323,11 @@ class Trainer:
         n = len(states)
         if len(self.traj) != n:
             self.new_wave(n)
-        grid = lv.grid_with_hazards(m["hz"])
+        circles = hazard_circles(m["hz"])
+        self.track_hazards(circles)
+        if self.path is None or (self.path_dirty and m["frame"] == 0):
+            self.build_path()
+        grid = lv.grid_with_hazards(circles)
         if self.args.debug_spawn and m["frame"] in (0, 1, 30):
             sx, sy = lv.spawn
             far = [(i, s) for i, s in enumerate(states) if abs(s[0] - sx) > 30 or abs(s[1] - sy) > 30]
@@ -300,7 +337,7 @@ class Trainer:
                 for i, s in far[:6]), flush=True)
         self.last_pos = {i: (round(s[0]), round(s[1])) for i, s in enumerate(states)}
         if self.args.test and m["frame"] == 0 and m["hz"]:
-            print("  hazards at wave start: " + " ".join(f"({h[0]:.0f},{h[1]:.0f})" for h in m["hz"][:6]), flush=True)
+            print("  hazards at wave start: " + " ".join("(" + ",".join(f"{v:.2f}" for v in h) + ")" for h in m["hz"][:8]), flush=True)
         if self.args.test and m["frame"] % 120 == 0:
             print(f"  f{m['frame']}: " + " ".join(f"({s[0]:.0f},{s[1]:.0f} v{s[2]:.0f},{s[3]:.0f} st{s[5]} {s[6]})"
                                                for s in states[:4]), flush=True)
@@ -311,12 +348,23 @@ class Trainer:
                 continue
             x, y, st = s[0], s[1], s[6]
             r = R_STEP
-            d = lv.goal_dist(x, y)
-            if self.best_d[i] is None or d < self.best_d[i]:
-                r += R_PROGRESS * ((self.best_d[i] if self.best_d[i] is not None else d) - d)
-                self.best_d[i] = d
-            if hasattr(self, "last_pos") and i in self.last_pos:
-                px, py = self.last_pos[i]
+            self.frames[i] += 1
+            if self.path is not None and self.path.found:     # progress along the reward path
+                prog, off = self.path.project(x, y, self.best_s[i] if self.best_s[i] is not None else 0.0)
+                self.cur_s[i] = prog
+                if self.best_s[i] is None:
+                    self.best_s[i] = prog
+                elif prog > self.best_s[i]:
+                    r += R_PROGRESS * (prog - self.best_s[i]) / TILE
+                    self.best_s[i] = prog
+                r += R_TETHER * min(off / TILE, 6.0)
+            else:                                              # no path: closest path distance to the goal
+                d = lv.goal_dist(x, y)
+                if self.best_d[i] is None or d < self.best_d[i]:
+                    r += R_PROGRESS * ((self.best_d[i] if self.best_d[i] is not None else d) - d)
+                    self.best_d[i] = d
+            if i in self.prev_pos:     # standing still (stuck in a corner / against a wall) slowly costs
+                px, py = self.prev_pos[i]
                 if abs(x - px) < 2.0 and abs(y - py) < 2.0:
                     self.stagnation[i] += 1
                     if self.stagnation[i] > 40:
@@ -334,6 +382,8 @@ class Trainer:
                 tr["done"] = True
                 self.alive[i] = False
                 self.ppo.add(tr, 0.0)
+                self.fit[i] = self.agent_fitness(i, won=st == 2, dead=st == 1)
+        self.prev_pos = {i: (s[0], s[1]) for i, s in enumerate(states)}   # after the rewards that use it
         live = [i for i, s in enumerate(states) if s[6] == 0 and self.alive[i]]
         acts = [[0, 0, 0, 0]] * n
         leader = 0
@@ -351,7 +401,10 @@ class Trainer:
                 tr["o"].append(obs[j]); tr["a"].append(int(a[j])); tr["lp"].append(float(lp[j])); tr["v"].append(float(v[j]))
                 acts[i] = list(ACTIONS[int(a[j])])
                 self.acts[i].append(int(a[j]))
-            leader = min(live, key=lambda i: lv.goal_dist(states[i][0], states[i][1]))
+            if self.path is not None and self.path.found:
+                leader = max(live, key=lambda i: self.cur_s[i])
+            else:
+                leader = min(live, key=lambda i: lv.goal_dist(states[i][0], states[i][1]))
         won = [i for i, s in enumerate(states) if s[6] == 2]
         if won:
             leader = won[0]
@@ -371,6 +424,7 @@ class Trainer:
             if not (self.alive[i] and tr["a"]):
                 continue
             st = m["status"][i] if i < len(m["status"]) else 0
+            self.fit[i] = self.agent_fitness(i, won=st == 2, dead=st == 1)
             if st == 1:
                 tr["r"].append(R_STEP + R_DEATH)
                 tr["done"] = True
@@ -395,6 +449,14 @@ class Trainer:
                 self.best_time = t
                 self.save_best(lv.name, t, i)
                 self.script.post({"type": "best", "payload": t})
+        fits = [f for f in self.fit if f is not None]
+        if fits:
+            k = max(range(n), key=lambda j: self.fit[j] if self.fit[j] is not None else -1e9)
+            prog = [100.0 * (b or 0.0) / self.path.length for b in self.best_s] if self.path and self.path.found else []
+            line += f", fitness best {self.fit[k]:.0f} (agent {k})" + (f", path {max(prog):.0f}% max / {np.mean(prog):.0f}% mean"
+                                                                      if prog else "")
+            if self.best_fit is None or self.fit[k] > self.best_fit:
+                self.best_fit = self.fit[k]
         if not self.args.test and self.ppo.steps >= self.args.batch:
             st = self.ppo.update()
             self.ppo.steps = 0
@@ -403,6 +465,40 @@ class Trainer:
         el = (time.time() - self.t0) / 60
         print(line + f"  [{el:.1f} min]", flush=True)
         self.new_wave(n)
+
+    # reward path
+    def track_hazards(self, circles: list):
+        """Remember where each lethal piece started and every place a moving one has been."""
+        if self.hz_start is None or len(self.hz_start) != len(circles):
+            self.hz_start = list(circles)
+            return
+        for k, (x, y, r) in enumerate(circles):
+            x0, y0, _ = self.hz_start[k]
+            if abs(x - x0) > 2 or abs(y - y0) > 2:
+                if k not in self.moving:
+                    self.moving.add(k)
+                    self.sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, r))
+                key = (round(x / 4) * 4, round(y / 4) * 4, r)
+                if key not in self.sweep:
+                    self.sweep.add(key)
+                    self.path_dirty = True
+
+    def build_path(self):
+        lv = self.level
+        static = [c for k, c in enumerate(self.hz_start or []) if k not in self.moving]
+        self.path = RewardPath(lv.path_solid, lv.ox, lv.oy, lv.spawn, lv.goals, static, sorted(self.sweep))
+        self.path_dirty = False
+        p = self.path
+        print(f"[path] {lv.name}: " + (f"{p.length / TILE:.0f} tiles, {p.mode}" if p.found else "no route found")
+              + f" ({len(static)} fixed hazards, {len(self.moving)} moving)", flush=True)
+        try:
+            self.script.post({"type": "path", "payload": p.markers() if p.found else []})
+        except Exception:
+            pass
+
+    def agent_fitness(self, i: int, won: bool, dead: bool) -> float:
+        L = self.path.length if self.path is not None and self.path.found else 1.0
+        return fitness(won, dead, self.best_s[i] or 0.0, L, self.frames[i])
 
     # saving
     def save(self, path=None):
@@ -415,7 +511,7 @@ class Trainer:
         self.save(os.path.join(d, "best.pt"))
         with open(os.path.join(d, "best.json"), "w") as f:
             json.dump({"level": level, "seconds": t, "agent": agent, "wave": self.waves,
-                       "actions": self.acts[agent]}, f)
+                       "fitness": self.fit[agent], "actions": self.acts[agent]}, f)
         print(f"[best] {level}: {t:.2f}s -> {d}", flush=True)
 
     # frida
@@ -465,7 +561,8 @@ class Trainer:
             raise SystemExit(f"another realgame.py is already attached to the game (pid {', '.join(other)}): "
                              f"stop it first (Ctrl+C in its terminal, or a file runs/<name>/STOP)")
         cfg = {"agents": max(1, min(self.args.agents, 40)), "wave_frames": int(self.args.wave_seconds * HZ),
-               "finish_frames": 60}
+               "finish_frames": 60, "debug": bool(self.args.debug_spawn),
+               "path_scale": self.args.path_scale, "path_faded": not self.args.path_solid}
         with open(JS, encoding="utf-8") as f:
             src = f.read().replace("__CONFIG__", json.dumps(cfg))
         try:
@@ -514,6 +611,8 @@ def main():
     ap.add_argument("--name", default=None, help="run folder name under runs/ (default real_<time>)")
     ap.add_argument("--test", action="store_true", help="scripted inputs, no learning (checks the mod)")
     ap.add_argument("--debug-spawn", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--path-scale", type=float, default=0.3, help="size of the reward-path markers in the game")
+    ap.add_argument("--path-solid", action="store_true", help="draw the reward-path markers opaque")
     args = ap.parse_args()
     args.name = args.name or ("real_test" if args.test else time.strftime("real_%Y%m%d-%H%M%S"))
     Trainer(args).run()
