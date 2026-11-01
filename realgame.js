@@ -18,6 +18,9 @@
 //          until per-agent keys are done.
 //   the real character: hidden and frozen, used as the camera (parked on the leading agent) and for the
 //          level reset; S (game focused) saves the best agent and finishes the level the game's way.
+//   paths: the reward paths from Python are drawn over the picture through Direct3D 9 (see below).
+//   time:  the game's time step includes any wait on Python, so long work (paths, PPO) only happens at
+//          the level start and between waves, and agents are held still for the frame after a long wait.
 //
 // Addresses are image VAs (base 0x400000), resolved against the ASLR base at runtime.
 const CFG = __CONFIG__;   // {agents, wave_frames, finish_frames}
@@ -55,9 +58,9 @@ function levelObj() { return rd(() => GAME.readPointer().add(0x24).readPointer()
 Interceptor.attach(img(0x4e9020), { onEnter(a) {
   const n = rd(() => a[0].readPointer().readCString());
   if (!n) return;
-  curName = n; main = null; settle = 0; ready = false; agents = []; agentSet = new Set();
+  curName = n; main = null; settle = 0; ready = false; agents = []; agentSet = new Set(); pendingWave = false; holdFrames = 0;
   finishing = 0; finishRequested = false; best = null; leader = -1; wave = 0; frame = 0;
-  tilemap = null; levelOY = null;   // the new level has its own tile map and pool
+  tilemap = null; levelOY = null; paths = [];   // the new level has its own tile map, pool and paths
   send({ ev: 'level', name: n });
 } });
 
@@ -126,7 +129,8 @@ function sendLevelInfo() {
   const sp = levelObj().add(0x1d2c);
   buildLethal(w);
   send({ ev: 'info', name: curName, W, H, ox, oy, goals: goalPieces, spawn: [sp.readFloat(), sp.add(4).readFloat()],
-         agents: agents.length, lethal: lethal.length }, tiles);
+         agents: agents.length, lethal: lethal.length, hz: hazards() }, tiles);
+  waitGo();                                          // Python builds the reward paths now
   return true;
 }
 // lethal pieces, decided like FUN_004cd350: some types never collide (world +0x2ffc/+0x2eec/+0x2fe4/
@@ -188,13 +192,17 @@ function startWave() {
   wave++; frame = 0;
   vcall(main, V_RESPAWN);                          // resets the level's moving parts
   agents.forEach((c, i) => {
+    const fl = c.add(0x7b4).readU32();
+    // with flag 0x10000000 the respawn (FUN_00520150) only moves the character; without it, it also clears
+    // the contact list (+0xe0, 40 x 0x28) and the rest of the per-life state. Kept, a contact with the goal
+    // from the last wave made agents that finished there finish again on their first frame.
+    c.add(0x7b4).writeU32(fl & ~0x10000000);
     vcall(c, V_RESPAWN);
     // respawn moves the character (+0x84) but not where it is drawn: the render position (+0x824, copied
     // from +0x84 at the end of each update) only follows in its next update, so without this the frame drawn
     // right after the reset (and frozen during a PPO update) shows each agent where it died
     c.add(0x824).writeFloat(c.add(0x84).readFloat()); c.add(0x828).writeFloat(c.add(0x88).readFloat());
     c.add(0x9e0).writeU32(2);
-    const fl = c.add(0x7b4).readU32();
     c.add(0x7b4).writeU32(0x50081 | (fl & 0x10000000));
     setState(c, 0);
     status[i] = 0; held[i] = [0, 0, 0, 0]; finishFrame[i] = -1;
@@ -207,27 +215,35 @@ function agentState(c, i) {
           c.add(0x7b4).readU32(), c.add(0x7b0).readU32(), status[i]];
 }
 
+// Long waits on Python. The game measures the time between its frames, so the frame after a long wait
+// moves everything by speed x the whole wait: agents jumped hundreds of units (onto the goal) on the first
+// frame after a PPO update. Long work (paths, PPO) therefore happens only at the level start and between
+// waves, and after any long wait one frame passes with the agents held still before they move again.
+let holdFrames = 0, pendingWave = false;
+function afterWait(t0) { if (Date.now() - t0 > 50) holdFrames = Math.max(holdFrames, 1); }
+function waitGo() { const t0 = Date.now(); recv('go', () => {}).wait(); afterWait(t0); }
 let actions = null;
 function onAct(m) { actions = m.payload; }
 function exchange(w) {                              // lockstep: send states, wait for Python's inputs
   actions = null;
+  const t0 = Date.now();
   send({ ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards() });
   recv('act', onAct).wait();
+  afterWait(t0);
   return actions;
 }
 
 function stepAgents() {
   const w = world();
   if (!w) return;
-  if (pathAll.length && !(markerOwner && markerOwner.equals(main))) ensureMarkers();
-  if (frame === 0 && wave === 0) startWave();
+  if (holdFrames > 0) { holdFrames--; return; }
+  if (pendingWave || (frame === 0 && wave === 0)) { pendingWave = false; startWave(); }
   const act = exchange(w);
   if (!act) return;
   leader = act.leader;
   if (act.stop) {                                   // hand the characters back to the game
     active = false;
     agents.forEach(c => c.add(0x9e0).writeU32(1));
-    markers.forEach(c => c.add(0x9e0).writeU32(1));
     releaseMain();
     send({ ev: 'stopped' });
     return;
@@ -241,8 +257,14 @@ function stepAgents() {
       applyInput(i, act.a[i]);
       vcall(agents[i], 0x58);                       // run/walk acceleration (the update does this only for the player)
       curAgent = i;
+      const x0 = agents[i].add(0x84).readFloat(), y0 = agents[i].add(0x88).readFloat();
       updateChar(agents[i]);
       curAgent = -1;
+      if (frame < 30) {
+        const x1 = agents[i].add(0x84).readFloat(), y1 = agents[i].add(0x88).readFloat();
+        if (Math.hypot(x1 - x0, y1 - y0) > 150 && (jumpDbg++ < 40))   // (falling tops out near 50 per frame)
+          send({ ev: 'debug', msg: `jump: agent ${i} wave ${wave} frame ${frame}: (${x0.toFixed(0)}, ${y0.toFixed(0)}) -> (${x1.toFixed(0)}, ${y1.toFixed(0)}) status ${status[i]}` });
+      }
       if (status[i] === 0 && agents[i].add(0x88).readFloat() < levelOY - 60) status[i] = 1;
     }
   } finally { curAgent = -1; mask.writeU32(m0); }
@@ -251,8 +273,9 @@ function stepAgents() {
 }
 function endWave(why) {
   send({ ev: 'wave_end', wave, frame, why, status: status.slice(), finish: finishFrame.slice() });
+  waitGo();                                          // Python learns (PPO) now
   frame = 0;
-  startWave();
+  pendingWave = true;                                // the next wave starts on a following frame
 }
 
 // agents: lethal contact -> dead (the game's death code is skipped)
@@ -263,12 +286,17 @@ Interceptor.replace(CANDIE, new NativeCallback(function (self) {
 
 // level end: an agent touching the goal finishes (for itself only)
 const LE1 = img(0x4c1910), LE2 = img(0x4a5c50);
+let badFinish = 0, jumpDbg = 0;
 const levelEnd1 = new NativeFunction(LE1, 'void', ['pointer', 'int'], 'thiscall');
 const levelEnd2 = new NativeFunction(LE2, 'void', ['pointer', 'int'], 'thiscall');
 function goalHook(orig) {
   return new NativeCallback(function (self, arg) {
     if (curAgent >= 0) {
-      if (status[curAgent] === 0) { status[curAgent] = 2; finishFrame[curAgent] = frame; }
+      // a finish counts only next to a goal piece (a stale contact elsewhere must not set a record)
+      const c = agents[curAgent], x = c.add(0x84).readFloat(), y = c.add(0x88).readFloat();
+      const near = goalPieces.some(([gx, gy]) => Math.hypot(gx - x, gy - y) < 60);
+      if (status[curAgent] === 0 && near) { status[curAgent] = 2; finishFrame[curAgent] = frame; }
+      else if (!near && (badFinish++ % 50) === 0) send({ ev: 'debug', msg: `ignored a level end for agent ${curAgent} at (${x.toFixed(0)}, ${y.toFixed(0)}), frame ${frame}: no goal near` });
       return;
     }
     orig(self, arg);
@@ -301,6 +329,7 @@ Interceptor.replace(UPD, new NativeCallback(function (self) {
   if (!ready) {
     try { ready = setupAgents(); } catch (e) { send({ ev: 'error', msg: 'setup: ' + e.message }); ready = false; }
     if (!ready) { updateChar(self); return; }
+    return;                                         // the level info wait: the first wave starts on a later frame
   }
   stepAgents();
   const L = agents[leader] || agents[0];
@@ -324,43 +353,138 @@ Interceptor.replace(DRAW, new NativeCallback(function (drawer, ch, sprite, flag)
       c.add(0xa40).writeU8(i === leader || status[i] === 2 ? 0 : 1);   // leader / finished solid, rest faded
       drawChar(drawer, c, ptr(0), 1);
     });
-    drawPath(drawer);
   } catch (e) { send({ ev: 'error', msg: 'draw: ' + e.message }); }
   finally { drawingAgents = false; }   // must always reset, or no agent is drawn again
 }, 'void', ['pointer', 'pointer', 'pointer', 'int'], 'thiscall'));
 
-// reward path (from Python): small faded Meat Boys along it. The markers are the replay-pool characters the
-// agents do not use (40 - agents), placed evenly along the path and never updated. (Building more characters
-// with the game's factory, FUN_00527190, fails outside the level load and left the game unstable: not used.)
-const PATH_SCALE = CFG.path_scale || 0.3, PATH_FADED = CFG.path_faded === false ? 0 : 1;
-let pathAll = [], pathPts = [], markers = [], markerOwner = null, pathDbg = 0;
-function onPath(m) { pathAll = m.payload || []; markerOwner = null; recv('path', onPath); }
-recv('path', onPath);
-function ensureMarkers() {                           // called from the update hook
-  if (!main || (markerOwner && markerOwner.equals(main))) return;
-  markerOwner = main;
-  markers = [];
-  const pool = rd(() => main.add(0x7c0).readPointer());
-  for (let i = 0; pool && i < 40; i++) {
-    const c = rd(() => pool.add(4 * i).readPointer());
-    if (c && !c.isNull() && !agentSet.has(c.toString())) { setState(c, 0); markers.push(c); }
+// ---- reward paths (from Python), drawn into the game as thick lines through Direct3D 9 ---------------------
+// The device is the first field of the graphics object [0x709068] (FUN_00627850 creates it). The game draws
+// with vertex shaders whose constants c0..c3 hold world -> clip. FUN_004ac4c0 renders the scene layer by
+// layer (into separate render targets, composited later); right after each layer's geometry is drawn
+// (0x4ac6a9) c0..c3 hold the plain camera matrix, which is kept. At Present the paths are drawn onto the
+// back buffer: each world point through that matrix to the screen, then pre-transformed coloured triangles
+// (no shaders, no texture), with every device state used saved before and restored after.
+let paths = [];                                      // [{pts: [[x, y], ...], col: 0xAARRGGBB, w: px}]
+function onPaths(m) { paths = m.payload || []; recv('path', onPaths); }
+recv('path', onPaths);
+const GFX = img(0x709068);
+let dev = null, D = null;
+function d3d() {
+  const g = rd(() => GFX.readPointer());
+  const d = g && !g.isNull() ? rd(() => g.readPointer()) : null;
+  if (!d || d.isNull()) return null;
+  if (!dev || !dev.equals(d)) {
+    dev = d;
+    const vt = d.readPointer();
+    const V = (i, args) => new NativeFunction(vt.add(4 * i).readPointer(), 'int', ['pointer'].concat(args), 'stdcall');
+    D = { getVP: V(48, ['pointer']), setRS: V(57, ['uint', 'uint']), getRS: V(58, ['uint', 'pointer']),
+          getTex: V(64, ['uint', 'pointer']), setTex: V(65, ['uint', 'pointer']),
+          getTSS: V(66, ['uint', 'uint', 'pointer']), setTSS: V(67, ['uint', 'uint', 'uint']),
+          dpup: V(83, ['uint', 'uint', 'pointer', 'uint']),
+          setDecl: V(87, ['pointer']), getDecl: V(88, ['pointer']), setFVF: V(89, ['uint']), getFVF: V(90, ['pointer']),
+          setVS: V(92, ['pointer']), getVS: V(93, ['pointer']), getC: V(95, ['uint', 'pointer', 'uint']),
+          setSS: V(100, ['uint', 'pointer', 'uint', 'uint']), getSS: V(101, ['uint', 'pointer', 'pointer', 'pointer']),
+          setPS: V(107, ['pointer']), getPS: V(108, ['pointer']), present: vt.add(4 * 17).readPointer(),
+          getBB: V(18, ['uint', 'uint', 'uint', 'pointer']), setRT: V(37, ['uint', 'pointer']), getRT: V(38, ['uint', 'pointer']),
+          begin: V(41, []), end: V(42, []), setVP: V(47, ['pointer']) };
   }
-  const n = pathAll.length, k = Math.min(markers.length, n);
-  pathPts = k > 1 ? Array.from({ length: k }, (_, j) => pathAll[Math.round(j * (n - 1) / (k - 1))]) : pathAll.slice(0, k);
-  send({ ev: 'debug', msg: `path markers: ${k} (spare pool characters)` });
+  return D;
 }
-function drawPath(drawer) {
-  if (CFG.debug && (pathDbg++ % 300) === 0) send({ ev: 'debug', msg: `path: ${pathPts.length} points, ${markers.length} markers` });
-  if (!pathPts.length || !main) return;
-  for (let j = 0; j < pathPts.length && j < markers.length; j++) {
-    const R = markers[j], [x, y] = pathPts[j];
-    R.add(0x84).writeFloat(x); R.add(0x88).writeFloat(y);
-    R.add(0x824).writeFloat(x); R.add(0x828).writeFloat(y);
-    R.add(0xb4).writeFloat(PATH_SCALE); R.add(0xb8).writeFloat(PATH_SCALE); R.add(0xbc).writeFloat(0.0);
-    R.add(0xa40).writeU8(PATH_FADED);
-    drawChar(drawer, R, ptr(0), 1);
+function release(p) { if (p && !p.isNull()) new NativeFunction(p.readPointer().add(8).readPointer(), 'uint', ['pointer'], 'stdcall')(p); }
+// render states: z, z write, alpha test, src/dest blend, cull, alpha blend, fog, stencil, lighting,
+// colour write (RGB only: the game keeps something in alpha), blend op, scissor, sRGB write, separate alpha
+const RS = [[7, 0], [14, 0], [15, 0], [19, 5], [20, 6], [22, 1], [27, 1], [28, 0], [52, 0], [137, 0], [168, 7],
+            [171, 1], [174, 0], [194, 0], [206, 0]];
+const TSS = [[0, 1, 2], [0, 2, 0], [0, 4, 2], [0, 5, 0], [1, 1, 1], [1, 4, 1]];   // stage 0: diffuse only; stage 1 off
+const MAXV = 12000, vbuf = Memory.alloc(MAXV * 20), tmp = Memory.alloc(64), mat = Memory.alloc(64), vpb = Memory.alloc(24);
+const save = { rs: Memory.alloc(4 * RS.length), tss: Memory.alloc(4 * TSS.length), p: Memory.alloc(32) };
+let nv = 0;
+function quad(ax, ay, bx, by, hw, col) {             // a segment as two triangles, hw pixels each side
+  if (nv + 6 > MAXV) return;
+  let dx = bx - ax, dy = by - ay;
+  const L = Math.hypot(dx, dy) || 1;
+  const nx = -dy / L * hw, ny = dx / L * hw;
+  const v = [[ax + nx, ay + ny], [bx + nx, by + ny], [bx - nx, by - ny], [ax + nx, ay + ny], [bx - nx, by - ny], [ax - nx, ay - ny]];
+  for (const [x, y] of v) {
+    const o = vbuf.add(nv * 20);
+    o.writeFloat(x); o.add(4).writeFloat(y); o.add(8).writeFloat(0); o.add(12).writeFloat(1); o.add(16).writeU32(col);
+    nv++;
   }
 }
+function dot(x, y, r, col) { quad(x - r, y, x + r, y, r, col); }
+let camM = null, camFrame = false, pathErr = 0;
+const vpSave = Memory.alloc(24), rtp = Memory.alloc(8);
+function drawPaths(d, M) {
+  d.getVP(dev, vpb);
+  const VX = vpb.readU32(), VY = vpb.add(4).readU32(), VW = vpb.add(8).readU32(), VH = vpb.add(12).readU32();
+  const scr = ([x, y]) => {
+    const w = M[12] * x + M[13] * y + M[15];
+    return [VX + ((M[0] * x + M[1] * y + M[3]) / w + 1) * 0.5 * VW, VY + (1 - (M[4] * x + M[5] * y + M[7]) / w) * 0.5 * VH];
+  };
+  nv = 0;
+  for (const p of paths) {                          // dark outline first, then every colour on top
+    const s = p.pts.map(scr);
+    for (let k = 1; k < s.length; k++) quad(s[k - 1][0], s[k - 1][1], s[k][0], s[k][1], (p.w || 3) + 2, 0x90000000);
+  }
+  for (const p of paths) {
+    const s = p.pts.map(scr), hw = p.w || 3;
+    for (let k = 1; k < s.length; k++) quad(s[k - 1][0], s[k - 1][1], s[k][0], s[k][1], hw, p.col);
+    for (const q of s) dot(q[0], q[1], hw + 1, p.col);
+  }
+  if (!nv) return;
+  // save what is changed
+  const P = save.p;   // 0 vs, 4 ps, 8 decl, 12 fvf, 16 tex0, 20 stream vb, 24 stream offset, 28 stream stride
+  d.getVS(dev, P); d.getPS(dev, P.add(4)); d.getDecl(dev, P.add(8)); d.getFVF(dev, P.add(12)); d.getTex(dev, 0, P.add(16));
+  d.getSS(dev, 0, P.add(20), P.add(24), P.add(28));
+  RS.forEach(([k], i) => d.getRS(dev, k, save.rs.add(4 * i)));
+  TSS.forEach(([st, k], i) => d.getTSS(dev, st, k, save.tss.add(4 * i)));
+  try {
+    d.setVS(dev, ptr(0)); d.setPS(dev, ptr(0)); d.setTex(dev, 0, ptr(0)); d.setFVF(dev, 0x44);   // XYZRHW | DIFFUSE
+    RS.forEach(([k, v]) => d.setRS(dev, k, v));
+    TSS.forEach(([st, k, v]) => d.setTSS(dev, st, k, v));
+    d.dpup(dev, 4, nv / 3, vbuf, 20);                // triangle list
+  } finally {
+    RS.forEach(([k], i) => d.setRS(dev, k, save.rs.add(4 * i).readU32()));
+    TSS.forEach(([st, k], i) => d.setTSS(dev, st, k, save.tss.add(4 * i).readU32()));
+    const vs = P.readPointer(), ps = P.add(4).readPointer(), decl = P.add(8).readPointer(), tex = P.add(16).readPointer(), vb = P.add(20).readPointer();
+    d.setVS(dev, vs); d.setPS(dev, ps);
+    if (!decl.isNull()) d.setDecl(dev, decl); else d.setFVF(dev, P.add(12).readU32());
+    d.setTex(dev, 0, tex);
+    d.setSS(dev, 0, vb, P.add(24).readU32(), P.add(28).readU32());   // DrawPrimitiveUP clears stream 0
+    [vs, ps, decl, tex, vb].forEach(release);         // the Get* calls added references
+  }
+}
+Interceptor.attach(img(0x4ac6a9), function () {    // a scene layer was just drawn: c0..c3 = camera
+  if (camFrame || !ready || !paths.length) return;
+  const d = d3d();
+  if (!d) return;
+  d.getC(dev, 0, mat, 4);
+  const M = Array.from({ length: 16 }, (_, i) => mat.add(4 * i).readFloat());
+  if (Math.abs(M[12]) < 1e-3 && Math.abs(M[13]) < 1e-3 && Math.abs(M[14] - 1) < 0.01 && M[15] > 10) { camM = M; camFrame = true; }
+});
+{ const d0 = d3d(); if (d0) Interceptor.attach(d0.present, { onEnter() {
+  const fresh = camFrame;
+  camFrame = false;
+  if (!active || !ready || !paths.length || !camM || !fresh) return;
+  const d = d3d();
+  if (!d) return;
+  let old = null, bb = null, begun = false;
+  try {
+    d.getVP(dev, vpSave);
+    if (d.getRT(dev, 0, rtp) === 0) old = rtp.readPointer();
+    if (d.getBB(dev, 0, 0, 0, rtp) !== 0) return;
+    bb = rtp.readPointer();
+    d.setRT(dev, 0, bb);                             // also sets the viewport to the whole back buffer
+    begun = d.begin(dev) === 0;
+    drawPaths(d, camM);
+  } catch (e) { if ((pathErr++ % 600) === 0) send({ ev: 'error', msg: 'paths: ' + e.message }); }
+  finally {
+    if (begun) d.end(dev);
+    if (old) d.setRT(dev, 0, old);
+    d.setVP(dev, vpSave);
+    release(old); release(bb);
+  }
+} }); }
 
 // ---- HUD: best time on the timer sign; continue past the level-complete screen after S -------------
 const TIMER_TEXT = img(0x702d0c);
