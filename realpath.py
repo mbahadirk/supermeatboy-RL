@@ -29,7 +29,8 @@ cost (never ignored). Then the same with higher jumps, and last without jump lim
 Keys: the route visits the keys one by one, each time the nearest one it can reach, then the goal.
 
 Different routes: after each route is found, the cells around it cost more and the search runs again; a
-new route is kept when most of it (away from the spawn and the goal) does not run along an earlier one and
+new route is kept when most of it (away from the spawn and the goal) does not run the same way as an earlier
+one (within SAME_WAY tiles with no wall between: a parallel copy beside the first route does not count) and
 it is not much longer than the shortest. The bandage route goes spawn -> bandage -> keys -> goal.
 
 Coordinates: game units, y up; cell (c, r) has its lower-left corner at (ox + 20c, oy + 20r).
@@ -57,9 +58,11 @@ SWITCH_COST = 6.0    # extra per step through a switch block (open only while sw
 HALF_COST = 10.0     # last resort ("squeeze"): extra per step through half a tile
 LOCK_COST = 6.0      # extra per step through a lock block once some (not all) keys are picked up
 SPREAD_COST = 4.0    # extra per step next to an earlier route (pushes the next search elsewhere)
-SPREAD_RADIUS = 2    # cells
+SPREAD_RADIUS = 4    # cells (as wide as SAME_WAY: the next search is pushed past what would count as the same way)
 SHARED_ENDS = 3.0    # tiles around the spawn and the goal that every route may share
-MAX_OVERLAP = 0.6    # a new route may run along earlier ones for at most this share of its length
+MAX_OVERLAP = 0.6    # a new route may run the same way as earlier ones for at most this share of its length
+SAME_WAY = 4         # tiles: a route cell this close to an earlier route, with no wall between, runs the same way
+                     # (a copy a few cells beside the first route is not another way through the level)
 MAX_STRETCH = 2.5    # and be at most this many times as long as the shortest
 JUMP = (5, 12)       # jump model: after leaving a floor or wall a route may rise at most 5 tiles and move at most
                      # 12 tiles sideways before it starts falling (the game: jump speed ~300, gravity 550 ->
@@ -397,19 +400,27 @@ class Planner:
             extra[max(0, r - R):r + R + 1, max(0, c - R):c + R + 1] += SPREAD_COST
 
     def _overlap(self, cells, routes) -> float:
-        """Share of a route's cells (away from the shared ends) within one cell of an earlier route."""
-        taken = set()
-        for p in routes:
-            for c, r in p.cells:
-                for dc in (-1, 0, 1):
-                    for dr in (-1, 0, 1):
-                        taken.add((c + dc, r + dr))
+        """Share of a route's cells (away from the shared ends) that run the same way as an earlier route: an
+        earlier route's cell within SAME_WAY tiles with no wall between. Running beside an earlier route a few
+        cells away is the same way; the other side of a wall, or another shaft further off, is not."""
+        taken = set(c for p in routes for c in p.cells)
         ends = [self.spawn] + self.goals
         mid = [c for c in cells
                if min(math.hypot(self.center(c)[0] - x, self.center(c)[1] - y) for x, y in ends) > SHARED_ENDS * TILE]
         if not mid:
             return 1.0
-        return sum(1 for c in mid if c in taken) / len(mid)
+        R = SAME_WAY
+        near = sorted(((dc, dr) for dc in range(-R, R + 1) for dr in range(-R, R + 1) if dc * dc + dr * dr <= R * R),
+                      key=lambda o: o[0] * o[0] + o[1] * o[1])
+        same = 0
+        for c, r in mid:
+            x, y = self.center((c, r))
+            for dc, dr in near:
+                q = (c + dc, r + dr)
+                if q in taken and self.visible(x, y, *self.center(q)):
+                    same += 1
+                    break
+        return same / len(mid)
 
     def _dijkstra(self, start, goals, closed, cost, support, moves, wall, jumps=JUMP):
         """Cheapest cell route (A*). With jumps the state is (cell, rise used, sideways used, falling); without,
