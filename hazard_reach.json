@@ -8,6 +8,7 @@
   "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\real_20261103-003413\\wm_data",
   "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\real_20261103-010400\\wm_data",
   "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\real_20261103-010905\\wm_data",
+  "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\real_20261103-011833\\wm_data",
   "runs/real_20261102-035612/wm_data",
   "runs/real_20261102-165351/wm_data",
   "runs/real_20261103-003413/wm_data"
@@ -23,8 +24,8 @@
    "safe_inside": 0.0072
   },
   "buttholeidle": {
-   "deaths": 129,
-   "safe": 470,
+   "deaths": 365,
+   "safe": 1008,
    "reach_x": 6.0,
    "reach_y": 6.5,
    "percentile": 90,
@@ -47,12 +48,12 @@
    "safe_inside": 0.0
   },
   "fire - large": {
-   "deaths": 542,
-   "safe": 82246,
+   "deaths": 551,
+   "safe": 86279,
    "reach_x": 6.0,
-   "reach_y": 13.1,
+   "reach_y": 10.8,
    "percentile": 75,
-   "safe_inside": 0.0043
+   "safe_inside": 0.0036
   },
   "fire - med": {
    "deaths": 394,
@@ -70,16 +71,16 @@
    "percentile": null
   },
   "forest - river copy": {
-   "deaths": 3480,
-   "safe": 183838,
+   "deaths": 3818,
+   "safe": 194452,
    "reach_x": 6.0,
    "reach_y": 16.6,
    "percentile": 90,
-   "safe_inside": 0.0074
+   "safe_inside": 0.008
   },
   "lava": {
-   "deaths": 1331,
-   "safe": 121593,
+   "deaths": 1350,
+   "safe": 128013,
    "reach_x": 42.7,
    "reach_y": 19.2,
    "percentile": 90,
