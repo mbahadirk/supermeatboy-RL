@@ -224,8 +224,11 @@ def group_of(s) -> np.ndarray:
     return np.where(wall, 2, np.where(air, 1, 0)).astype(np.int8)
 
 
-def build(dirs: list, levels=None, max_samples=None, seed=0, log=print) -> dict:
-    """Features, targets and baselines of every transition in these wm_data folders."""
+def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=None, exclude=()) -> dict:
+    """Features, targets and baselines of every transition in these wm_data folders. frac: keep this share of
+    each wave's transitions (all deaths and finishes) before the inputs are built, for runs too long to
+    featurize whole. exclude: levels left out (the held-out ones)."""
+    rng_f = np.random.default_rng(seed + 1)
     X, YC, YB, YS, YR, G, SH, LV, BC, BG, RAW, PR = [], [], [], [], [], [], [], [], [], [], [], []
     shard_no = 0
     for d in dirs:
@@ -233,7 +236,7 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print) -> dict:
         for meta, rows, world in load_shards(d):
             lv = meta.get("level")
             shard_no += 1
-            if levels and lv not in levels:
+            if (levels and lv not in levels) or lv in exclude:
                 continue
             if lv not in geoms:
                 try:
@@ -247,6 +250,9 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print) -> dict:
             geom.reset()
             tr = transitions(rows)
             s, s2, a, r = tr["s"], tr["s2"], tr["a"], tr["r"]
+            if frac is not None and frac < 1.0 and len(s):
+                k = (s2["status"] != 0) | (rng_f.random(len(s)) < frac)
+                s, s2, a, r = s[k], s2[k], a[k], r[k]
             if not len(s):
                 continue
             wf = {w["f"]: w for w in world}

@@ -11,8 +11,13 @@ before it, the action chosen for it (-1 when it chose none: dead / finished), an
 action earned (NaN on its first row). Rows are raw game values, not network inputs, so the world model can
 build its own features from them and the level data.
 
+Each shard's meta says who chose the actions (`source`: ppo / mpc / mpc+ppo) and why the run played
+(`mode`: train / eval), so planner-driven data can be kept apart from PPO data.
+
 Reading (load_shards / transitions): consecutive rows of one agent give the transitions
-(state, action, next state, reward, terminated, truncated).
+(state, action, next state, reward, terminated, truncated). load_shards reads one wave at a time.
+
+Held-out levels (eval_levels.json next to realgame.py): never trained on (wm.train, wm.selfcorrect skip them).
 
     python -m wm.buffer stats <wm_data dir>
 """
@@ -41,8 +46,9 @@ def _r(v, nd=2):
 
 
 class Collector:
-    def __init__(self, out_dir: str, char_bytes: bool = False):
+    def __init__(self, out_dir: str, char_bytes: bool = False, source: str = "ppo", mode: str = "train"):
         self.dir = out_dir
+        self.source, self.mode = source, mode
         os.makedirs(os.path.join(out_dir, "levels"), exist_ok=True)
         self.char_bytes = char_bytes
         self.level_name = None
@@ -69,6 +75,8 @@ class Collector:
     def frame(self, m: dict, hz_ids: list, hz_keep: list | None = None):
         """The level's moving parts this frame (and the game's time step for the update that follows)."""
         rec = {"f": m["frame"], "dt": m.get("dt"), "hz": _r(m.get("hz", [])), "sh": _r(m.get("sh", []))}
+        if m.get("gap") is not None:            # real ms since the last frame (how long the game waited)
+            rec["gap"] = m["gap"]
         if m.get("pf"):
             rec["pf"] = _r(m["pf"])
         if m.get("tc"):
@@ -107,7 +115,8 @@ class Collector:
             self.n_shards += 1
             base = os.path.join(self.dir, f"wave_{k:05d}")
             meta = {"level": self.level_name, "wave": wave, "why": m.get("why"), "frames": m.get("frame"),
-                    "status": m.get("status"), "finish": m.get("finish")}
+                    "status": m.get("status"), "finish": m.get("finish"),
+                    "source": self.source, "mode": self.mode}
             np.savez_compressed(base + ".npz", rows=np.concatenate(self.rows), meta=json.dumps(meta))
             with gzip.open(base + "_world.json.gz", "wt", encoding="utf-8") as f:
                 json.dump(self.world, f, separators=(",", ":"))
@@ -118,9 +127,18 @@ class Collector:
 
 
 # ---- reading --------------------------------------------------------------------------------------
+def eval_levels() -> set:
+    """The held-out evaluation levels (eval_levels.json next to realgame.py); empty if there is no file."""
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eval_levels.json")
+    if not os.path.exists(p):
+        return set()
+    with open(p, encoding="utf-8") as f:
+        return set(json.load(f).get("held_out", []))
+
+
 def load_shards(d: str, level: str | None = None):
-    """[(meta, rows, world frames)] of every shard in a wm_data folder (optionally one level only)."""
-    out = []
+    """(meta, rows, world frames) of every shard in a wm_data folder (optionally one level only), one at a
+    time (a long run does not fit in memory at once)."""
     for k, p in enumerate(sorted(glob.glob(os.path.join(d, "wave_*.npz")))):
         z = np.load(p)
         meta = json.loads(str(z["meta"]))
@@ -130,8 +148,7 @@ def load_shards(d: str, level: str | None = None):
         world = json.load(gzip.open(wp, "rt", encoding="utf-8")) if os.path.exists(wp) else []
         rows = z["rows"].copy()
         rows["wave"] = k                     # one number per shard (older data stored the game's wave count)
-        out.append((meta, rows, world))
-    return out
+        yield meta, rows, world
 
 
 def load_level(d: str, name: str):
@@ -155,7 +172,7 @@ def transitions(rows: np.ndarray, wave_ended_by_time: bool = True) -> dict:
 
 
 def stats(d: str):
-    shards = load_shards(d)
+    shards = list(load_shards(d))
     if not shards:
         print("no shards in", d)
         return

@@ -674,6 +674,39 @@ class RewardPath:
             return None
         return float(min(max(val, 0.0), self.length))
 
+    def values(self, xs: np.ndarray, ys: np.ndarray, leg: int) -> np.ndarray:
+        """value() for many points at once on one leg (the MPC planner scores thousands of predicted
+        positions per decision); NaN where the field does not reach. Same rule as value()."""
+        xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+        if len(self.points) < 2:
+            return np.zeros(xs.shape)
+        if getattr(self, "_field", None) is None:
+            self._build_field()
+        f = self._field[min(leg, len(self._field) - 1)]
+        pl, bl = self.pl, self._blocked
+        H, W = bl.shape
+        c0 = np.floor((xs - pl.ox) / TILE).astype(np.int64)
+        r0 = np.floor((ys - pl.oy) / TILE).astype(np.int64)
+
+        def free(c, r):
+            ok = (c >= 0) & (c < W) & (r >= 0) & (r < H)
+            out = np.zeros(c.shape, bool)
+            out[ok] = ~bl[r[ok], c[ok]]
+            return out
+        best = np.full(xs.shape, -np.inf)
+        for dc in (-1, 0, 1):
+            for dr in (-1, 0, 1):
+                c, r = c0 + dc, r0 + dr
+                ok = free(c, r)
+                if dc and dr:                                  # not diagonally through a wall corner
+                    ok &= free(c, r0) | free(c0, r)
+                fv = np.full(xs.shape, -np.inf)
+                fv[ok] = f[r[ok], c[ok]]
+                cx, cy = pl.ox + (c + 0.5) * TILE, pl.oy + (r + 0.5) * TILE
+                way = np.hypot(xs - cx, ys - cy) + (FIELD_UP - 1.0) * np.maximum(0.0, cy - ys)
+                best = np.maximum(best, np.where(np.isfinite(fv), fv - FIELD_DECAY * way, -np.inf))
+        return np.where(np.isfinite(best), np.clip(best, 0.0, self.length), np.nan)
+
     def offset(self, x: float, y: float) -> float:
         """Straight distance from a point to the nearest route point."""
         if len(self.points) < 2:

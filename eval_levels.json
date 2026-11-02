@@ -1,0 +1,5 @@
+{
+  "about": "Held-out levels: no PPO training and no world-model training on them (wm.train / wm.selfcorrect skip them; realgame.py refuses to train or collect there without --eval). 'seen' are trained levels used for comparison.",
+  "held_out": ["1-18", "1-19", "1-20", "2-5", "2-6", "2-7"],
+  "seen": ["1-4", "1-9", "1-13", "1-15"]
+}

@@ -24,12 +24,17 @@ BETA = 0.5
 
 
 class WorldModel(nn.Module):
-    def __init__(self, n_in: int = FEAT_DIM, members: int = 5, hidden: int = 256):
+    def __init__(self, n_in: int = FEAT_DIM, members: int = 5, hidden: int = 256, layers: int = 3):
         super().__init__()
-        self.members = nn.ModuleList(
-            nn.Sequential(nn.Linear(n_in, hidden), nn.SiLU(), nn.Linear(hidden, hidden), nn.SiLU(),
-                          nn.Linear(hidden, hidden), nn.SiLU(), nn.Linear(hidden, OUT))
-            for _ in range(members))
+        self.hidden, self.layers = hidden, layers
+
+        def net():
+            mods, w = [], n_in
+            for _ in range(layers):
+                mods += [nn.Linear(w, hidden), nn.SiLU()]
+                w = hidden
+            return nn.Sequential(*mods, nn.Linear(w, OUT))
+        self.members = nn.ModuleList(net() for _ in range(members))
         self.register_buffer("mu", torch.zeros(n_in))
         self.register_buffer("sd", torch.ones(n_in))
         self.register_buffer("pos_weight", torch.ones(len(BIN_NAMES)))
@@ -87,12 +92,12 @@ class WorldModel(nn.Module):
         import json                          # plain Python values only: the file then loads with weights_only
         info = json.loads(json.dumps(info or {}, default=str))
         torch.save({"state": self.state_dict(), "members": len(self.members), "n_in": self.mu.numel(),
-                    "info": info}, path)
+                    "hidden": self.hidden, "layers": self.layers, "info": info}, path)
 
     @classmethod
     def load(cls, path: str) -> "WorldModel":
         d = torch.load(path, map_location="cpu")
-        m = cls(d["n_in"], d["members"])
+        m = cls(d["n_in"], d["members"], d.get("hidden", 256), d.get("layers", 3))
         m.load_state_dict(d["state"])
         m.info = d.get("info", {})
         return m

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from wm.buffer import load_shards, load_level
+from wm.buffer import load_shards, load_level, eval_levels
 from wm.features import LevelGeom, targets, prior, group_of
 from wm.rollout import rollout_mean, World
 
@@ -21,6 +21,7 @@ def generate(dirs, model, K: int = 8, starts: int = 15, seed: int = 1, log=print
     rng = np.random.default_rng(seed)
     X, YC, YB, YS, YR, G = [], [], [], [], [], []
     shard_no = 0
+    held = eval_levels()
     for d in dirs:
         geoms = {}
         for meta, rows, world in load_shards(d):
@@ -28,6 +29,8 @@ def generate(dirs, model, K: int = 8, starts: int = 15, seed: int = 1, log=print
             if shard_no % 5 == 0:                # held out (wm.train / wm.evaluate)
                 continue
             lv = meta.get("level")
+            if lv in held:                       # held-out evaluation level: never trained on
+                continue
             if lv not in geoms:
                 geoms[lv] = LevelGeom(*load_level(d, lv))
             geom = geoms[lv]

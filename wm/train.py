@@ -24,6 +24,7 @@ if HERE not in sys.path:
 
 from wm.features import build, BIN_NAMES, RES_SCALE, EVENTS   # noqa: E402
 from wm.model import WorldModel                           # noqa: E402
+from wm.buffer import eval_levels                         # noqa: E402
 
 GROUPS = ["ground", "air", "wall"]
 
@@ -132,7 +133,12 @@ def main():
     ap.add_argument("--epochs", type=int, default=6)
     ap.add_argument("--batch", type=int, default=4096)
     ap.add_argument("--members", type=int, default=5)
+    ap.add_argument("--hidden", type=int, default=256, help="units per hidden layer")
+    ap.add_argument("--layers", type=int, default=3, help="hidden layers")
+    ap.add_argument("--seed", type=int, default=0, help="weights and sampling seed (same seed: comparable runs)")
     ap.add_argument("--max-samples", type=int, default=500000, help="transitions used (all deaths / finishes kept)")
+    ap.add_argument("--sample-frac", type=float, default=None,
+                    help="keep this share of each wave's transitions before building inputs (long runs)")
     ap.add_argument("--levels", nargs="*", default=None, help="only these levels")
     ap.add_argument("--threads", type=int, default=4, help="CPU threads (leave some for the game)")
     ap.add_argument("--init", default=None, help="start from this wm_model.pt (then --epochs is not used)")
@@ -148,7 +154,9 @@ def main():
     os.makedirs(out, exist_ok=True)
 
     t0 = time.time()
-    d = build(args.data, levels=args.levels, max_samples=args.max_samples, log=lambda *a: None)
+    held = eval_levels()
+    d = build(args.data, levels=args.levels, max_samples=args.max_samples, log=lambda *a: None, seed=args.seed,
+              frac=args.sample_frac, exclude=held)
     n = len(d["X"])
     val = d["shard"] % 5 == 0
     if not val.any() or val.all():           # too few waves: hold out the last one
@@ -163,7 +171,8 @@ def main():
         model = WorldModel.load(args.init)
         print(f"starting from {args.init}")
     else:
-        model = WorldModel(members=args.members)
+        torch.manual_seed(args.seed)
+        model = WorldModel(members=args.members, hidden=args.hidden, layers=args.layers)
         model.set_norm(torch.as_tensor(d["X"][tr_idx[:200000]], dtype=torch.float32))
         pos = d["yb"][tr_idx].mean(0)
         pw = np.where(np.isin(np.arange(len(BIN_NAMES)), list(EVENTS.values())),
@@ -185,7 +194,9 @@ def main():
             train_set = {k: np.concatenate([train_set[k], sc[k]]) for k in train_set}
             fit(model, train_set, d, va_idx, args.sc_epochs, 3e-4, args.batch, t0)
 
-    info = {"data": args.data, "levels": sorted(set(d["level"])), "train": int(len(tr_idx)), "held_out": int(len(va_idx))}
+    info = {"data": args.data, "levels": sorted(set(d["level"])), "train": int(len(tr_idx)), "held_out": int(len(va_idx)),
+            "eval_levels_excluded": sorted(held), "sample_frac": args.sample_frac,
+            "hidden": model.hidden, "layers": model.layers}
     model.save(os.path.join(out, "wm_model.pt"), info)
     text = "# World model: one-step accuracy\n\n" + \
         f"Data: {', '.join(args.data)}; levels {', '.join(info['levels'])}.\n\n" + report(model, d, va_idx)
