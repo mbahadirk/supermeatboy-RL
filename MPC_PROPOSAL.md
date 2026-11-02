@@ -343,3 +343,27 @@ actions):
 - **Not checked yet:**
   - the planner in the running game;
   - its decisions against what really happens (step 3).
+
+### First live run (`runs/mpc_dev1`, one agent, `--control mpc`) and the fixes after it
+
+- **1-1 (World 1, trained):** both attempts finished (2.72 s, 2.62 s) at 42 ms per decision.
+- **4-9, 4-6 (World 4, never in the world model's data):**
+  - 4-9: died at 88% of the route.
+  - 4-6: one attempt died at the start; the next survived 20 s without getting anywhere.
+- **Cause 1, the world model:**
+  - Its predicted paths there are fine (1 to 3 units off).
+  - Its death output says 13 to 94% per step while the agent stands on solid ground 40+ units from any
+    hazard. So every candidate looked fatal (26 of 30 replayed decisions on 4-6) and the planner could not
+    choose.
+  - It never saw World 4's hazards. **Fix: data from more worlds** (World 2 to 5 levels, held-out levels
+    excluded), then retrain.
+- **Cause 2, a planner bug:**
+  - The geometric hazard check widened its margin by twice the members' spread, although it already checks
+    every member's own position and keeps the worst. With the members 19 units apart, a hazard 14 to 55
+    units away counted as a sure hit.
+  - **Fixed:** margin = body size + the hazard's own uncertainty radius.
+- **Death is now charged by when it is predicted:** the next step costs the full weight, the end of the
+  horizon half of it. So when everything looks fatal, the latest death wins and the planner still moves.
+- **When every candidate is ≥ 90% fatal:**
+  - every such decision is counted in the per-attempt summary;
+  - in `mpc+ppo` mode PPO decides instead (fallback "all fatal").

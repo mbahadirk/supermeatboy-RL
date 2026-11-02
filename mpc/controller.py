@@ -6,8 +6,9 @@ reports now (checked: a different step is logged).
 
 A plan that could not be finished is never passed off as evaluated: with a time budget the rollout stops at
 the deadline and the plan is scored on the steps it has (info["steps"]); in mpc+ppo mode a plan with fewer
-than MIN_STEPS steps, or one the members already disagree on after one step, hands the decision to PPO
-(info["fallback"] says why). Every decision is written to the plan log (one JSON line).
+than MIN_STEPS steps, one the members already disagree on after one step, or a decision where every
+candidate looks fatal (ALL_FATAL) hands the decision to PPO (info["fallback"] says why). In mpc mode the
+planner still picks (the latest death wins, mpc.score) and those decisions are counted. Every decision is written to the plan log (one JSON line).
 """
 from __future__ import annotations
 
@@ -28,6 +29,8 @@ from wm.rollout import rollout_batched
 
 MIN_STEPS = 4            # mpc+ppo: a plan with fewer rolled-out steps than this goes to PPO
 UNSURE_STEP1 = TILE      # mpc+ppo: members already this far apart after one step: PPO decides
+ALL_FATAL = 0.9          # every candidate at least this likely to die: counted; in mpc+ppo PPO decides (the
+                         # model is likely wrong about this level's hazards, or there is no way out it can see)
 REACH = 700.0            # units/s: hazards further than this x the horizon (+ their size) are not checked
 HAZ_FAR = 300.0          # wm.features.hazard_features: offsets and distances are clipped at 3 x 100 units
 
@@ -53,7 +56,7 @@ class MPC:
 
     @staticmethod
     def _new_stats():
-        return {"plans": 0, "reused": 0, "ms": [], "fallbacks": {}, "short": 0}
+        return {"plans": 0, "reused": 0, "ms": [], "fallbacks": {}, "short": 0, "all_fatal": 0}
 
     # ---- level / wave / frame ------------------------------------------------------------------------
     def set_level(self, lv):
@@ -130,12 +133,17 @@ class MPC:
         best = int(np.argmax(sc["total"]))
         t5 = time.perf_counter()
         action = int(seqs[best, 0])
+        all_fatal = bool(sc["death"].min() >= ALL_FATAL)
+        if all_fatal:
+            self.stats["all_fatal"] += 1
         fallback = None
         if self.fallback_on and ppo_action is not None:
             if sc["steps"] < MIN_STEPS:
                 fallback = "budget"
             elif sc["spread"][best, 1] > UNSURE_STEP1:
                 fallback = "unsure"
+            elif all_fatal:
+                fallback = "all fatal"
             if fallback:
                 action = int(ppo_action)
                 self.stats["fallbacks"][fallback] = self.stats["fallbacks"].get(fallback, 0) + 1
@@ -148,7 +156,7 @@ class MPC:
         order = np.argsort(sc["total"])[::-1]
         info = {"frame": frame, "wave": self.wave, "agent": agent, "x": x0, "y": y0, "vx": float(s[2]),
                 "vy": float(s[3]), "n": n, "H": H, "steps": sc["steps"], "recorded": recorded,
-                "future_trusted": self.future.trusted, "chosen": best, "label": labels[best], "action": action,
+                "future_trusted": self.future.trusted, "all_fatal": all_fatal, "chosen": best, "label": labels[best], "action": action,
                 "fallback": fallback, "seq": seqs[best][:sc["steps"]].tolist(),
                 "ms": {"total": round(ms, 2), "candidates": round(1000 * (t1 - t0), 2),
                        "future": round(1000 * (t2 - t1), 2), "rollout": round(1000 * (t3 - t2), 2),
@@ -158,7 +166,8 @@ class MPC:
                 "spread": [round(float(v), 2) for v in sc["spread"][best]],
                 "landing_step": int(sc["landing_step"][best]),
                 "top": [{"i": int(i), "label": labels[i], **{k: round(float(sc[k][i]), 3) for k in
-                         ("total", "progress", "key", "land", "value", "unc", "death", "death_model", "death_geom")}}
+                         ("total", "progress", "key", "land", "value", "unc", "death", "death_cost", "death_step",
+                                    "death_model", "death_geom")}}
                         for i in order[:5]]}
         info["candidates"] = {"x": sc["mean_x"], "y": sc["mean_y"], "spread": sc["spread"], "death": sc["death"],
                               "total": sc["total"], "labels": labels}    # (not logged: the viewer's)
@@ -175,6 +184,7 @@ class MPC:
         fb = sum(st["fallbacks"].values())
         return (f"MPC {st['plans']} plans (+{st['reused']} reused), {np.median(ms):.0f} ms median / "
                 f"{np.percentile(ms, 95):.0f} ms 95%" + (f", {st['short']} cut short by the budget" if st["short"] else "")
+                + (f", every option looked fatal {st['all_fatal']} times" if st["all_fatal"] else "")
                 + (f", {fb} to PPO ({', '.join(f'{k} {v}' for k, v in st['fallbacks'].items())})" if fb else ""))
 
     def close(self):

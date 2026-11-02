@@ -202,3 +202,28 @@ def test_box_distances_match_box_distance():
     x, y = rng.normal(0, 150, 500), rng.normal(0, 150, 500)
     one = np.stack([box_distance(x, y, b) for b in boxes], 1)
     np.testing.assert_allclose(box_distances(x, y, boxes), one, rtol=1e-12, atol=1e-9)
+
+
+def _fake_out(E, alive_curves, K):
+    n = len(alive_curves)
+    out = {k: np.zeros((E, n, K + 1), np.float32) for k in ("x", "y", "vx", "vy", "airborne")}
+    out["alive"] = np.repeat(np.array(alive_curves, np.float32)[None], E, 0)
+    out["p"] = np.zeros((E, n, K, 12), np.float32)
+    out["steps"] = K
+    return out
+
+
+def test_later_death_beats_sooner_death():
+    """Every candidate dies (a model that does not know the level): the one that dies latest wins, and a
+    safe one beats both."""
+    from mpc.score import score, Weights
+    K = 16
+    soon = [1.0] * 3 + [0.0] * (K - 2)
+    late = [1.0] * 14 + [0.0] * (K - 13)
+    safe = [1.0] * (K + 1)
+    rem = lambda x, y: np.zeros_like(x)
+    sc = score(_fake_out(5, [soon, late], K), rem, Weights())
+    assert sc["death"].min() > 0.99 and sc["total"][1] > sc["total"][0] + 3.0
+    assert 2.5 < sc["death_step"][0] < 3.5 and 13.5 < sc["death_step"][1] < 14.5
+    sc = score(_fake_out(5, [late, safe], K), rem, Weights())
+    assert sc["total"][1] > sc["total"][0] + 5.0 and sc["death_step"][1] == -1

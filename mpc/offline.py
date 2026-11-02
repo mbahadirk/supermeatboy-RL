@@ -126,7 +126,8 @@ def main():
         done += 1
         t = info["top"][0]
         print(f"f{f:5d} ({s[0]:6.0f},{s[1]:6.0f}) v({s[2]:5.0f},{s[3]:5.0f}) -> {rg.ACTIONS[a]} '{info['label']}' "
-              f"total {t['total']:+.2f} (progress {t['progress']:+.2f}, death {t['death']:.2f}, land {t['land']:.2f}, "
+              f"total {t['total']:+.2f} (progress {t['progress']:+.2f}, death {t['death']:.2f} at step {t['death_step']:.0f}"
+              f" (model {t['death_model']:.2f}, hazard check {t['death_geom']:.2f}){' ALL FATAL' if info['all_fatal'] else ''}, land {t['land']:.2f}, "
               f"value {t['value']:+.2f}, unc {t['unc']:.2f}) n={info['n']} steps={info['steps']} "
               f"recorded={info['recorded']} | {info['ms']}", flush=True)
     if ms:
