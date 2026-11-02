@@ -14,7 +14,8 @@ Input (FEAT_DIM floats):
   hazards     the 3 nearest (box edge distance): dx, dy, distance (/100), half w, half h (/50)         15
   platform    the nearest: dx, dy (/100), upright, vx, vy (/300), present                              6
 
-Targets: position change (/20) and new velocity (vx/400, vy/600); next flags (airborne, on a wall, facing);
+Targets: position change and new velocity as the correction to plain physics (`prior`: the same velocity
+with gravity in the air, moved by velocity x time step), scaled by RES_SCALE; next flags (airborne, on a wall, facing);
 death, finish; landing (airborne -> not); blocked (horizontal speed cut by a wall); next movement state;
 reward of the step (/5).
 """
@@ -37,6 +38,7 @@ CONT_NAMES = ["vx", "vy", "dt", "held", "in-tile x", "in-tile y", "wind x", "win
 FEAT_DIM = len(CONT_NAMES) + 32 + N_STATES + N_ACTIONS + 4 * (2 * P + 1) ** 2 + 5 * N_HAZ + 6
 BIN_NAMES = ["airborne", "on wall", "facing", "death", "finish", "landing", "blocked"]
 DT_DEFAULT = 33.0                      # ms (median with 100 agents)
+RES_SCALE = np.array([2.0, 2.0, 40.0, 60.0], np.float32)   # dx, dy, vx, vy corrections (game units)
 GRAVITY = 550.0
 
 
@@ -176,9 +178,19 @@ def featurize(s, a, dt_ms, geom: LevelGeom, boxes, pf, pf_prev, dt_prev_s, fans)
                            hazard_features(x, y, boxes), platform_features(x, y, pf, pf_prev, dt_prev_s)], 1)
 
 
-def targets(s, s2, r):
-    """(continuous [dx/20, dy/20, vx'/400, vy'/600], binary [BIN_NAMES], next state class, reward/5)."""
-    cont = np.stack([(s2["x"] - s["x"]) / TILE, (s2["y"] - s["y"]) / TILE, s2["vx"] / 400.0, s2["vy"] / 600.0], 1)
+def prior(s, dt_ms) -> np.ndarray:
+    """Plain physics [dx, dy, vx', vy'] (game units): the same velocity, gravity in the air, moved by the new
+    velocity x the time step. The model predicts only the correction to this (input, collisions, walls)."""
+    dt = dt_ms / 1000.0
+    vx, vy = s["vx"].astype(np.float64), s["vy"].astype(np.float64)
+    vy2 = np.where((s["flags"] & AIR) != 0, vy - GRAVITY * dt, vy)
+    return np.stack([vx * dt, vy2 * dt, vx, vy2], 1).astype(np.float32)
+
+
+def targets(s, s2, r, pri):
+    """(continuous: correction to `prior` / RES_SCALE, binary [BIN_NAMES], next state class, reward/5)."""
+    raw = np.stack([s2["x"] - s["x"], s2["y"] - s["y"], s2["vx"], s2["vy"]], 1).astype(np.float32)
+    cont = (raw - pri) / RES_SCALE
     air0, air1 = (s["flags"] & AIR) != 0, (s2["flags"] & AIR) != 0
     blocked = (np.abs(s["vx"]) > 40) & (np.abs(s2["vx"]) < 0.25 * np.abs(s["vx"]))
     binary = np.stack([air1, (s2["flags"] & WALL) != 0, (s2["flags"] & FACE) != 0, s2["status"] == 1,
@@ -209,7 +221,7 @@ def group_of(s) -> np.ndarray:
 
 def build(dirs: list, levels=None, max_samples=None, seed=0, log=print) -> dict:
     """Features, targets and baselines of every transition in these wm_data folders."""
-    X, YC, YB, YS, YR, G, SH, LV, BC, BG, RAW = [], [], [], [], [], [], [], [], [], [], []
+    X, YC, YB, YS, YR, G, SH, LV, BC, BG, RAW, PR = [], [], [], [], [], [], [], [], [], [], [], []
     shard_no = 0
     for d in dirs:
         geoms = {}
@@ -250,7 +262,9 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print) -> dict:
                 pw = wf.get(int(f) - 1, {})
                 X.append(featurize(s[m], a[m], dt, geom, hazard_boxes(w.get("hz", []), keep), w.get("pf"),
                                    pw.get("pf"), (pw.get("dt") or DT_DEFAULT) / 1000.0, fans).astype(np.float16))
-                yc, yb, ys_, yr = targets(s[m], s2[m], r[m])
+                pri = prior(s[m], dt)
+                yc, yb, ys_, yr = targets(s[m], s2[m], r[m], pri)
+                PR.append(pri)
                 YC.append(yc); YB.append(yb); YS.append(ys_); YR.append(yr)
                 G.append(group_of(s[m]))
                 SH.append(np.full(len(m), shard_no, np.int32))
@@ -264,7 +278,7 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print) -> dict:
     out = {"X": np.concatenate(X), "yc": np.concatenate(YC), "yb": np.concatenate(YB), "ys": np.concatenate(YS),
            "yr": np.concatenate(YR), "group": np.concatenate(G), "shard": np.concatenate(SH),
            "level": np.concatenate(LV), "base_const": np.concatenate(BC), "base_grav": np.concatenate(BG),
-           "raw": np.concatenate(RAW).astype(np.float32)}
+           "raw": np.concatenate(RAW).astype(np.float32), "prior": np.concatenate(PR)}
     n = len(out["X"])
     if max_samples and n > max_samples:        # keep every rare event (deaths, finishes), sample the rest
         rng = np.random.default_rng(seed)

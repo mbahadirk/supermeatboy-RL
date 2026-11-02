@@ -1,7 +1,8 @@
 """The world model: S(t+1) = f(S(t), A(t)) on structured game state (wm/features.py), no images.
 
 An ensemble of E small MLPs. Each predicts, for one agent and one step:
-  - position change and new velocity: a mean and a log-variance each (Gaussian), so the model says how sure
+  - position change and new velocity, as the correction to plain physics (wm.features.prior): a mean and a
+    log-variance each (Gaussian), so the model says how sure
     it is (aleatoric); the spread between ensemble members says how much it has seen such a case (epistemic)
   - next flags (airborne, on a wall, facing), death, finish, landing, blocked by a wall (logits)
   - next movement state (classes)
@@ -19,6 +20,7 @@ from wm.features import FEAT_DIM, N_STATES, BIN_NAMES
 N_CONT = 4
 OUT = 2 * N_CONT + len(BIN_NAMES) + N_STATES + 1
 LOGVAR_MIN, LOGVAR_MAX = -10.0, 4.0
+BETA = 0.5
 
 
 class WorldModel(nn.Module):
@@ -59,7 +61,10 @@ class WorldModel(nn.Module):
         """Gaussian NLL (position / velocity), BCE (flags, events; rare ones weighted up), CE (state), MSE
         (reward), averaged over the ensemble members."""
         h = self.split(self.forward(x))
-        nll = (0.5 * (h["logvar"] + (yc - h["mean"]) ** 2 / h["logvar"].exp())).mean()
+        # beta-NLL (Seitzer et al. 2022): each sample's NLL weighted by its predicted variance^BETA (no gradient
+        # through the weight), so hard cases (jump starts, wall jumps) are learned instead of called uncertain
+        var = h["logvar"].exp()
+        nll = (var.detach() ** BETA * 0.5 * (h["logvar"] + (yc - h["mean"]) ** 2 / var)).mean()
         bce = F.binary_cross_entropy_with_logits(h["bin"], yb.expand_as(h["bin"]), pos_weight=self.pos_weight)
         ce = F.cross_entropy(h["state"].reshape(-1, N_STATES), ys.repeat(len(self.members)))
         mse = F.mse_loss(h["reward"], yr.expand_as(h["reward"]))

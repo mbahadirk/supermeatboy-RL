@@ -22,23 +22,23 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from wm.features import build, BIN_NAMES, TILE           # noqa: E402
+from wm.features import build, BIN_NAMES, RES_SCALE      # noqa: E402
 from wm.model import WorldModel                           # noqa: E402
 
 GROUPS = ["ground", "air", "wall"]
 
 
 def auc(score: np.ndarray, label: np.ndarray) -> float:
-    pos, neg = label.sum(), (~label).sum()
+    pos, neg = float(label.sum()), float((~label).sum())     # (float: numpy's int is 32-bit on Windows)
     if pos == 0 or neg == 0:
         return float("nan")
-    r = np.argsort(np.argsort(score)) + 1
+    r = (np.argsort(np.argsort(score)) + 1).astype(np.float64)
     return float((r[label].sum() - pos * (pos + 1) / 2) / (pos * neg))
 
 
 def to_raw(m: np.ndarray) -> np.ndarray:
-    """Model output [dx/20, dy/20, vx/400, vy/600] -> game units."""
-    return m * np.array([TILE, TILE, 400.0, 600.0], np.float32)
+    """Model output (correction / RES_SCALE) -> game units (add the physics prior for a prediction)."""
+    return m * RES_SCALE
 
 
 def predict_all(model, X, bs=8192):
@@ -53,7 +53,7 @@ def predict_all(model, X, bs=8192):
 def report(model, d: dict, idx: np.ndarray) -> str:
     p = predict_all(model, d["X"][idx])
     raw = d["raw"][idx]
-    pred = to_raw(p["mean"])
+    pred = d["prior"][idx] + to_raw(p["mean"])
     std = to_raw(p["std"])
     g = d["group"][idx]
     lines = [f"Held-out transitions: {len(idx)} (recorded waves never trained on).", ""]

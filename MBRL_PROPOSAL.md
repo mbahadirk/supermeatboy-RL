@@ -228,3 +228,36 @@ Each phase is committed separately and checked against the real game before the 
   with moving saws or platforms is needed.
 - **Fixed during the analysis:** the game's wave count starts again on each level, which mixed waves of
   different levels. Each shard now has its own number, and older data is fixed when it is read.
+
+## Phase 3 results (one-step world model)
+
+`python -m wm.train runs/real_20261102-035612/wm_data --epochs 14` trains an ensemble of 5 MLPs on 385k
+transitions in about 5 minutes on 4 CPU threads. The report is from 115k transitions of waves it never
+trained on (every 5th wave), levels 1-6 and 1-7.
+
+| | world model | velocity + gravity | same velocity |
+|---|---|---|---|
+| position error, median / 90% (units) | **0.20 / 1.38** | 0.65 / 5.91 | 0.92 / 5.99 |
+| velocity error, median / 90% | **3.9 / 42.7** | 15.6 / 213.8 | 21.6 / 219.0 |
+| on the ground, position median / 90% | 0.21 / 1.35 | 0.93 / 3.27 | |
+| in the air | 0.19 / 1.34 | 0.60 / 5.88 | |
+| on a wall | 0.28 / 1.49 | 0.93 / 6.75 | |
+
+- **Events and flags:**
+  - airborne 99.1% right, on a wall 99.1%, facing 99.2%;
+  - landing: recall 0.99, precision 0.69;
+  - blocked by a wall: recall 0.92, precision 0.36;
+  - death: recall 0.95, precision 0.30, AUC 1.00;
+  - finish: recall 0.88, AUC 1.00;
+  - next movement state 94.0% right.
+- **Uncertainty is honest:** 97-98% of true values are within 2 predicted standard deviations.
+- **What made the difference:**
+  - The model predicts only the correction to plain physics (velocity x the real time step, gravity in
+    the air), not the whole move. That halved the median error.
+  - beta-NLL keeps the uncertainty heads from calling hard steps (jump starts, wall jumps) uncertain
+    instead of learning them. That cut the 90% errors 3-4 times.
+- **Limits:**
+  - Only two levels, no moving hazards or platforms in the data yet.
+  - Rare events are found reliably but with false alarms at the 50% cut-off (they were weighted up in
+    training).
+  - Unseen levels are not tested yet (Phase 7).
