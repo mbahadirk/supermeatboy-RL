@@ -1,0 +1,462 @@
+"""The progress counter of the planning agent: a jump-aware cost-to-go field V (PLAN_PLANNER_AGENT.md, decision 2).
+
+For every cell, the cheapest cost from there to the goal (through the level's keys, in the route's key order)
+under exactly the move rules and step costs realpath.Planner uses for its routes. Cells from which the goal
+cannot be reached hold +inf: an explicit dead end.
+
+Units: the Planner's cost units. One step to a side neighbour along a surface costs 1 (a diagonal sqrt 2), a
+step into a cell with no surface costs AIR_COST more, plus the cell's extra cost (hazard margins, crumble,
+switch, lock blocks, and in the looser modes hazard or sweep crossings). On open ground that is about tiles.
+
+How it is built (one backward search per leg):
+- The Planner's search state is (cell, rise used, sideways used, falling). Every cell gets the full set of
+  (JUMP[0] + 1) x (JUMP[1] + 1) x 2 states (one state without jump limits); a cell with a floor below or a wall
+  beside (Planner "support") only ever holds its fresh state, since arriving there resets the jump. Portal
+  cells get one extra node, "arrived through the portal" (the Planner's walk-in rule: a portal entered on foot
+  only leads out of the other end, one arrived through moves on normally).
+- Every state's moves are expanded once with the Planner's rules (realpath.Planner._dijkstra: the geometry of
+  Planner._moves, closed cells, the falling and jump-limit rules, the step costs), vectorised with numpy,
+  into an explicit edge list. Dijkstra then runs on the reversed edges from the leg's target states (scipy's
+  C implementation when scipy is there, else a heap in Python): the cost-to-go of every state at once.
+- Legs: with keys, the route's key order is found as Planner.find does (from the spawn, each time the
+  nearest key still reachable, with the same lock states per leg). Leg j holds while keys 0..j-1 of that order
+  are taken: V_leg[j] = cost to key j + V_leg[j+1] at key j (that leg starting there). The last leg ends at
+  the goal. Without keys there is one leg.
+- Mode and jump limits: the first (mode, jumps) of Planner.find's order that finds a route from the spawn, so
+  V agrees with the routes. If none does, the loosest one (squeeze, no jump limits) and found_route False.
+
+Outputs per leg (n_legs x H x W, float64, +inf where the goal cannot be reached, and in walls):
+- V_support: from a cell as a fresh start (standing on a floor or against a wall: rise and sideways used 0,
+  not falling). This is the Planner's start rule (its start cell counts as grounded, and may be a closed
+  cell, such as one beside a hazard), so V_support at the spawn equals the cost of Planner.find's first route.
+- V_air: the best cost-to-go over the airborne states of the cell that can occur (reachable from some supported
+  cell under the same rules). Optimistic: it assumes the cheapest such jump state. In cells with support it
+  is the fresh state's value, in closed cells (never entered by a route) the V_support value.
+"""
+from __future__ import annotations
+
+import heapq
+import math
+import time
+
+import numpy as np
+
+from realpath import AIR_COST, JUMP, JUMP_RELAXED, SQRT2, TILE, Planner
+
+try:                                        # Dijkstra in C; the fallback below gives the same result, slower
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import dijkstra as _sp_dijkstra
+except ImportError:                         # pragma: no cover - scipy is in the training environment
+    csr_matrix = _sp_dijkstra = None
+
+DIRS = tuple((dc, dr) for dc in (-1, 0, 1) for dr in (-1, 0, 1) if dc or dr)
+DIR_INDEX = {d: k for k, d in enumerate(DIRS)}
+
+
+def search_order():
+    """(mode, jumps) in Planner.find's order: the first that finds a route is used."""
+    M = Planner.MODES
+    return [(m, j) for m in M[:3] for j in (JUMP, JUMP_RELAXED)] + [(M[3], JUMP_RELAXED)] + [(m, None) for m in M]
+
+
+def prepare(pl: Planner):
+    """What Planner.find sets up before its searches (snapped start, goals, key cells, portal links, the
+    layer cache). Returns (start cell, goal cells)."""
+    start = pl._snap(pl.cell(*pl.spawn))
+    goals = {pl._snap(pl.cell(*g)) for g in pl.goals}
+    pl.key_cells = [pl._snap(pl.cell(*p)) for p in pl.keys]
+    pl.links = {}
+    for a, b in pl.portals:
+        ca, cb = pl._snap(pl.cell(*a)), pl._snap(pl.cell(*b))
+        pl.links[ca], pl.links[cb] = cb, ca
+    pl._cache = {}
+    pl.t0 = time.time()
+    return start, goals
+
+
+def route_legs(pl: Planner, start, goals, mode, jumps):
+    """Planner._route (no waypoint, no extra cost) split into its legs: [(target key cell or None for the
+    goal, lock state, cells)], or None when some leg has no way. Same searches, same order, same result."""
+    legs, cur, keys_left, n_keys = [], start, set(pl.key_cells), 0
+    total = len(keys_left)
+    while keys_left:
+        locks = "closed" if n_keys == 0 else "cost"
+        cells = pl._leg(cur, keys_left, mode, None, jumps, locks)
+        if not cells and locks == "closed":
+            locks = "cost"
+            cells = pl._leg(cur, keys_left, mode, None, jumps, locks)
+        if not cells:
+            break                              # keys it cannot reach: go for the goal anyway
+        legs.append((cells[-1], locks, cells))
+        cur = cells[-1]
+        keys_left.discard(cur)
+        n_keys += 1
+    locks = "open" if total and n_keys == total else "cost"
+    cells = pl._leg(cur, goals, mode, None, jumps, locks)
+    if not cells:
+        return None
+    legs.append((None, locks, cells))
+    return legs
+
+
+def path_cost(cells, cost, support) -> float:
+    """The Planner's cost of a cell path (a step: length x (1 + AIR_COST off a surface + the cell's extra);
+    a portal jump between cells that are not neighbours: 1)."""
+    total = 0.0
+    for (c, r), (nc, nr) in zip(cells[:-1], cells[1:]):
+        dc, dr = nc - c, nr - r
+        if max(abs(dc), abs(dr)) > 1:
+            total += 1.0
+            continue
+        ln = SQRT2 if dc and dr else 1.0
+        total += ln * (1.0 + (0.0 if support[nr, nc] else AIR_COST) + float(cost[nr, nc]))
+    return total
+
+
+class ProgressField:
+    """V for one level. Built from the same inputs as realpath.Planner (or from a Planner: from_planner)."""
+
+    def __init__(self, words, ox, oy, spawn, goals, hazards, sweeps=(), keys=(), bandages=(), portals=(),
+                 lift=None, blocks=None, doors=None):
+        self._build(Planner(words, ox, oy, spawn, goals, hazards, sweeps, keys, bandages, portals, lift=lift,
+                            blocks=blocks, doors=doors))
+
+    @classmethod
+    def from_planner(cls, pl: Planner) -> "ProgressField":
+        self = cls.__new__(cls)
+        self._build(pl)
+        return self
+
+    # ---- build ------------------------------------------------------------------------------------------
+    def _build(self, pl: Planner):
+        t0 = time.time()
+        self.pl = pl
+        self.ox, self.oy, self.H, self.W = pl.ox, pl.oy, pl.H, pl.W
+        start, goals = prepare(pl)
+        self.start, self.goal_cells = start, goals
+        found = None
+        if pl.goals:
+            for mode, jumps in search_order():
+                legs = route_legs(pl, start, goals, mode, jumps)
+                if legs:
+                    found = (mode, jumps, legs)
+                    break
+        self.found_route = found is not None
+        if found is None:                      # no route in any mode: the loosest rules, one leg to the goal
+            mode, jumps = Planner.MODES[3], None
+            legs = [(None, "cost", [])]
+        else:
+            mode, jumps, legs = found
+        self.mode, self.jumps = mode, jumps
+        self.label = mode[0] + ("" if jumps == JUMP else ", high jumps" if jumps else ", no jump limits")
+        self.t_route = time.time() - t0
+        # key order: per key leg, the indices of the keys at that cell (two keys may share a cell)
+        self.key_order = [[k for k, kc in enumerate(pl.key_cells) if kc == tgt] for tgt, _, _ in legs[:-1]]
+        self.leg_locks = [lk for _, lk, _ in legs]
+        self.route_cells = [c for c in legs[0][2]]
+        for _, _, cells in legs[1:]:
+            self.route_cells += cells[1:]
+        self.n_legs = len(legs)
+        H, W = self.H, self.W
+        self.V_support = np.full((self.n_legs, H, W), np.inf)
+        self.V_air = np.full((self.n_legs, H, W), np.inf)
+        self.n_states, self.n_edges, self.leg_route_cost = [], [], []
+        seed = 0.0
+        for j in range(self.n_legs - 1, -1, -1):      # backward: the goal leg first
+            tgt, locks, cells = legs[j]
+            targets = np.zeros((H, W), bool)
+            for c, r in ([tgt] if tgt is not None else goals):
+                if 0 <= c < W and 0 <= r < H:
+                    targets[r, c] = True
+            leg_start = start if j == 0 else legs[j - 1][0]
+            lay = self._layer(locks)
+            vs, va, ns, ne = self._leg_field(lay, targets, seed, leg_start)
+            self.V_support[j], self.V_air[j] = vs, va
+            self.n_states.insert(0, ns)
+            self.n_edges.insert(0, ne)
+            self.leg_route_cost.insert(0, path_cost(cells, lay["cost"], lay["support"]) if cells else math.inf)
+            if j > 0:
+                kc, kr = legs[j - 1][0]
+                seed = float(vs[kr, kc])
+        self.route_cost = float(sum(self.leg_route_cost))
+        self.t_build = time.time() - t0
+        self.t_field = self.t_build - self.t_route
+
+    def _layer(self, locks: str) -> dict:
+        """The Planner's layers for the mode and a lock state, and the allowed moves as 8 direction masks."""
+        pl, mode = self.pl, self.mode
+        closed, cost, support, corner, wall = pl._layers(mode, locks)
+        key = ("allowed", mode[3])
+        if key not in pl._cache:
+            moves = pl._moves(mode[3], corner, wall)
+            allowed = np.zeros((8, self.H, self.W), bool)
+            for r in range(self.H):
+                for c in range(self.W):
+                    for nc, nr, dc, dr, ln in moves[r][c]:
+                        allowed[DIR_INDEX[(dc, dr)], r, c] = True
+            pl._cache[key] = allowed
+        return {"closed": closed, "cost": cost, "cost64": cost.astype(np.float64), "support": support,
+                "wall": wall, "allowed": pl._cache[key]}
+
+    def _leg_field(self, lay, targets, seed, leg_start):
+        H, W = self.H, self.W
+        wall, closed, support = lay["wall"], lay["closed"], lay["support"]
+        jumps = self.jumps
+        U, S = jumps if jumps else (0, 0)
+        K = (U + 1) * (S + 1) * 2 if jumps else 1
+        cid = np.full((H, W), -1, np.int64)
+        open_ = ~wall
+        rr, cc = np.nonzero(open_)
+        cid[rr, cc] = np.arange(len(rr))
+        N = len(rr)
+        links = [(q, l) for q, l in self.pl.links.items()
+                 if 0 <= q[0] < W and 0 <= q[1] < H and 0 <= l[0] < W and 0 <= l[1] < H and open_[q[1], q[0]]
+                 and open_[l[1], l[0]]]
+        warp_id = {q: N * K + p for p, (q, _) in enumerate(links)}
+        n = N * K + len(links)
+        enter = open_ & (~closed | targets)
+        portal = np.zeros((H, W), bool)
+        for (qc, qr), _ in links:
+            portal[qr, qc] = True
+        ctx = {"cid": cid, "K": K, "U": U, "S": S, "enter": enter, "support": support, "targets": targets,
+               "allowed": lay["allowed"], "cost64": lay["cost64"]}
+        # sources: states that move on (not at a target; closed cells are never entered)
+        src_cells = enter & ~targets
+        ju = np.arange(K) // (2 * (S + 1))
+        js = (np.arange(K) // 2) % (S + 1)
+        jf = np.arange(K) % 2
+        parts = []
+        normal = src_cells & ~portal
+        r1, c1 = np.nonzero(normal & support)                  # standing: the fresh state only
+        if len(r1):
+            z = np.zeros(len(r1), np.int64)
+            parts.append(_step(ctx, r1, c1, z, z, z, np.ones(len(r1), bool), cid[r1, c1] * K))
+        r2, c2 = np.nonzero(normal & ~support)                 # in the air: every jump state
+        if len(r2):
+            rep = lambda a: np.repeat(a, K)
+            tile = lambda a: np.tile(a, len(r2))
+            parts.append(_step(ctx, rep(r2), rep(c2), tile(ju), tile(js), tile(jf), np.zeros(len(r2) * K, bool),
+                               rep(cid[r2, c2] * K) + tile(np.arange(K))))
+        src_l, dst_l, w_l = [p[0] for p in parts], [p[1] for p in parts], [p[2] for p in parts]
+        for (qc, qr), (lc, lr) in links:                        # walked into a portal: out of the other end
+            if not src_cells[qr, qc]:
+                continue
+            ids = cid[qr, qc] * K + (np.zeros(1, np.int64) if support[qr, qc] else np.arange(K))
+            src_l.append(ids)
+            dst_l.append(np.full(len(ids), warp_id[(lc, lr)], np.int64))
+            w_l.append(np.ones(len(ids)))
+        for (qc, qr), _ in links:                               # arrived through it: moves on as a fresh state
+            if targets[qr, qc]:
+                continue
+            one = np.array([qr]), np.array([qc])
+            z = np.zeros(1, np.int64)
+            s_, d_, w_ = _step(ctx, one[0], one[1], z, z, z, np.array([bool(support[qr, qc])]),
+                               np.array([warp_id[(qc, qr)]], np.int64))
+            src_l.append(s_)
+            dst_l.append(d_)
+            w_l.append(w_)
+        src = np.concatenate(src_l) if src_l else np.zeros(0, np.int64)
+        dst = np.concatenate(dst_l) if dst_l else np.zeros(0, np.int64)
+        w = np.concatenate(w_l) if w_l else np.zeros(0)
+        # target states: the fresh state of a target cell (arrivals there are collapsed to it), its portal node
+        tr, tc = np.nonzero(targets & open_)
+        seeds = list(cid[tr, tc] * K) + [warp_id[q] for q in warp_id if targets[q[1], q[0]]]
+        V = _cost_to_go(n, src, dst, w, np.array(seeds, np.int64)) + seed
+        # V_support: the Planner's start rule from every cell (grounded, fresh jump state)
+        vs = np.full((H, W), np.inf)
+        ro, co = np.nonzero(open_ & ~targets)
+        z = np.zeros(len(ro), np.int64)
+        s_, d_, w_ = _step(ctx, ro, co, z, z, z, np.ones(len(ro), bool), np.arange(len(ro)))
+        best = np.full(len(ro), np.inf)
+        np.minimum.at(best, s_, w_ + V[d_])
+        vs[ro, co] = best
+        vs[tr, tc] = seed
+        # V_air: the best reachable airborne state; the fresh state where there is support; closed: start rule
+        seeds_up = cid[np.nonzero(enter & support)] * K
+        sc, sr = leg_start
+        if 0 <= sc < W and 0 <= sr < H and open_[sr, sc] and not targets[sr, sc]:
+            k = np.nonzero((ro == sr) & (co == sc))[0]
+            if len(k):
+                seeds_up = np.concatenate([seeds_up, d_[s_ == k[0]]])
+        reach = _reach(n, src, dst, seeds_up)
+        va = np.full((H, W), np.inf)
+        Vr = np.where(reach, V, np.inf)
+        per_cell = Vr[:N * K].reshape(N, K).min(1)
+        for q, i in warp_id.items():
+            per_cell[cid[q[1], q[0]]] = min(per_cell[cid[q[1], q[0]]], Vr[i])
+        air_cells = enter & ~support
+        ra, ca = np.nonzero(air_cells)
+        va[ra, ca] = per_cell[cid[ra, ca]]
+        rs, cs_ = np.nonzero(enter & support)
+        va[rs, cs_] = V[cid[rs, cs_] * K]
+        shut = open_ & ~enter
+        va[shut] = vs[shut]
+        va[tr, tc] = seed
+        return vs, va, n, len(src)
+
+    # ---- lookup -----------------------------------------------------------------------------------------
+    def leg_of(self, keys_mask) -> np.ndarray:
+        """The leg of agents holding keys `keys_mask` (bit k = key k of the level's list): how many of the
+        route's key legs, in order, have been picked up (as RewardPath.leg)."""
+        m = np.asarray(keys_mask, np.int64)
+        out = np.zeros(m.shape, np.int64)
+        alive = np.ones(m.shape, bool)
+        for ks in self.key_order:
+            got = np.zeros(m.shape, bool)
+            for k in ks:
+                got |= ((m >> k) & 1).astype(bool)
+            alive &= got
+            out += alive
+        return out
+
+    def values(self, xs, ys, leg=0, supported=True) -> np.ndarray:
+        """V at points (game units): V_support where `supported` is True, else V_air, on leg `leg` (an int or
+        one per point; clamped to the last leg). A point inside a wall takes its best open neighbour of the
+        3 x 3 around it (not diagonally through a wall corner) plus the distance to that cell's centre, in
+        tiles. +inf outside the map and where the goal cannot be reached."""
+        xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+        shape = np.broadcast(xs, ys).shape
+        xs, ys = np.broadcast_to(xs, shape).ravel(), np.broadcast_to(ys, shape).ravel()
+        leg = np.clip(np.broadcast_to(np.asarray(leg, np.int64), shape).ravel(), 0, self.n_legs - 1)
+        sup = np.broadcast_to(np.asarray(supported, bool), shape).ravel()
+        wall = self.pl.cls["full"] if self.mode[3] else self.pl.wall      # the cells the field covers
+        H, W = self.H, self.W
+        c0 = np.floor((xs - self.ox) / TILE).astype(np.int64)
+        r0 = np.floor((ys - self.oy) / TILE).astype(np.int64)
+
+        def free(c, r):
+            ok = (c >= 0) & (c < W) & (r >= 0) & (r < H)
+            out = np.zeros(c.shape, bool)
+            out[ok] = ~wall[r[ok], c[ok]]
+            return out
+
+        def field(c, r, ok):
+            v = np.full(c.shape, np.inf)
+            k = np.nonzero(ok)[0]
+            v[k] = np.where(sup[k], self.V_support[leg[k], r[k], c[k]], self.V_air[leg[k], r[k], c[k]])
+            return v
+        inside = (c0 >= 0) & (c0 < W) & (r0 >= 0) & (r0 < H)
+        own = free(c0, r0)
+        out = field(c0, r0, own)
+        solid = inside & ~own
+        if solid.any():
+            k = np.nonzero(solid)[0]
+            ck, rk, xk, yk = c0[k], r0[k], xs[k], ys[k]
+            best = np.full(len(k), np.inf)
+            for dc, dr in DIRS:
+                c, r = ck + dc, rk + dr
+                ok = free(c, r)
+                if dc and dr:                                  # not diagonally through a wall corner
+                    ok &= free(c, rk) | free(ck, r)
+                v = np.full(len(k), np.inf)
+                g = np.nonzero(ok)[0]
+                v[g] = np.where(sup[k[g]], self.V_support[leg[k[g]], r[g], c[g]], self.V_air[leg[k[g]], r[g], c[g]])
+                cx, cy = self.ox + (c + 0.5) * TILE, self.oy + (r + 0.5) * TILE
+                best = np.minimum(best, v + np.hypot(xk - cx, yk - cy) / TILE)
+            out[k] = best
+        return out.reshape(shape)
+
+    def summary(self) -> str:
+        return (f"{self.label}, {self.n_legs} leg(s); route cost {self.route_cost:.1f}; "
+                f"{max(self.n_states)} states, {max(self.n_edges)} edges per leg; build {self.t_build:.2f} s "
+                f"(route search {self.t_route:.2f} s, field {self.t_field:.2f} s)")
+
+
+def measure_build(pl: Planner):
+    """(ProgressField, peak traced memory in bytes) of a build (tracemalloc slows it down: timing apart)."""
+    import tracemalloc
+    tracemalloc.start()
+    try:
+        pf = ProgressField.from_planner(pl)
+        return pf, tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+# ---- graph helpers ----------------------------------------------------------------------------------------
+def _step(ctx, r, c, u, s, f, grounded, src):
+    """The Planner's moves (realpath.Planner._dijkstra) from source states (cell r, c; rise used u, sideways
+    used s, falling f; standing `grounded`), ids `src`: (source ids, target state ids, step costs)."""
+    cid, K, U, S = ctx["cid"], ctx["K"], ctx["U"], ctx["S"]
+    enter, support, targets, allowed, cost = ctx["enter"], ctx["support"], ctx["targets"], ctx["allowed"], ctx["cost64"]
+    out_s, out_d, out_w = [], [], []
+    for d, (dc, dr) in enumerate(DIRS):
+        k = np.nonzero(allowed[d, r, c])[0]
+        if not len(k):
+            continue
+        nr, nc = r[k] + dr, c[k] + dc
+        ok = enter[nr, nc]                                     # closed cells only when they are the target
+        k, nr, nc = k[ok], nr[ok], nc[ok]
+        sup = support[nr, nc]
+        if K == 1:                                             # no jump limits: every state is the cell
+            j = np.zeros(len(k), np.int64)
+        else:
+            g = grounded[k]
+            up0, side0 = np.where(g, 0, u[k]), np.where(g, 0, s[k])
+            u1 = up0 + (1 if dr > 0 else 0)
+            s1 = side0 + (1 if dc and dr >= 0 else 0)
+            air_ok = (u1 <= U) & (s1 <= S)
+            if dr >= 0:
+                air_ok &= ~((f[k] == 1) & ~g)                  # falling: only down
+            keep = sup | air_ok                                # onto (or against) something: always
+            k, nr, nc, sup, u1, s1 = k[keep], nr[keep], nc[keep], sup[keep], u1[keep], s1[keep]
+            j = np.where(sup, 0, (u1 * (S + 1) + s1) * 2 + (1 if dr < 0 else 0))
+        j = np.where(targets[nr, nc], 0, j)                    # any arrival at a target ends the leg
+        ln = SQRT2 if dc and dr else 1.0
+        out_s.append(src[k])
+        out_d.append(cid[nr, nc] * K + j)
+        out_w.append(ln * ((1.0 + np.where(sup, 0.0, AIR_COST)) + cost[nr, nc]))
+    if not out_s:
+        return np.zeros(0, np.int64), np.zeros(0, np.int64), np.zeros(0)
+    return np.concatenate(out_s), np.concatenate(out_d), np.concatenate(out_w)
+
+
+def _cost_to_go(n, src, dst, w, seeds) -> np.ndarray:
+    """Per state, the cheapest cost to any seed state along the edges src -> dst (Dijkstra on the reversed
+    edges; +inf where no seed can be reached)."""
+    if not len(seeds):
+        return np.full(n, np.inf)
+    if _sp_dijkstra is not None:
+        g = csr_matrix((w, (dst, src)), shape=(n, n))           # no duplicate (src, dst): one per move direction
+        return np.asarray(_sp_dijkstra(g, directed=True, indices=seeds, min_only=True), np.float64)
+    order = np.argsort(dst, kind="stable")                    # pragma: no cover - fallback without scipy
+    rs, rw = src[order].tolist(), w[order].tolist()
+    ptr = np.searchsorted(dst[order], np.arange(n + 1)).tolist()
+    dist = [math.inf] * n
+    pq = []
+    for q in seeds.tolist():
+        dist[q] = 0.0
+        pq.append((0.0, q))
+    heapq.heapify(pq)
+    while pq:
+        d, q = heapq.heappop(pq)
+        if d > dist[q]:
+            continue
+        for e in range(ptr[q], ptr[q + 1]):
+            p, nd = rs[e], d + rw[e]
+            if nd < dist[p]:
+                dist[p] = nd
+                heapq.heappush(pq, (nd, p))
+    return np.array(dist)
+
+
+def _reach(n, src, dst, seeds) -> np.ndarray:
+    """States reachable from the seeds along src -> dst (breadth first, vectorised)."""
+    order = np.argsort(src, kind="stable")
+    fd = dst[order]
+    ptr = np.searchsorted(src[order], np.arange(n + 1))
+    seen = np.zeros(n, bool)
+    front = np.unique(np.asarray(seeds, np.int64))
+    seen[front] = True
+    while len(front):
+        a, b = ptr[front], ptr[front + 1]
+        cnt = b - a
+        tot = int(cnt.sum())
+        if not tot:
+            break
+        idx = np.repeat(a - np.cumsum(cnt) + cnt, cnt) + np.arange(tot)
+        nxt = fd[idx]
+        nxt = np.unique(nxt[~seen[nxt]])
+        seen[nxt] = True
+        front = nxt
+    return seen
