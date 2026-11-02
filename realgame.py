@@ -55,6 +55,15 @@ variance) and the network (the previous wave's best agent). Its sliders set the 
 they are split over the routes (from the next wave).
 
 Saved in runs/<name>/: model.pt (latest), levels/<level>/best.pt + best.json (fastest finish).
+
+Planner (--control mpc / mpc+ppo, mpc/): the world model plays candidate action sequences ahead and the agent
+takes the first action of the best one, every frame (MPC_PROPOSAL.md). Default --control ppo is unchanged.
+Steps the planner picked never train PPO; their world-model data goes to wm_data_mpc/ (labelled), and every
+decision is logged to mpc_plans.jsonl. Needs the time-step lock (default).
+
+    python smbrl/realgame.py --agents 1 --control mpc --load smbrl/runs/real_20261102-165351 --no-monitor
+
+Held-out levels (eval_levels.json): no PPO updates and no world-model data there.
 """
 from __future__ import annotations
 
@@ -783,11 +792,29 @@ class Trainer:
             widened = load_policy(self.policy, p)
             print(f"loaded {p}" + (" (older model: the route inputs start untrained)" if widened else ""))
         self.ppo = PPO(self.policy)
+        self.control = getattr(args, "control", "ppo")
+        self.mpc = None                      # the world-model planner (--control mpc / mpc+ppo), mpc/
+        self.mpc_skipped = 0                 # planner-picked steps kept out of PPO
+        self.last_plan = None
+        if self.control != "ppo":
+            if getattr(args, "no_lock_step", False):
+                raise SystemExit("--control mpc needs the game's time step locked (drop --no-lock-step): the "
+                                 "planner assumes every future step is the step the game reports now")
+            from mpc.controller import MPC
+            from mpc.offline import default_model
+            from mpc.score import Weights
+            self.mpc = MPC(args.mpc_model or default_model(), args.mpc_candidates, args.mpc_horizon, args.mpc_every,
+                           args.mpc_budget_ms, Weights(value=args.mpc_value, kappa=args.mpc_kappa), args.mpc_seed,
+                           fallback=self.control == "mpc+ppo", log_path=os.path.join(self.run_dir, "mpc_plans.jsonl"))
+            print(f"planner: {self.control}, {args.mpc_candidates} candidates, {args.mpc_horizon} frames ahead, "
+                  f"model {self.mpc.model_path}; plans logged to mpc_plans.jsonl", flush=True)
+        self.protected = False               # a held-out evaluation level: no PPO updates, no world-model data
         self.wm = None                       # world-model data (--wm-collect / --probe-char), wm/buffer.py
         probe = getattr(args, "probe_char", 0)
         if getattr(args, "wm_collect", False) or probe:
             from wm.buffer import Collector
-            self.wm = Collector(os.path.join(self.run_dir, "wm_data"), char_bytes=probe > 0)
+            sub = "wm_data" if self.control == "ppo" else "wm_data_mpc"   # planner data kept apart, labelled
+            self.wm = Collector(os.path.join(self.run_dir, sub), char_bytes=probe > 0, source=self.control)
             print(f"world-model data -> {self.wm.dir}" + (f" (+ the first agent's character bytes for "
                                                          f"{probe} frames)" if probe else ""))
         self.level: Level | None = None
@@ -820,8 +847,15 @@ class Trainer:
         if info["name"] in (None, "unknown"):
             info["name"] = identify_level(info, tiles) or "unknown"
         self.level = Level(info, tiles)
-        if self.wm:
+        from wm.buffer import eval_levels
+        self.protected = info["name"] in eval_levels()
+        if self.protected:
+            print(f"[level] {info['name']} is a held-out evaluation level (eval_levels.json): no PPO updates and no "
+                  f"world-model data here", flush=True)
+        if self.wm and not self.protected:
             self.wm.level(self.level, info)
+        if self.mpc:
+            self.mpc.set_level(self.level)
         self.best_time = None
         self.phase, self.best_route = "finish", None
         self.paths, self.hz_start, self.moving, self.sweep, self.path_dirty = [], None, set(), set(), True
@@ -957,9 +991,11 @@ class Trainer:
                 if q is not None:
                     self.hz_vel[k] = (pos[k] - q) * HZ
         self.hz_prev = {hid: pos[k] for k, hid in enumerate(ids)}
-        if self.wm:
+        if self.wm and not self.protected:
             self.wm.frame(m, list(lv.hz_ids), list(lv.hz_keep))
             self.wm.char(m["frame"], data)
+        if self.mpc:
+            self.mpc.frame(m, list(lv.hz_keep))
         moving = np.hypot(self.hz_vel[:, 0], self.hz_vel[:, 1]) > 8.0 if len(pos) else np.zeros(0, bool)
         if not self.paths_built:             # (normally built when the level info came)
             self.build_paths(reset=m["frame"] != 0)
@@ -1083,7 +1119,7 @@ class Trainer:
             if st != 0:
                 tr["done"] = True
                 self.alive[i] = False
-                self.ppo.add(tr, 0.0)
+                self.to_ppo(tr, 0.0)
                 self.fit[i] = self.agent_fitness(i, won=st == 2, dead=st == 1)
         live = [i for i, s in enumerate(states) if s[6] == 0 and self.alive[i]]
         acts = [[0, 0, 0, 0]] * n
@@ -1099,6 +1135,8 @@ class Trainer:
                 probs = None
             else:
                 a, lp, v, probs = self.ppo.act(obs)
+                if self.mpc:
+                    self.plan_actions(live, a, probs, states, m["frame"], grid, pos, moving)
             for j, i in enumerate(live):
                 tr = self.traj[i]
                 if self.best_d[i] is None:
@@ -1126,9 +1164,46 @@ class Trainer:
         if won:
             leader = won[0]
         self.leader = leader
-        if self.wm:
+        if self.wm and not self.protected:
             self.wm.agents(m["wave"], m["frame"], states, alive_before, held_before, act_idx, r_now)
         return {"a": acts, "leader": leader}
+
+    def to_ppo(self, tr: dict, last_value: float):
+        """A finished trajectory to PPO, unless the planner picked any of its actions (those are not samples
+        of the policy: training PPO on them as on-policy data would be wrong)."""
+        if tr.get("mpc"):
+            self.mpc_skipped += len(tr["r"])
+            return
+        self.ppo.add(tr, last_value)
+
+    def plan_actions(self, live: list, a: np.ndarray, probs: np.ndarray, states: list, frame: int, grid, pos, moving):
+        """--control mpc / mpc+ppo: the planner replaces the actions of the agents it controls (in place)."""
+        lv = self.level
+        k = self.args.mpc_agents
+        for j, i in enumerate(live):
+            if k and i >= k:
+                continue
+            s, route = states[i], self.route(i)
+            opened = lv.opened_cells(self.keys_of[i]) if self.keys_of[i] else ()
+            stuck = self.stuck_inputs(i, frame)
+
+            def value_fn(end, i=i, s=s, route=route, opened=opened, stuck=stuck):
+                obs = []
+                for e in end:
+                    x, y = float(e["x"]), float(e["y"])
+                    prog = route.value(x, y, self.reached[i]) if route is not None else None
+                    prog = self.cur_s[i] if prog is None else prog
+                    off = route.offset(x, y) if route is not None else 0.0
+                    obs.append(observe(lv, grid, [x, y, float(e["vx"]), float(e["vy"]), int(e["flags"]),
+                                                  int(e["state"]), 0, s[7] if len(s) > 7 else 0], route, prog, off,
+                                       moving_features(x, y, pos, self.hz_vel, moving), opened, stuck, int(e["held"])))
+                with torch.no_grad():
+                    return self.policy.vf(torch.as_tensor(np.stack(obs))).squeeze(-1).numpy()
+            act, info = self.mpc.plan(i, s, self.jump_held[i], frame, route, self.reached[i], lv,
+                                      probs[j], value_fn if self.args.mpc_value else None, int(a[j]))
+            a[j] = act
+            self.traj[i]["mpc"] = True
+            self.last_plan = info
 
     def stuck_inputs(self, i: int, frame: int) -> tuple[float, float]:
         an = self.anchor[i]
@@ -1148,7 +1223,7 @@ class Trainer:
         return 7 if (f % period) < 10 else 6
 
     def on_wave_end(self, m: dict):
-        if self.wm:
+        if self.wm and not self.protected:
             self.wm.wave_end(m["wave"], m)
         lv = self.level
         self.waves += 1
@@ -1163,16 +1238,16 @@ class Trainer:
             if st == 1:
                 tr["r"].append(step_cost + R_DEATH)
                 tr["done"] = True
-                self.ppo.add(tr, 0.0)
+                self.to_ppo(tr, 0.0)
             elif st == 2:
                 tr["r"].append(step_cost + self.finish_reward(m["finish"][i] if m["finish"][i] >= 0 else m["frame"]))
                 tr["done"] = True
-                self.ppo.add(tr, 0.0)
+                self.to_ppo(tr, 0.0)
             else:
                 tr["r"].append(step_cost)
                 with torch.no_grad():
                     lv_ = float(self.policy.vf(torch.as_tensor(tr["o"][-1])).item())
-                self.ppo.add(tr, lv_)
+                self.to_ppo(tr, lv_)
         rets = [sum(tr["r"]) for tr in self.traj if tr["r"]]
         hops = 60.0 * sum(self.hops) / max(1, sum(self.frames))         # hops per agent-second
         self.snapshot_best(m["wave"])
@@ -1204,7 +1279,11 @@ class Trainer:
         self.history.append({"wave": m["wave"], "finished": len(fin), "dead": dead, "fastest": fastest, "fit": best_fit,
                              "path_max": max(prog) if prog else None, "path_mean": float(np.mean(prog)) if prog else None,
                              "ret": float(np.mean(rets)) if rets else None, "hops": hops})
-        if not self.args.test and self.ppo.steps >= self.args.batch:
+        if self.mpc:
+            sm = self.mpc.summary(self.mpc.new_wave(m["wave"] + 1))
+            if sm:
+                line += "  | " + sm
+        if not self.args.test and not self.protected and self.ppo.steps >= self.args.batch:
             st = self.ppo.update()
             self.ppo.steps = 0
             self.updates.append(st)
@@ -1484,6 +1563,8 @@ class Trainer:
             except Exception:
                 pass
             session.detach()
+            if self.mpc:
+                self.mpc.close()
             if mon is not None:
                 mon.close()
             signal.signal(signal.SIGINT, old_sigint)
@@ -1510,6 +1591,19 @@ def main():
     ap.add_argument("--probe-char", type=int, default=0, metavar="FRAMES",
                     help="also save the first agent's character bytes for this many frames (hidden timers)")
     ap.add_argument("--no-monitor", action="store_true", help="no monitor window")
+    ap.add_argument("--control", choices=("ppo", "mpc", "mpc+ppo"), default="ppo",
+                    help="who picks the actions: PPO (default, unchanged), the world-model planner (mpc/), or the "
+                         "planner with PPO taking over when a plan cannot be finished or the model is unsure. "
+                         "Planner-picked steps never train PPO.")
+    ap.add_argument("--mpc-model", default=None, help="world model for the planner (default runs/wm_locked, else wm_phase4mix)")
+    ap.add_argument("--mpc-candidates", type=int, default=32, help="action sequences tried per decision")
+    ap.add_argument("--mpc-horizon", type=int, default=16, help="frames planned ahead")
+    ap.add_argument("--mpc-every", type=int, default=1, help="replan every this many frames")
+    ap.add_argument("--mpc-budget-ms", type=float, default=0.0, help="stop a plan's rollout after this long (0: none)")
+    ap.add_argument("--mpc-agents", type=int, default=0, help="the first this many agents use the planner (0: all)")
+    ap.add_argument("--mpc-value", type=float, default=0.5, help="weight of the PPO critic's value at the plan's end")
+    ap.add_argument("--mpc-kappa", type=float, default=1.0, help="penalty x the ensemble's disagreement on a plan")
+    ap.add_argument("--mpc-seed", type=int, default=0)
     ap.add_argument("--debug-spawn", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
     args.paths = max(1, min(args.paths, 3))

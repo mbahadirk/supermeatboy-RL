@@ -81,3 +81,90 @@ def test_route_values_match_value():
             assert np.isnan(v)
         else:
             assert abs(v - o) < 1e-3
+
+
+def test_candidate_actions_match_realgame():
+    import realgame
+    from mpc import candidates
+    assert candidates.ACTIONS == [tuple(a) for a in realgame.ACTIONS]
+
+
+class _FakeScript:
+    def __init__(self):
+        self.posts = []
+
+    def post(self, msg):
+        self.posts.append(msg)
+
+
+def _args(run_dir, control):
+    import argparse
+    return argparse.Namespace(name=str(run_dir), load=None, agents=2, paths=1, wave_seconds=20.0, end_after=5,
+                              batch=16384, test=False, debug_spawn=False, no_lock_step=False, wm_collect=True,
+                              probe_char=0, no_monitor=True, control=control, mpc_model=MODEL, mpc_candidates=12,
+                              mpc_horizon=8, mpc_every=1, mpc_budget_ms=0.0, mpc_agents=1, mpc_value=0.5,
+                              mpc_kappa=1.0, mpc_seed=0)
+
+
+def _drive(trainer, n_frames=40, name=LEVEL):
+    """The trainer's message handler with a recorded 1-13 wave (2 agents) as the game (named `name`)."""
+    words, meta = load_level(DATA, LEVEL)
+    info = dict(meta, name=name, agents=2)
+    rows, world = one_wave()
+    agents = sorted(set(rows["agent"].tolist()))[:2]
+    trainer.script = _FakeScript()
+    trainer.on_message({"type": "send", "payload": dict(info, ev="info")}, words.astype("<u4").tobytes())
+    replies = []
+    for w in world[:n_frames]:
+        f = w["f"]
+        st = []
+        for a in agents:
+            r = rows[(rows["agent"] == a) & (rows["frame"] == f)]
+            r = r[0] if len(r) else rows[rows["agent"] == a][-1]
+            st.append([float(r["x"]), float(r["y"]), float(r["vx"]), float(r["vy"]), int(r["flags"]), int(r["state"]),
+                       0, int(r["keys"])])
+        msg = dict(w, ev="frame", frame=f, wave=0, s=st)
+        msg.pop("f")
+        trainer.on_message({"type": "send", "payload": msg}, None)
+        replies.append(trainer.script.posts[-1]["payload"]["a"])
+    trainer.on_message({"type": "send", "payload": {"ev": "wave_end", "wave": 0, "status": [1, 0], "finish": [-1, -1],
+                                                    "frame": world[n_frames - 1]["f"], "why": "test"}}, None)
+    return replies
+
+
+@need_data
+def test_trainer_ppo_only_unchanged(tmp_path):
+    import realgame
+    t = realgame.Trainer(_args(tmp_path / "ppo", "ppo"))
+    assert t.mpc is None
+    _drive(t)
+    assert len(t.ppo.batch) == 2 and t.mpc_skipped == 0          # both agents' steps went to PPO
+    assert (tmp_path / "ppo" / "wm_data").exists()
+
+
+@need_data
+def test_trainer_planner_kept_out_of_ppo(tmp_path):
+    import json as js
+    import realgame
+    t = realgame.Trainer(_args(tmp_path / "mpc", "mpc"))
+    assert t.mpc is not None
+    _drive(t)
+    t.mpc.close()
+    assert len(t.ppo.batch) == 1                                  # agent 1 (PPO) trained, agent 0 (planner) not
+    assert t.mpc_skipped > 0
+    plans = [js.loads(l) for l in open(tmp_path / "mpc" / "mpc_plans.jsonl", encoding="utf-8")]
+    assert len(plans) >= 30 and all(p["agent"] == 0 and p["steps"] == 8 for p in plans)
+    shard = np.load(next((tmp_path / "mpc" / "wm_data_mpc").glob("wave_*.npz")))
+    assert js.loads(str(shard["meta"]))["source"] == "mpc"
+
+
+@need_data
+def test_held_out_level_gives_no_data(tmp_path):
+    import realgame
+    from wm.buffer import eval_levels
+    name = sorted(eval_levels())[0]
+    t = realgame.Trainer(_args(tmp_path / "held", "ppo"))
+    t.args.batch = 1                                              # would update PPO after this wave anywhere else
+    _drive(t, name=name)
+    assert t.protected and not t.updates
+    assert not list((tmp_path / "held" / "wm_data").glob("wave_*.npz"))
