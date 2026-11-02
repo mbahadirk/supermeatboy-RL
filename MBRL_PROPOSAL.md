@@ -296,4 +296,10 @@ their recorded positions. Each ensemble member rolls its own trajectory.
   - **Proposed fix:** lock the game's time step (hook the game's step to a constant). Physics then no
     longer depends on Python's speed: rollouts get the true step, hazards would repeat per wave exactly,
     and PPO would see the same physics on every frame. The cost is that the game runs in slow motion when
-    Python is slow. Not done yet (it changes the game integration).
+    Python is slow.
+  - **Done and verified** (commit 154f3fb, on by default, `--no-lock-step` turns it off).
+    - In run `real_20261102-165351` (647 waves, 17.3 million steps, levels 1-1 to 1-17), the step was
+      16.7 ms every time.
+    - The moving hazards on 1-13 and 1-14 were at the same place at the same wave frame in every wave
+      (0.0 units off).
+    - Next: Phase 5 and 6, see [MPC_PROPOSAL.md](MPC_PROPOSAL.md).
