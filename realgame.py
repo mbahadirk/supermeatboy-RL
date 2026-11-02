@@ -958,7 +958,7 @@ class Trainer:
                     self.hz_vel[k] = (pos[k] - q) * HZ
         self.hz_prev = {hid: pos[k] for k, hid in enumerate(ids)}
         if self.wm:
-            self.wm.frame(m, list(lv.hz_ids))
+            self.wm.frame(m, list(lv.hz_ids), list(lv.hz_keep))
             self.wm.char(m["frame"], data)
         moving = np.hypot(self.hz_vel[:, 0], self.hz_vel[:, 1]) > 8.0 if len(pos) else np.zeros(0, bool)
         if not self.paths_built:             # (normally built when the level info came)

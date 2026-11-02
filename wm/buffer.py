@@ -66,7 +66,7 @@ class Collector:
                 "objs": info.get("objs", []), "lethalTypes": info.get("lethalTypes", [])}
         np.savez_compressed(p, words=lv.words0.astype(np.uint32), meta=json.dumps(meta))
 
-    def frame(self, m: dict, hz_ids: list):
+    def frame(self, m: dict, hz_ids: list, hz_keep: list | None = None):
         """The level's moving parts this frame (and the game's time step for the update that follows)."""
         rec = {"f": m["frame"], "dt": m.get("dt"), "hz": _r(m.get("hz", [])), "sh": _r(m.get("sh", []))}
         if m.get("pf"):
@@ -75,8 +75,10 @@ class Collector:
             rec["tc"] = m["tc"]
         if m.get("fx"):
             rec["fx"] = _r(m["fx"])
-        if hz_ids != self.ids_sent:             # which hazard is which (changes when pieces come or go)
-            rec["ids"] = list(hz_ids)
+        if hz_ids != self.ids_sent:             # which hazard is which (changes when pieces come or go), and
+            rec["ids"] = list(hz_ids)           # which are real (the rest is decoration the trainer skips)
+            if hz_keep is not None:
+                rec["keep"] = [bool(k) for k in hz_keep]
             self.ids_sent = list(hz_ids)
         self.world.append(rec)
 
