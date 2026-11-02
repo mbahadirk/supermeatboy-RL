@@ -204,3 +204,27 @@ The model learns the physics the agent controls; the level is looked up, not mem
 | 7 | eval mode + report | numbers on unseen levels for all three variants |
 
 Each phase is committed separately and checked against the real game before the next starts.
+
+## Phase 2 results (run real_20261102-035612, 100 agents, levels 1-6 and 1-7)
+
+- **Data:** 22 waves gave 550k agent rows and 548k transitions in 9.5 MB (about 0.4 MB per wave). There
+  were 339 deaths and 70 finishes; 1.8k transitions were cut by the wave time limit.
+- **Time step:**
+  - With 100 agents the game runs at about 28 updates a second: frames take 36 ms at the median, 47 ms
+    at 90% and up to 70 ms. 87% of frames are longer than 20 ms.
+  - The game moves agents by velocity x the real step. In free flight the error is 0.07 units that way,
+    against 3.4 units with a fixed 1/60 s.
+  - **Consequence:** the world model must take the time step as an input, and MPC must roll out with the
+    step it expects. The recent median is a good guess.
+- **Hidden timers:** none found.
+  - Of the 659 four-byte fields of the character, 207 change. None counts real time or frames up or down
+    and resets at a jump press or release.
+  - The jump press/release logic seems to live in the flag bits (+0x7b4, e.g. 0x08050081 vs 0x00050082)
+    and the movement state, which are recorded in full.
+  - Phase 3 will confirm it: if jumps are predicted well from these, nothing is hidden. A GRU stays the
+    fallback.
+- **Movement states seen:** 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 20, 21. The model treats them as classes.
+- **Do hazards repeat per wave?** Not answered yet: 1-6 and 1-7 have no moving hazards. A run on a level
+  with moving saws or platforms is needed.
+- **Fixed during the analysis:** the game's wave count starts again on each level, which mixed waves of
+  different levels. Each shard now has its own number, and older data is fixed when it is read.

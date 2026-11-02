@@ -81,14 +81,15 @@ class Collector:
         self.world.append(rec)
 
     def agents(self, wave: int, frame: int, states: list, alive: list, held: list, actions: list, rewards):
-        """One row per agent that was alive when this frame came in."""
+        """One row per agent that was alive when this frame came in. The row's wave is the shard number (the
+        game's wave count starts again on every level; it is kept in the shard's meta)."""
         idx = [i for i in range(len(states)) if i < len(alive) and alive[i]]
         if not idx:
             return
         r = np.zeros(len(idx), ROW)
         for k, i in enumerate(idx):
             s = states[i]
-            r[k] = (wave, frame, i, s[0], s[1], s[2], s[3], int(s[4]) & 0xffffffff, s[5], s[6],
+            r[k] = (self.n_shards, frame, i, s[0], s[1], s[2], s[3], int(s[4]) & 0xffffffff, s[5], s[6],
                     int(s[7]) if len(s) > 7 else 0, held[i], actions[i], rewards[i])
         self.rows.append(r)
 
@@ -118,14 +119,16 @@ class Collector:
 def load_shards(d: str, level: str | None = None):
     """[(meta, rows, world frames)] of every shard in a wm_data folder (optionally one level only)."""
     out = []
-    for p in sorted(glob.glob(os.path.join(d, "wave_*.npz"))):
+    for k, p in enumerate(sorted(glob.glob(os.path.join(d, "wave_*.npz")))):
         z = np.load(p)
         meta = json.loads(str(z["meta"]))
         if level and meta.get("level") != level:
             continue
         wp = p[:-4] + "_world.json.gz"
         world = json.load(gzip.open(wp, "rt", encoding="utf-8")) if os.path.exists(wp) else []
-        out.append((meta, z["rows"], world))
+        rows = z["rows"].copy()
+        rows["wave"] = k                     # one number per shard (older data stored the game's wave count)
+        out.append((meta, rows, world))
     return out
 
 
