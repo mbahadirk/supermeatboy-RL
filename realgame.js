@@ -30,7 +30,7 @@
 //          the level start and between waves, and agents are held still for the frame after a long wait.
 //
 // Addresses are image VAs (base 0x400000), resolved against the ASLR base at runtime.
-const CFG = __CONFIG__;   // {agents, pool, wave_frames, finish_frames, finish_quota}
+const CFG = __CONFIG__;   // {agents, pool, wave_frames, finish_frames, finish_quota, probe_frames}
 const base = Process.getModuleByName('SuperMeatBoy.exe').base;
 const img = a => base.add(a - 0x400000);
 const rd = fn => { try { return fn(); } catch (e) { return null; } };
@@ -425,19 +425,28 @@ function waitGo() {                                // Python's answer may carry 
 }
 let actions = null;
 function onAct(m) { actions = m.payload; }
-function exchange(w) {                              // lockstep: send states, wait for Python's inputs
+// world-model probe (--probe-char N): the first agent's whole character object (CHAR_BYTES, the default
+// Meat Boy's allocation size in the factory FUN_00527190) goes with the next N frames, to find the hidden
+// timers (jump release, wall-jump lockout) in it
+const CHAR_BYTES = 0xa4c;
+let probeLeft = CFG.probe_frames || 0;
+function exchange(w, gap) {                         // lockstep: send states, wait for Python's inputs
   actions = null;
   const t0 = Date.now();
   const changed = sig(pieces(w)) !== pieceSig;
   if (changed) buildLethal(w);                       // pieces came or went: the hazard list changes
   const msg = { ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards(), sh: rd(() => shots(w)) || [] };
+  if (gap !== undefined) msg.dt = gap;               // ms since the last step: the game's time step for this update
   if ((frame & 7) === 0) msg.fx = rd(() => forceFields(w));   // fans / orbs (they rarely move)
   const pf = rd(() => platforms(w));
   if (pf && pf.length) msg.pf = pf;                  // moving platforms: every frame
   if (changed) msg.lt = lethalInfo();
   const tc = tileChanges();
   if (tc) msg.tc = tc;
-  send(msg);
+  if (probeLeft > 0 && agents.length && status[0] === 0) {
+    probeLeft--;
+    send(msg, agents[0].readByteArray(CHAR_BYTES));
+  } else send(msg);
   recv('act', onAct).wait();
   afterWait(t0);
   return actions;
@@ -457,7 +466,7 @@ function stepAgents() {
     return;
   }
   if (pendingWave || (frame === 0 && wave === 0)) { pendingWave = false; startWave(); }
-  const act = exchange(w);
+  const act = exchange(w, gap);
   if (!act) return;
   leader = act.leader;
   if (act.stop) {                                   // hand the characters back to the game

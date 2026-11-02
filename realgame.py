@@ -783,6 +783,13 @@ class Trainer:
             widened = load_policy(self.policy, p)
             print(f"loaded {p}" + (" (older model: the route inputs start untrained)" if widened else ""))
         self.ppo = PPO(self.policy)
+        self.wm = None                       # world-model data (--wm-collect / --probe-char), wm/buffer.py
+        probe = getattr(args, "probe_char", 0)
+        if getattr(args, "wm_collect", False) or probe:
+            from wm.buffer import Collector
+            self.wm = Collector(os.path.join(self.run_dir, "wm_data"), char_bytes=probe > 0)
+            print(f"world-model data -> {self.wm.dir}" + (f" (+ the first agent's character bytes for "
+                                                         f"{probe} frames)" if probe else ""))
         self.level: Level | None = None
         self.traj, self.best_d, self.acts, self.alive = [], [], [], []
         self.visits = {}
@@ -813,6 +820,8 @@ class Trainer:
         if info["name"] in (None, "unknown"):
             info["name"] = identify_level(info, tiles) or "unknown"
         self.level = Level(info, tiles)
+        if self.wm:
+            self.wm.level(self.level, info)
         self.best_time = None
         self.phase, self.best_route = "finish", None
         self.paths, self.hz_start, self.moving, self.sweep, self.path_dirty = [], None, set(), set(), True
@@ -910,7 +919,7 @@ class Trainer:
     def route(self, i: int):
         return self.paths[self.path_of[i]] if self.paths and i < len(self.path_of) else None
 
-    def on_frame(self, m: dict) -> dict:
+    def on_frame(self, m: dict, data=None) -> dict:
         lv, states = self.level, m["s"]
         if lv is None:
             return {"a": [[0, 0, 0, 0]] * len(states), "leader": 0}
@@ -948,6 +957,9 @@ class Trainer:
                 if q is not None:
                     self.hz_vel[k] = (pos[k] - q) * HZ
         self.hz_prev = {hid: pos[k] for k, hid in enumerate(ids)}
+        if self.wm:
+            self.wm.frame(m, list(lv.hz_ids))
+            self.wm.char(m["frame"], data)
         moving = np.hypot(self.hz_vel[:, 0], self.hz_vel[:, 1]) > 8.0 if len(pos) else np.zeros(0, bool)
         if not self.paths_built:             # (normally built when the level info came)
             self.build_paths(reset=m["frame"] != 0)
@@ -995,6 +1007,9 @@ class Trainer:
             new_phi[i] = max(fr) if max(fr) >= 0.0 else None   # progress here (None: no route near)
             new_frac[i] = max((b or 0.0) / q.length for b, q in zip(bk, self.paths))
             self.best_s[i] = bk[own]
+        # world-model rows: who was alive coming in, the jump key before this frame's input, rewards, actions
+        alive_before, held_before = list(self.alive), list(self.jump_held)
+        r_now, act_idx = [float("nan")] * n, [-1] * n
         # finish the previous step: rewards for what happened since the last frame
         step_cost = R_STEP_SPEED if self.phase == "speed" else R_STEP
         for i, s in enumerate(states):
@@ -1064,6 +1079,7 @@ class Trainer:
             elif st == 2:
                 r += self.finish_reward(m["frame"])
             tr["r"].append(r)
+            r_now[i] = r
             if st != 0:
                 tr["done"] = True
                 self.alive[i] = False
@@ -1089,6 +1105,7 @@ class Trainer:
                     self.best_d[i] = lv.goal_dist(states[i][0], states[i][1])
                 tr["o"].append(obs[j]); tr["a"].append(int(a[j])); tr["lp"].append(float(lp[j])); tr["v"].append(float(v[j]))
                 acts[i] = list(ACTIONS[int(a[j])])
+                act_idx[i] = int(a[j])
                 self.ground_at_act[i] = not (states[i][4] & 2)
                 fl = states[i][4]                              # the jump key as realgame.js holds it
                 if not acts[i][2]:
@@ -1109,6 +1126,8 @@ class Trainer:
         if won:
             leader = won[0]
         self.leader = leader
+        if self.wm:
+            self.wm.agents(m["wave"], m["frame"], states, alive_before, held_before, act_idx, r_now)
         return {"a": acts, "leader": leader}
 
     def stuck_inputs(self, i: int, frame: int) -> tuple[float, float]:
@@ -1129,6 +1148,8 @@ class Trainer:
         return 7 if (f % period) < 10 else 6
 
     def on_wave_end(self, m: dict):
+        if self.wm:
+            self.wm.wave_end(m["wave"], m)
         lv = self.level
         self.waves += 1
         n = len(self.traj)
@@ -1354,7 +1375,7 @@ class Trainer:
         reply = None
         try:
             if ev == "frame":
-                reply = self.on_frame(p)
+                reply = self.on_frame(p, data)
             elif ev == "info":
                 self.on_info(p, data)
             elif ev == "wave_end":
@@ -1405,7 +1426,7 @@ class Trainer:
                   f"on screen now, if any, has the game's {GAME_POOL}: enter or restart a level for all)", flush=True)
         cfg = {"agents": self.want_agents, "pool": self.pool, "wave_frames": int(self.args.wave_seconds * HZ),
                "finish_frames": 60, "debug": bool(self.args.debug_spawn),
-               "finish_quota": max(0, self.args.end_after)}
+               "finish_quota": max(0, self.args.end_after), "probe_frames": max(0, getattr(self.args, "probe_char", 0))}
         with open(JS, encoding="utf-8") as f:
             src = f.read().replace("__CONFIG__", json.dumps(cfg))
         try:
@@ -1480,6 +1501,10 @@ def main():
     ap.add_argument("--load", default=None, help="run folder or .pt to continue from")
     ap.add_argument("--name", default=None, help="run folder name under runs/ (default real_<time>)")
     ap.add_argument("--test", action="store_true", help="scripted inputs, no learning (checks the mod)")
+    ap.add_argument("--wm-collect", action="store_true",
+                    help="save world-model data (agent rows, the level's moving parts) to <run>/wm_data")
+    ap.add_argument("--probe-char", type=int, default=0, metavar="FRAMES",
+                    help="also save the first agent's character bytes for this many frames (hidden timers)")
     ap.add_argument("--no-monitor", action="store_true", help="no monitor window")
     ap.add_argument("--debug-spawn", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
