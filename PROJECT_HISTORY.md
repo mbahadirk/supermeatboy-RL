@@ -161,6 +161,23 @@ Stop with Ctrl+C or by creating `runs/<name>/STOP`; never kill the process (that
     pieces): timing, not a deadly cell.
   - Re-measure after collecting on new worlds: `python smbrl/hazard_reach.py <run>/wm_data ...`.
 
+### Leaving the level
+
+- **Problem:** the real player dies off screen, but our agents skip the game's own check (their mode turns
+  off its global death code). The script only killed agents that fell 60 units below the map.
+  - On 4-6, 932 lives flew off the open left and right edges and were still "alive" thousands of units
+    away.
+  - On 1-12, lives went 294 units past the edge, came back and finished.
+  - The agents' map also showed everything outside the edge as solid wall.
+- **Fix:**
+  - `realgame.js` kills an agent more than 10 units past the left, right or top edge of the map (60 below,
+    as before).
+  - The agents' map shows the outside as hazard, with no surfaces.
+  - The game's exact rule was not read from the binary: Ghidra timed out with the training running.
+- **Also:** `hazard_reach.py` with a placeholder folder had overwritten the measured table with an empty
+  one. It now refuses folders that do not exist and data without deaths, keeps kinds the new data does not
+  cover, and `--all` measures every recorded run.
+
 ### Wall climbing
 
 - **Problem:** a wall jump needs a new jump press, and agents could not see whether their jump key was

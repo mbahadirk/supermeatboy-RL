@@ -11,7 +11,10 @@ surviving agents got. A reach is accepted at the 90th, else 75th, else 50th perc
 first that fewer than SAFE_INSIDE of the survivors' positions fall inside. Kinds with fewer than MIN_DEATHS
 deaths, or no accepted reach, keep BODY. Reach is never below BODY (only ever more caution).
 
-    python smbrl/hazard_reach.py <run>/wm_data [more wm_data]     # writes smbrl/hazard_reach.json
+    python smbrl/hazard_reach.py --all          # every recorded run under runs/ (writes smbrl/hazard_reach.json)
+    python smbrl/hazard_reach.py smbrl/runs/real_20261103-010905/wm_data      # or chosen wm_data folders
+
+Kinds the given data does not cover keep their earlier measurement; data without deaths changes nothing.
 
 realgame.hazard_boxes grows every piece's box by (reach - BODY) along each axis, so the agents' map, the
 sealed pockets, the routes, the monitor and the planner's hazard check all use the measured reach. The world
@@ -137,16 +140,38 @@ def measure(dirs: list, log=print) -> dict:
     return out
 
 
+def all_data() -> list[str]:
+    """Every recorded world-model data folder under runs/ (PPO and planner runs)."""
+    import glob
+    return sorted(d for d in glob.glob(os.path.join(HERE, "runs", "*", "wm_data*"))
+                  if glob.glob(os.path.join(d, "wave_*.npz")))
+
+
 def main():
-    dirs = sys.argv[1:]
-    if not dirs:
+    args = sys.argv[1:]
+    if not args:
         print(__doc__)
         return
+    dirs = all_data() if args == ["--all"] else args
+    missing = [d for d in dirs if not os.path.isdir(d)]
+    if missing:
+        raise SystemExit(f"not a folder: {', '.join(missing)} (give real wm_data folders, or --all for every run)")
     sys.path.insert(0, HERE)
     pieces = measure(dirs)
+    if not any(r["deaths"] for r in pieces.values()):
+        raise SystemExit("no deaths in that data: the table is left as it was")
+    old = {}
+    if os.path.exists(TABLE):
+        with open(TABLE, encoding="utf-8") as f:
+            old = json.load(f)
+    merged = dict(old.get("pieces", {}))       # kinds this data does not cover keep their earlier measurement
+    for nm, r in pieces.items():
+        if r["percentile"] is not None or nm not in merged or merged[nm].get("deaths", 0) <= r["deaths"]:
+            merged[nm] = r
+    sources = sorted(set(old.get("measured_from", [])) | set(dirs))
     with open(TABLE, "w", encoding="utf-8") as f:
         json.dump({"about": "how far each kind of lethal piece kills beyond its box (hazard_reach.py)",
-                   "measured_from": dirs, "body": BODY, "pieces": dict(sorted(pieces.items()))}, f, indent=1)
+                   "measured_from": sources, "body": BODY, "pieces": dict(sorted(merged.items()))}, f, indent=1)
     for nm, r in sorted(pieces.items(), key=lambda kv: -kv[1]["deaths"]):
         print(f"{nm[:28]:28s} deaths {r['deaths']:5d}  reach x {r['reach_x']:5.1f}  y {r['reach_y']:5.1f}"
               + (f"  (p{r['percentile']}, survivors inside {r['safe_inside']:.4f})" if r["percentile"] else "  (kept at BODY)"))

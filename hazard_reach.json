@@ -1,96 +1,126 @@
 {
  "about": "how far each kind of lethal piece kills beyond its box (hazard_reach.py)",
  "measured_from": [
+  "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\fake_wm\\wm_data",
+  "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\mpc_dev1\\wm_data_mpc",
+  "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\real_20261102-035612\\wm_data",
+  "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\real_20261102-165351\\wm_data",
+  "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\real_20261103-003413\\wm_data",
+  "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\real_20261103-010400\\wm_data",
+  "C:\\Users\\pahstoner\\PycharmProjects\\REA-MeatBoy\\smbrl\\runs\\real_20261103-010905\\wm_data",
+  "runs/real_20261102-035612/wm_data",
   "runs/real_20261102-165351/wm_data",
-  "runs/real_20261103-003413/wm_data",
-  "runs/real_20261102-035612/wm_data"
+  "runs/real_20261103-003413/wm_data"
  ],
  "body": 6.0,
  "pieces": {
   "ammo1": {
    "deaths": 970,
-   "safe": 209399,
+   "safe": 209191,
    "reach_x": 19.1,
    "reach_y": 27.2,
    "percentile": 90,
-   "safe_inside": 0.0076
+   "safe_inside": 0.0072
+  },
+  "buttholeidle": {
+   "deaths": 129,
+   "safe": 470,
+   "reach_x": 6.0,
+   "reach_y": 6.5,
+   "percentile": 90,
+   "safe_inside": 0.0
+  },
+  "buttholereload": {
+   "deaths": 164,
+   "safe": 605,
+   "reach_x": 6.0,
+   "reach_y": 6.4,
+   "percentile": 90,
+   "safe_inside": 0.0
   },
   "buttholeshoot": {
    "deaths": 183,
-   "safe": 741,
+   "safe": 763,
    "reach_x": 6.0,
    "reach_y": 6.0,
    "percentile": 90,
    "safe_inside": 0.0
   },
   "fire - large": {
-   "deaths": 234,
-   "safe": 38749,
+   "deaths": 542,
+   "safe": 82246,
    "reach_x": 6.0,
-   "reach_y": 10.0,
+   "reach_y": 13.1,
    "percentile": 75,
-   "safe_inside": 0.0041
+   "safe_inside": 0.0043
   },
   "fire - med": {
    "deaths": 394,
-   "safe": 13988,
+   "safe": 15394,
    "reach_x": 6.0,
    "reach_y": 6.0,
    "percentile": 75,
-   "safe_inside": 0.0067
+   "safe_inside": 0.0062
   },
   "fire - small": {
    "deaths": 12,
-   "safe": 30,
+   "safe": 39,
    "reach_x": 6.0,
    "reach_y": 6.0,
    "percentile": null
   },
   "forest - river copy": {
-   "deaths": 1603,
-   "safe": 92003,
-   "reach_x": 6.3,
+   "deaths": 3480,
+   "safe": 183838,
+   "reach_x": 6.0,
    "reach_y": 16.6,
    "percentile": 90,
-   "safe_inside": 0.0072
+   "safe_inside": 0.0074
   },
   "lava": {
-   "deaths": 628,
-   "safe": 71975,
-   "reach_x": 43.6,
+   "deaths": 1331,
+   "safe": 121593,
+   "reach_x": 42.7,
    "reach_y": 19.2,
    "percentile": 90,
    "safe_inside": 0.0004
   },
   "movin": {
    "deaths": 797,
-   "safe": 295945,
+   "safe": 293336,
    "reach_x": 6.0,
    "reach_y": 6.0,
    "percentile": null
   },
   "saw": {
-   "deaths": 10321,
-   "safe": 2060951,
+   "deaths": 10358,
+   "safe": 2068530,
    "reach_x": 8.6,
-   "reach_y": 8.3,
+   "reach_y": 8.4,
    "percentile": 75,
    "safe_inside": 0.0015
   },
+  "sawalt3": {
+   "deaths": 1,
+   "safe": 15,
+   "reach_x": 6.0,
+   "reach_y": 6.0,
+   "percentile": null
+  },
   "shooter1shoot": {
    "deaths": 1262,
-   "safe": 319035,
+   "safe": 321059,
    "reach_x": 6.0,
    "reach_y": 6.0,
    "percentile": null
   },
   "spinner2": {
    "deaths": 1658,
-   "safe": 18290,
+   "safe": 19941,
    "reach_x": 6.0,
    "reach_y": 60.0,
    "percentile": 50,
-   "safe_inside": 0.0093
+   "safe_inside": 0.0089
   }
  }
 }

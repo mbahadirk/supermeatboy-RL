@@ -619,11 +619,11 @@ def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float,
     gx, gy = lv.goals[0] if lv.goals else lv.spawn
     d = lv.goal_dist(x, y)
     c, r = lv.cell(x, y)
-    pad = np.pad(grid, K, constant_values=C_SOLID)
+    pad = np.pad(grid, K, constant_values=C_HAZARD)   # outside the level: death (realgame.js outOfLevel), not a wall
     rr, cc = min(max(r, -K), lv.H + K - 1) + K, min(max(c, -K), lv.W + K - 1) + K
     patch = pad[rr - K:rr + K + 1, cc - K:cc + K + 1]
     if patch.shape != (2 * K + 1, 2 * K + 1):
-        patch = np.full((2 * K + 1, 2 * K + 1), C_SOLID, dtype=np.float32)
+        patch = np.full((2 * K + 1, 2 * K + 1), C_HAZARD, dtype=np.float32)
     if opened:                                     # locks this agent's keys opened (open for it alone)
         patch = patch.copy()
         for lr, lc in opened:
@@ -654,9 +654,9 @@ def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float,
         fv[5] = 1.0 if np.hypot(ox_ - x, oy_ - y) <= max(r1, r2) else 0.0
     wv = np.array([wall_touch(lv, x, y, -1, opened), wall_touch(lv, x, y, 1, opened),
                    1.0 if len(s) > 5 and s[5] == WALL_SLIDE else 0.0], np.float32)
-    sp = np.pad(lv.surfaces(), K, constant_values=S_INSIDE)[rr - K:rr + K + 1, cc - K:cc + K + 1]
+    sp = np.pad(lv.surfaces(), K, constant_values=0.0)[rr - K:rr + K + 1, cc - K:cc + K + 1]   # outside: no surface
     if sp.shape != (2 * K + 1, 2 * K + 1):
-        sp = np.full((2 * K + 1, 2 * K + 1), S_INSIDE, dtype=np.float32)
+        sp = np.zeros((2 * K + 1, 2 * K + 1), dtype=np.float32)
     if lv.plat_cells:                              # platforms: a floor to ride (upright ones: a wall)
         sp = sp.copy()
         for pr, pc_, up in lv.plat_cells:

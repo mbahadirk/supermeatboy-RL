@@ -100,7 +100,7 @@ Interceptor.attach(img(0x4e9020), { onEnter(a) {
   curName = n; main = null; settle = 0; ready = false; agents = []; crowd = []; agentSet = new Set(); pendingWave = false; holdFrames = 0;
   keyPos = []; keyLocks = []; lockWord = new Map(); lockOpen = new Map(); keysOf = [];
   finishing = 0; finishRequested = false; best = null; leader = -1; wave = 0; frame = 0;
-  tilemap = null; levelOY = null; paths = []; prevTiles = null;   // the new level has its own tile map, pool and paths
+  tilemap = null; levelOY = null; levelBox = null; paths = []; prevTiles = null;   // the new level has its own tile map, pool and paths
   send({ ev: 'level', name: n });
 } });
 
@@ -164,7 +164,10 @@ function setupAgents() {
 }
 
 // static level facts from the game's memory: tile layer 0, origin, size; goal pieces (type flag 0x02)
-let tilemap = null, levelOY = null;
+let tilemap = null, levelOY = null, levelBox = null;   // levelBox: [left, right, top] edges of the map
+// out of the level: the player dies off the screen; our agents skip the game's own check (mode 2), so an agent
+// further than OUT_SIDE past the map's left / right / top edge (or OUT_BOTTOM below it) is dead
+const OUT_SIDE = 10, OUT_BOTTOM = 60;
 Interceptor.attach(img(0x465b00), { onEnter() { if (!tilemap) tilemap = this.context.ecx; } });
 function validTilemap(G) {                           // levels are centred: origin = -(size * 10)
   const W = rd(() => G.add(0x20).readU16()), H = rd(() => G.add(0x22).readU16());
@@ -196,6 +199,7 @@ function sendLevelInfo() {
   const W = G.add(0x20).readU16(), H = G.add(0x22).readU16();
   const ox = G.add(0x18).readFloat(), oy = G.add(0x1c).readFloat();
   levelOY = oy;
+  levelBox = [ox, ox + W * 20, oy + H * 20];
   const tiles = G.readPointer().readByteArray(W * H * 4);
   tileCount = W * H; prevTiles = new Uint32Array(tiles.slice(0));
   goalPieces = [];
@@ -534,7 +538,7 @@ function stepAgents() {
       }
       if (Math.hypot(x1 - x0, y1 - y0) > 150 && (jumpDbg++ < 40))   // (falling tops out near 50 per frame)
         send({ ev: 'debug', msg: `jump: agent ${i} wave ${wave} frame ${frame}: (${x0.toFixed(0)}, ${y0.toFixed(0)}) -> (${x1.toFixed(0)}, ${y1.toFixed(0)}) status ${status[i]}, frame gap ${gap} ms` });
-      if (status[i] === 0 && agents[i].add(0x88).readFloat() < levelOY - 60) status[i] = 1;
+      if (status[i] === 0 && outOfLevel(x1, y1)) status[i] = 1;
     }
   } finally {
     curAgent = -1; mask.writeU32(m0);
@@ -550,6 +554,10 @@ function stepAgents() {
   const quota = CFG.finish_quota > 0 ? Math.min(CFG.finish_quota, agents.length) : Infinity;
   if (status.filter(s => s === 2).length >= quota) endWave('quota');
   else if (status.every(s => s !== 0) || frame >= CFG.wave_frames) endWave(frame >= CFG.wave_frames ? 'time' : 'done');
+}
+function outOfLevel(x, y) {
+  if (levelOY !== null && y < levelOY - OUT_BOTTOM) return true;
+  return levelBox !== null && (x < levelBox[0] - OUT_SIDE || x > levelBox[1] + OUT_SIDE || y > levelBox[2] + OUT_SIDE);
 }
 function endWave(why) {
   send({ ev: 'wave_end', wave, frame, why, status: status.slice(), finish: finishFrame.slice() });

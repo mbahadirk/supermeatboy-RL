@@ -240,3 +240,16 @@ def test_hazard_boxes_grow_by_measured_reach():
     assert g[1] == (0.0, 0.0) and g[2] == (0.0, 0.0)                 # unknown kinds: the old 6-unit margin
     if "lava" in hazard_reach.load():
         assert g[0][0] > 0 and g[0][1] > 0
+
+
+@need_data
+def test_outside_the_level_is_deadly_in_the_agents_map():
+    import realgame as rg
+    import mpc.offline as off
+    lv = off.level_from_data(DATA, LEVEL)
+    grid = lv.grid_with_hazards([])
+    x, y = lv.ox + 10.0, lv.oy + lv.H * 10.0                 # the leftmost column, half way up
+    o = rg.observe(lv, grid, [x, y, 0.0, 0.0, 0, 0, 0, 0], None, 0.0, 0.0)
+    K = rg.K
+    patch = o[10:10 + (2 * K + 1) ** 2].reshape(2 * K + 1, 2 * K + 1)
+    assert (patch[:, :K] == rg.C_HAZARD).all()               # every column left of the map
