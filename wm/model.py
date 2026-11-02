@@ -4,7 +4,7 @@ An ensemble of E small MLPs. Each predicts, for one agent and one step:
   - position change and new velocity, as the correction to plain physics (wm.features.prior): a mean and a
     log-variance each (Gaussian), so the model says how sure
     it is (aleatoric); the spread between ensemble members says how much it has seen such a case (epistemic)
-  - next flags (airborne, on a wall, facing), death, finish, landing, blocked by a wall (logits)
+  - next flag bits that change during play (features.FLAG_BITS), death, finish, landing, blocked (logits)
   - next movement state (classes)
   - the step's reward
 The heads are slices of one output layer, kept apart in `split` / `predict` and in the loss.
@@ -84,8 +84,10 @@ class WorldModel(nn.Module):
                 "reward": h["reward"].mean(0)}
 
     def save(self, path: str, info: dict | None = None):
+        import json                          # plain Python values only: the file then loads with weights_only
+        info = json.loads(json.dumps(info or {}, default=str))
         torch.save({"state": self.state_dict(), "members": len(self.members), "n_in": self.mu.numel(),
-                    "info": info or {}}, path)
+                    "info": info}, path)
 
     @classmethod
     def load(cls, path: str) -> "WorldModel":

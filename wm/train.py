@@ -22,7 +22,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from wm.features import build, BIN_NAMES, RES_SCALE      # noqa: E402
+from wm.features import build, BIN_NAMES, RES_SCALE, EVENTS   # noqa: E402
 from wm.model import WorldModel                           # noqa: E402
 
 GROUPS = ["ground", "air", "wall"]
@@ -97,6 +97,34 @@ def report(model, d: dict, idx: np.ndarray) -> str:
     return "\n".join(lines)
 
 
+def fit(model, ts: dict, d: dict, va_idx, epochs: int, lr: float, batch: int, t0: float):
+    """Train on the arrays in ts; held-out loss on d[va_idx] after each epoch."""
+    n = len(ts["X"])
+    batch = max(1, min(batch, n))
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=epochs * max(1, n // batch), pct_start=0.1)
+    T = lambda a, dt=torch.float32: torch.as_tensor(a, dtype=dt)
+    rng = np.random.default_rng(0)
+    for ep in range(epochs):
+        perm = rng.permutation(n)
+        acc = []
+        for i in range(0, n - batch + 1, batch):
+            b = perm[i:i + batch]
+            loss, parts = model.loss(T(ts["X"][b]), T(ts["yc"][b]), T(ts["yb"][b]), T(ts["ys"][b], torch.long), T(ts["yr"][b]))
+            opt.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            opt.step()
+            sched.step()
+            acc.append([loss.item()] + list(parts.values()))
+        a = np.mean(acc, 0)
+        with torch.no_grad():
+            vb = va_idx[:20000]
+            vl, _ = model.loss(T(d["X"][vb]), T(d["yc"][vb]), T(d["yb"][vb]), T(d["ys"][vb], torch.long), T(d["yr"][vb]))
+        print(f"epoch {ep + 1}/{epochs}: train loss {a[0]:.3f} (nll {a[1]:.3f}, bce {a[2]:.3f}, ce {a[3]:.3f}, "
+              f"mse {a[4]:.3f}), held-out loss {vl.item():.3f}  [{time.time() - t0:.0f}s]", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("data", nargs="+", help="wm_data folders")
@@ -107,6 +135,11 @@ def main():
     ap.add_argument("--max-samples", type=int, default=500000, help="transitions used (all deaths / finishes kept)")
     ap.add_argument("--levels", nargs="*", default=None, help="only these levels")
     ap.add_argument("--threads", type=int, default=4, help="CPU threads (leave some for the game)")
+    ap.add_argument("--init", default=None, help="start from this wm_model.pt (then --epochs is not used)")
+    ap.add_argument("--self-correct", type=int, default=0, metavar="K",
+                    help="then train on the model's own K-step rollouts (wm/selfcorrect.py)")
+    ap.add_argument("--sc-starts", type=int, default=15, help="rollout start frames per wave for --self-correct")
+    ap.add_argument("--sc-epochs", type=int, default=4)
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
     out = args.out or os.path.join(HERE, "runs", "wm_" + time.strftime("%Y%m%d-%H%M%S"))
@@ -124,34 +157,27 @@ def main():
           f"{len(np.unique(d['shard']))} waves, levels {', '.join(sorted(set(d['level'])))}  [{time.time() - t0:.0f}s]",
           flush=True)
 
-    model = WorldModel(members=args.members)
-    model.set_norm(torch.as_tensor(d["X"][tr_idx[:200000]], dtype=torch.float32))
-    pos = d["yb"][tr_idx].mean(0)
-    pw = np.where(np.isin(np.arange(len(BIN_NAMES)), [3, 4, 5, 6]), np.clip((1 - pos) / np.maximum(pos, 1e-6), 1, 50), 1)
-    model.pos_weight.copy_(torch.as_tensor(pw, dtype=torch.float32))
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
-    steps = args.epochs * max(1, len(tr_idx) // args.batch)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=1e-3, total_steps=steps, pct_start=0.1)
-    T = lambda a, dt=torch.float32: torch.as_tensor(a, dtype=dt)
-    rng = np.random.default_rng(0)
-    for ep in range(args.epochs):
-        perm = rng.permutation(tr_idx)
-        acc = []
-        for i in range(0, len(perm) - args.batch + 1, args.batch):
-            b = perm[i:i + args.batch]
-            loss, parts = model.loss(T(d["X"][b]), T(d["yc"][b]), T(d["yb"][b]), T(d["ys"][b], torch.long), T(d["yr"][b]))
-            opt.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-            opt.step()
-            sched.step()
-            acc.append([loss.item()] + list(parts.values()))
-        a = np.mean(acc, 0)
-        with torch.no_grad():
-            vb = va_idx[:20000]
-            vl, _ = model.loss(T(d["X"][vb]), T(d["yc"][vb]), T(d["yb"][vb]), T(d["ys"][vb], torch.long), T(d["yr"][vb]))
-        print(f"epoch {ep + 1}/{args.epochs}: train loss {a[0]:.3f} (nll {a[1]:.3f}, bce {a[2]:.3f}, ce {a[3]:.3f}, "
-              f"mse {a[4]:.3f}), held-out loss {vl.item():.3f}  [{time.time() - t0:.0f}s]", flush=True)
+    if args.init:                            # continue from a trained model
+        model = WorldModel.load(args.init)
+        print(f"starting from {args.init}")
+    else:
+        model = WorldModel(members=args.members)
+        model.set_norm(torch.as_tensor(d["X"][tr_idx[:200000]], dtype=torch.float32))
+        pos = d["yb"][tr_idx].mean(0)
+        pw = np.where(np.isin(np.arange(len(BIN_NAMES)), list(EVENTS.values())),
+                      np.clip((1 - pos) / np.maximum(pos, 1e-6), 1, 50), 1)
+        model.pos_weight.copy_(torch.as_tensor(pw, dtype=torch.float32))
+    train_set = {k: d[k][tr_idx] for k in ("X", "yc", "yb", "ys", "yr")}
+    if not args.init:
+        fit(model, train_set, d, va_idx, args.epochs, 1e-3, args.batch, t0)
+    if args.self_correct:                    # then on its own rollouts (wm/selfcorrect.py)
+        from wm.selfcorrect import generate
+        sc = generate(args.data, model, K=args.self_correct, starts=args.sc_starts, log=lambda *a: None)
+        print(f"self-correction: {len(sc.get('X', []))} samples from the model's own {args.self_correct}-step "
+              f"rollouts  [{time.time() - t0:.0f}s]", flush=True)
+        if sc:
+            train_set = {k: np.concatenate([train_set[k], sc[k]]) for k in train_set}
+            fit(model, train_set, d, va_idx, args.sc_epochs, 3e-4, args.batch, t0)
 
     info = {"data": args.data, "levels": sorted(set(d["level"])), "train": int(len(tr_idx)), "held_out": int(len(va_idx))}
     model.save(os.path.join(out, "wm_model.pt"), info)

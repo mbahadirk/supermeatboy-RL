@@ -14,7 +14,8 @@ Input (FEAT_DIM floats):
   hazards     the 3 nearest (box edge distance): dx, dy, distance (/100), half w, half h (/50)         15
   platform    the nearest: dx, dy (/100), upright, vx, vy (/300), present                              6
 
-Targets: position change and new velocity as the correction to plain physics (`prior`: the same velocity
+Targets: the next flag bits that change during play (FLAG_BITS), events, and position change and new
+velocity as the correction to plain physics (`prior`: the same velocity
 with gravity in the air, moved by velocity x time step), scaled by RES_SCALE; next flags (airborne, on a wall, facing);
 death, finish; landing (airborne -> not); blocked (horizontal speed cut by a wall); next movement state;
 reward of the step (/5).
@@ -36,7 +37,11 @@ N_HAZ = 3
 AIR, WALL, FACE = 0x2, 0x200, 0x1
 CONT_NAMES = ["vx", "vy", "dt", "held", "in-tile x", "in-tile y", "wind x", "wind y"]
 FEAT_DIM = len(CONT_NAMES) + 32 + N_STATES + N_ACTIONS + 4 * (2 * P + 1) ** 2 + 5 * N_HAZ + 6
-BIN_NAMES = ["airborne", "on wall", "facing", "death", "finish", "landing", "blocked"]
+# the flag bits that change during play (measured on real data), predicted so rollouts can carry them on
+FLAG_BITS = [0x2, 0x200, 0x1, 0x4, 0x20, 0x800, 0x2000, 0x8000000]
+BIN_NAMES = ["airborne", "on wall", "facing", "flag 0x4", "flag 0x20", "flag 0x800", "flag 0x2000", "flag 0x8000000",
+             "death", "finish", "landing", "blocked"]
+EVENTS = {n: BIN_NAMES.index(n) for n in ("death", "finish", "landing", "blocked")}
 DT_DEFAULT = 33.0                      # ms (median with 100 agents)
 RES_SCALE = np.array([2.0, 2.0, 40.0, 60.0], np.float32)   # dx, dy, vx, vy corrections (game units)
 GRAVITY = 550.0
@@ -193,8 +198,8 @@ def targets(s, s2, r, pri):
     cont = (raw - pri) / RES_SCALE
     air0, air1 = (s["flags"] & AIR) != 0, (s2["flags"] & AIR) != 0
     blocked = (np.abs(s["vx"]) > 40) & (np.abs(s2["vx"]) < 0.25 * np.abs(s["vx"]))
-    binary = np.stack([air1, (s2["flags"] & WALL) != 0, (s2["flags"] & FACE) != 0, s2["status"] == 1,
-                       s2["status"] == 2, air0 & ~air1, blocked], 1)
+    binary = np.stack([(s2["flags"] & b) != 0 for b in FLAG_BITS] +
+                      [s2["status"] == 1, s2["status"] == 2, air0 & ~air1, blocked], 1)
     rew = np.clip(np.nan_to_num(r) / 5.0, -10, 10)
     return cont.astype(np.float32), binary.astype(np.float32), np.clip(s2["state"], 0, N_STATES - 1), \
         rew.astype(np.float32)
@@ -282,7 +287,7 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print) -> dict:
     n = len(out["X"])
     if max_samples and n > max_samples:        # keep every rare event (deaths, finishes), sample the rest
         rng = np.random.default_rng(seed)
-        rare = (out["yb"][:, 3] > 0) | (out["yb"][:, 4] > 0)
+        rare = (out["yb"][:, EVENTS["death"]] > 0) | (out["yb"][:, EVENTS["finish"]] > 0)
         idx = np.concatenate([np.nonzero(rare)[0],
                               rng.choice(np.nonzero(~rare)[0], max_samples - int(rare.sum()), replace=False)])
         idx.sort()
