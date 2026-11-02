@@ -69,7 +69,7 @@ def main():
     gen = waves_of(args.data, args.level)
     ref_rows, ref_world = next(gen)                       # an earlier wave: the hazards' recording
     rows, world = next(gen, (ref_rows, ref_world))
-    static, _ = rg.hazard_boxes(world[0].get("hz", []), lv.hz_keep)
+    static, _ = rg.hazard_boxes(world[0].get("hz", []), lv.hz_keep, lv.hz_grow)
     routes = Planner(lv.words0, lv.ox, lv.oy, lv.spawn, lv.goals, static, [], lv.keys, lv.bandages,
                      list(lv.portals)).find(1)
     route = routes[0] if routes else None
@@ -84,7 +84,7 @@ def main():
     keep = lv.hz_keep
     as_msg = lambda w: {**w, "frame": w["f"]}            # recorded frames say "f", the game's messages "frame"
     for w in ref_world:                                   # the earlier wave, frame by frame: the recording
-        mpc.frame(as_msg(w), keep)
+        mpc.frame(as_msg(w), keep, lv.hz_grow)
     mpc.new_wave(1)
     wf = {w["f"]: w for w in world}
     frames = sorted(wf)
@@ -94,7 +94,7 @@ def main():
         by_frame.setdefault(int(r["frame"]), []).append(r)
     ms, done = [], 0
     for f in frames:
-        mpc.frame(as_msg(wf[f]), keep)
+        mpc.frame(as_msg(wf[f]), keep, lv.hz_grow)
         if f not in set(frames[i] for i in picks):
             continue
         alive = [r for r in by_frame.get(f, []) if r["status"] == 0]
@@ -105,7 +105,7 @@ def main():
              int(r["keys"])]
         probs = value_fn = None
         if policy is not None and route is not None:
-            boxes, _ = rg.hazard_boxes(wf[f].get("hz", []), lv.hz_keep)
+            boxes, _ = rg.hazard_boxes(wf[f].get("hz", []), lv.hz_keep, lv.hz_grow)
             grid = lv.grid_with_hazards(boxes)
 
             def obs_of(x, y, vx, vy, flags, state, held):

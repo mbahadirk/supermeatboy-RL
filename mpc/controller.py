@@ -73,8 +73,9 @@ class MPC:
         st, self.stats = self.stats, self._new_stats()
         return st
 
-    def frame(self, m: dict, keep):
-        """Every frame before planning: tile changes, the level's moving parts, the time step."""
+    def frame(self, m: dict, keep, grow=None):
+        """Every frame before planning: tile changes, the level's moving parts, the time step. grow: per piece,
+        its measured extra kill reach (realgame.Level.hz_grow) for the hazard check (not the model inputs)."""
         if self.geom is None:
             return
         for idx, word in m.get("tc") or []:
@@ -85,7 +86,7 @@ class MPC:
             self.dt_warned = True
             print(f"[mpc] the game's time step changed: {self.dt:.2f} -> {dt:.2f} ms (is the step lock off?)", flush=True)
         self.dt = dt
-        self.future.observe(m["frame"], m.get("hz", []), m.get("pf"), m.get("sh", []), keep, fans, dt)
+        self.future.observe(m["frame"], m.get("hz", []), m.get("pf"), m.get("sh", []), keep, fans, dt, grow)
 
     # ---- one decision --------------------------------------------------------------------------------
     def plan(self, agent: int, s: list, held: int, frame: int, route, reached, lv, probs=None, value_fn=None,

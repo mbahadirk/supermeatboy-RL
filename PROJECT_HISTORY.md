@@ -140,6 +140,27 @@ Stop with Ctrl+C or by creating `runs/<name>/STOP`; never kill the process (that
 - **Fix:** open cells that cannot be reached from the spawn, goal, keys or portals without crossing a
   wall or a fixed hazard are filled in, as hazard or solid. Pockets over 150 cells stay open.
 
+### How far hazards really kill (World 4 lava and fire)
+
+- **Problem:** the map counted a piece as deadly within 6 units of its box (Meat Boy's half size), for
+  every kind of piece.
+  - On 4-6, lava kills about 19 units above its strip and 40+ units past its ends, and fire falls 17 units
+    above and below.
+  - So the floor between lava strips, the gaps between stacked fire pieces and the top of a lava pit looked
+    open.
+  - Routes went through them, and only 35% of the deaths on 4-6 were in cells the map called deadly.
+- **Fix:** `hazard_reach.py` measures, per kind of piece, how far beyond its box agents die versus how
+  close survivors get (along the piece's own axes, from recorded deaths: about 18,000 in 3 runs).
+  - The result goes to `hazard_reach.json`. `realgame.hazard_boxes` grows each box by that much, so the
+    agents' map, sealed pockets, routes, monitor and the planner's hazard check all use it.
+  - Kinds without enough evidence keep 6 units, and a reach is never below 6.
+  - On 4-6: deaths in deadly cells went from 35% to 50% and the right lava pit is sealed; survivors in
+    deadly cells stay at 0.07%.
+  - On 1-9: deaths in deadly cells went from 69% to 91%.
+  - The deaths still left in open cells happen where survivors also pass all the time (shots, moving
+    pieces): timing, not a deadly cell.
+  - Re-measure after collecting on new worlds: `python smbrl/hazard_reach.py <run>/wm_data ...`.
+
 ### Wall climbing
 
 - **Problem:** a wall jump needs a new jump press, and agents could not see whether their jump key was

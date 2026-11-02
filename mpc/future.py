@@ -26,7 +26,7 @@ class FutureWorld:
 
     def new_level(self):
         self.ref: dict[int, tuple] = {}       # wave frame -> (hz raw, pf, sh) of the reference recording
-        self.keep, self.fans = None, []
+        self.keep, self.fans, self.grow = None, [], None
         self.new_wave()
 
     def new_wave(self):
@@ -42,9 +42,11 @@ class FutureWorld:
         self.last = None                      # (frame, hz, pf, sh, dt_ms) now
         self.prev = None                      # the frame before
 
-    def observe(self, frame: int, hz: list, pf, sh, keep, fans, dt_ms: float):
+    def observe(self, frame: int, hz: list, pf, sh, keep, fans, dt_ms: float, grow=None):
         if keep is not None:
             self.keep = keep
+        if grow is not None:
+            self.grow = grow
         if fans is not None:
             self.fans = fans
         rec = (hz or [], pf or [], sh or [])
@@ -110,9 +112,16 @@ class FutureWorld:
             shots.append((s[1], s[2], s[3], v))
         worlds = [World(hz_k[k], pf_k[k] or None, (pf_k[k - 1] if k else (self.prev[2] if self.prev else None)) or None,
                         dt_s, list(self.fans)) for k in range(H)]
+        # the check keeps the measured kill reach of each kind of piece (hazard_reach.py); the model inputs
+        # above keep the game's sizes
+        g = np.array([self.grow[j] for j in range(len(hz0)) if self.keep is None or j >= len(self.keep) or self.keep[j]]
+                     if self.grow is not None and len(self.grow) >= len(hz0) else np.zeros((0, 2))).reshape(-1, 2)
         check = []
         for k in range(1, H + 1):
             b, r = hz_k[k], radius[k]
+            if len(g) == len(b) and len(b):
+                b = b.copy()
+                b[:, 2:4] += g
             if shots:
                 t = k * dt_s
                 sb = np.array([(x + vx * t, y + vy * t, rad, rad, 0.0) for x, y, rad, (vx, vy) in shots])

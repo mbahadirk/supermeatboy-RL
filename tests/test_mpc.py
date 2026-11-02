@@ -227,3 +227,16 @@ def test_later_death_beats_sooner_death():
     assert 2.5 < sc["death_step"][0] < 3.5 and 13.5 < sc["death_step"][1] < 14.5
     sc = score(_fake_out(5, [late, safe], K), rem, Weights())
     assert sc["total"][1] > sc["total"][0] + 5.0 and sc["death_step"][1] == -1
+
+
+def test_hazard_boxes_grow_by_measured_reach():
+    import realgame
+    import hazard_reach
+    hz = [[0.0, 0.0, 20.0, 10.0, 1.0, 1.0, 0.0], [50.0, 0.0, 20.0, 10.0, 1.0, 1.0, 0.0]]
+    plain, _ = realgame.hazard_boxes(hz, [True, True])
+    grown, _ = realgame.hazard_boxes(hz, [True, True], [(4.0, 10.0), (0.0, 0.0)])
+    assert plain[0][2:4] == (10.0, 5.0) and grown[0][2:4] == (14.0, 15.0) and grown[1] == plain[1]
+    g = hazard_reach.growth(["lava", "no such piece", None])
+    assert g[1] == (0.0, 0.0) and g[2] == (0.0, 0.0)                 # unknown kinds: the old 6-unit margin
+    if "lava" in hazard_reach.load():
+        assert g[0][0] > 0 and g[0][1] > 0

@@ -81,6 +81,7 @@ import torch
 import torch.nn as nn
 
 from realpath import Planner, fitness, PATH_RGB, box_distance, tile_classes
+import hazard_reach
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 JS = os.path.join(HERE, "realgame.js")
@@ -421,6 +422,7 @@ class Level:
     def set_lethal(self, types: list, ids=None):
         nm = lambda t: (self.names[t].lower() if self.names and 0 <= t < len(self.names) else None)
         self.hz_keep = [not (nm(t) and nm(t).startswith(DECOR)) for t in types]
+        self.hz_grow = hazard_reach.growth([nm(t) for t in types])   # measured kill reach (hazard_reach.py)
         self.hz_ids = list(ids) if ids is not None else [str(k) for k in range(len(types))]
 
     def _lock_groups(self) -> list[list[int]]:
@@ -539,10 +541,12 @@ class Level:
         return g
 
 
-def hazard_boxes(hz: list, keep=None) -> tuple[list, list]:
+def hazard_boxes(hz: list, keep=None, grow=None) -> tuple[list, list]:
     """Lethal pieces [x, y, size w, size h, scale x, scale y, angle] (realgame.js; size from the game's
     FUN_004ca860 at scale 1) as rotated boxes (x, y, half w, half h, angle). keep: which ones are real hazards
-    (not decoration). Returns the boxes and the indices of the entries kept."""
+    (not decoration). grow: per piece (x, y) added to the half sizes, how much further than the body size the
+    piece really kills (hazard_reach.py, measured from deaths; Level.hz_grow). Returns the boxes and the
+    indices of the entries kept."""
     out, kept = [], []
     for k, h in enumerate(hz):
         if keep is not None and k < len(keep) and not keep[k]:
@@ -551,7 +555,8 @@ def hazard_boxes(hz: list, keep=None) -> tuple[list, list]:
         sx, sy = abs(sx or 1.0), abs(sy or 1.0)
         if w <= 0 and hgt <= 0:
             w = hgt = 24.0
-        out.append((x, y, 0.5 * w * sx, 0.5 * hgt * sy, ang))
+        gx, gy = grow[k] if grow is not None and k < len(grow) else (0.0, 0.0)
+        out.append((x, y, 0.5 * w * sx + gx, 0.5 * hgt * sy + gy, ang))
         kept.append(k)
     return out, kept
 
@@ -867,6 +872,10 @@ class Trainer:
         n = info["agents"]
         lv = self.level
         decor = sum(1 for k in lv.hz_keep if not k)
+        grown = sorted({lv.names[t] for t, g, k in zip(info.get("lethalTypes", []), lv.hz_grow, lv.hz_keep)
+                        if k and (g[0] or g[1]) and lv.names and 0 <= t < len(lv.names)})
+        if grown:
+            print(f"[level] {info['name']}: measured kill reach used for {', '.join(grown)} (hazard_reach.json)", flush=True)
         print(f"[level] {info['name']}: {lv.W}x{lv.H}, {len(lv.goals)} goal(s), {info['lethal']} lethal pieces"
               + (f" ({decor} of them decoration)" if decor else "")
               + (f", {len(lv.keys)} key(s)" if lv.keys else "") + (f", {len(lv.bandages)} bandage(s)" if lv.bandages else "")
@@ -880,7 +889,7 @@ class Trainer:
             print(f"[keys] {lv.name}: " + ", ".join(f"key {k + 1} opens {len(g)} lock tile(s)"
                                                    for k, g in enumerate(lv.lock_groups)), flush=True)
         if "hz" in info:                     # the game waits for this (no agent moves meanwhile)
-            self.boxes, kept = hazard_boxes(info["hz"], lv.hz_keep)
+            self.boxes, kept = hazard_boxes(info["hz"], lv.hz_keep, lv.hz_grow)
             self.track_hazards(self.boxes, [lv.hz_ids[k] for k in kept])
             self.build_paths(reset=False)
 
@@ -973,7 +982,7 @@ class Trainer:
             if lv.hz_changes <= 5:
                 print(f"[hazards] {lv.name}: pieces came or went, {before} -> {len(lv.hz_ids)} lethal "
                       f"(frame {m['frame']})", flush=True)
-        boxes, kept = hazard_boxes(m["hz"], lv.hz_keep)
+        boxes, kept = hazard_boxes(m["hz"], lv.hz_keep, lv.hz_grow)
         ids = [lv.hz_ids[k] if k < len(lv.hz_ids) else str(k) for k in kept]
         for sid, x, y, rad in m.get("sh", []):   # flying shots (seen by the agents, not planned around)
             boxes.append((x, y, rad, rad, 0.0))
@@ -995,7 +1004,7 @@ class Trainer:
             self.wm.frame(m, list(lv.hz_ids), list(lv.hz_keep))
             self.wm.char(m["frame"], data)
         if self.mpc:
-            self.mpc.frame(m, list(lv.hz_keep))
+            self.mpc.frame(m, list(lv.hz_keep), list(lv.hz_grow))
         moving = np.hypot(self.hz_vel[:, 0], self.hz_vel[:, 1]) > 8.0 if len(pos) else np.zeros(0, bool)
         if not self.paths_built:             # (normally built when the level info came)
             self.build_paths(reset=m["frame"] != 0)

@@ -1,0 +1,96 @@
+{
+ "about": "how far each kind of lethal piece kills beyond its box (hazard_reach.py)",
+ "measured_from": [
+  "runs/real_20261102-165351/wm_data",
+  "runs/real_20261103-003413/wm_data",
+  "runs/real_20261102-035612/wm_data"
+ ],
+ "body": 6.0,
+ "pieces": {
+  "ammo1": {
+   "deaths": 970,
+   "safe": 209399,
+   "reach_x": 19.1,
+   "reach_y": 27.2,
+   "percentile": 90,
+   "safe_inside": 0.0076
+  },
+  "buttholeshoot": {
+   "deaths": 183,
+   "safe": 741,
+   "reach_x": 6.0,
+   "reach_y": 6.0,
+   "percentile": 90,
+   "safe_inside": 0.0
+  },
+  "fire - large": {
+   "deaths": 234,
+   "safe": 38749,
+   "reach_x": 6.0,
+   "reach_y": 10.0,
+   "percentile": 75,
+   "safe_inside": 0.0041
+  },
+  "fire - med": {
+   "deaths": 394,
+   "safe": 13988,
+   "reach_x": 6.0,
+   "reach_y": 6.0,
+   "percentile": 75,
+   "safe_inside": 0.0067
+  },
+  "fire - small": {
+   "deaths": 12,
+   "safe": 30,
+   "reach_x": 6.0,
+   "reach_y": 6.0,
+   "percentile": null
+  },
+  "forest - river copy": {
+   "deaths": 1603,
+   "safe": 92003,
+   "reach_x": 6.3,
+   "reach_y": 16.6,
+   "percentile": 90,
+   "safe_inside": 0.0072
+  },
+  "lava": {
+   "deaths": 628,
+   "safe": 71975,
+   "reach_x": 43.6,
+   "reach_y": 19.2,
+   "percentile": 90,
+   "safe_inside": 0.0004
+  },
+  "movin": {
+   "deaths": 797,
+   "safe": 295945,
+   "reach_x": 6.0,
+   "reach_y": 6.0,
+   "percentile": null
+  },
+  "saw": {
+   "deaths": 10321,
+   "safe": 2060951,
+   "reach_x": 8.6,
+   "reach_y": 8.3,
+   "percentile": 75,
+   "safe_inside": 0.0015
+  },
+  "shooter1shoot": {
+   "deaths": 1262,
+   "safe": 319035,
+   "reach_x": 6.0,
+   "reach_y": 6.0,
+   "percentile": null
+  },
+  "spinner2": {
+   "deaths": 1658,
+   "safe": 18290,
+   "reach_x": 6.0,
+   "reach_y": 60.0,
+   "percentile": 50,
+   "safe_inside": 0.0093
+  }
+ }
+}
