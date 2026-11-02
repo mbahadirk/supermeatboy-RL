@@ -168,3 +168,37 @@ def test_held_out_level_gives_no_data(tmp_path):
     _drive(t, name=name)
     assert t.protected and not t.updates
     assert not list((tmp_path / "held" / "wm_data").glob("wave_*.npz"))
+
+
+@need_data
+def test_hazard_filter_does_not_change_predictions():
+    """Leaving far hazards out of the model's inputs (mpc.controller) gives the same rollout."""
+    from dataclasses import replace
+    from mpc.controller import _relevant, REACH, HAZ_FAR
+    model = WorldModel.load(MODEL).eval()
+    geom = LevelGeom(*load_level(DATA, LEVEL))
+    rows, world = one_wave()
+    wf = {w["f"]: w for w in world}
+    f0 = sorted(wf)[200]
+    s0 = rows[(rows["frame"] == f0) & (rows["status"] == 0)][:1]
+    H = 16
+    worlds = [World.from_record(wf[f0 + k], wf.get(f0 + k - 1)) for k in range(H)]
+    assert max(len(w.boxes) for w in worlds) > 3
+    reach = REACH * H * 16.7 / 1000.0 + HAZ_FAR
+    few = [replace(w, boxes=w.boxes[_relevant(w.boxes, float(s0["x"][0]), float(s0["y"][0]), reach)]) for w in worlds]
+    acts = np.random.default_rng(3).integers(0, 10, (24, H))
+    s = np.repeat(s0, 24)
+    a = rollout_batched(model, geom, s, acts, np.full(H, 16.7), worlds)
+    b = rollout_batched(model, geom, s, acts, np.full(H, 16.7), few)
+    np.testing.assert_allclose(a["x"], b["x"], atol=1e-3)
+    np.testing.assert_allclose(a["alive"], b["alive"], atol=1e-4)
+
+
+def test_box_distances_match_box_distance():
+    from realpath import box_distance
+    from wm.features import box_distances
+    rng = np.random.default_rng(4)
+    boxes = np.c_[rng.normal(0, 100, (7, 2)), rng.uniform(2, 40, (7, 2)), rng.uniform(-3, 3, 7)]
+    x, y = rng.normal(0, 150, 500), rng.normal(0, 150, 500)
+    one = np.stack([box_distance(x, y, b) for b in boxes], 1)
+    np.testing.assert_allclose(box_distances(x, y, boxes), one, rtol=1e-12, atol=1e-9)

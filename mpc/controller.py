@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 
 import numpy as np
 import torch
@@ -28,6 +29,7 @@ from wm.rollout import rollout_batched
 MIN_STEPS = 4            # mpc+ppo: a plan with fewer rolled-out steps than this goes to PPO
 UNSURE_STEP1 = TILE      # mpc+ppo: members already this far apart after one step: PPO decides
 REACH = 700.0            # units/s: hazards further than this x the horizon (+ their size) are not checked
+HAZ_FAR = 300.0          # wm.features.hazard_features: offsets and distances are clipped at 3 x 100 units
 
 
 class MPC:
@@ -99,6 +101,9 @@ class MPC:
         x0, y0 = float(s[0]), float(s[1])
         reach = REACH * H * dt / 1000.0
         check = [(b[_near(b, x0, y0, reach)], r[_near(b, x0, y0, reach)]) for b, r in check]
+        # the model sees the 3 nearest hazards and anything 300+ units away as "far" (wm.features): hazards
+        # that cannot come that close during the plan are left out of its inputs (the 3 nearest always stay)
+        worlds = [replace(w, boxes=w.boxes[_relevant(w.boxes, x0, y0, reach + HAZ_FAR)]) for w in worlds]
         row = np.zeros(1, ROW)
         row["x"], row["y"], row["vx"], row["vy"] = s[0], s[1], s[2], s[3]
         row["flags"], row["state"], row["status"] = int(s[4]) & 0xffffffff, s[5], 0
@@ -183,6 +188,16 @@ def _near(boxes: np.ndarray, x: float, y: float, reach: float) -> np.ndarray:
         return np.zeros(0, bool)
     size = np.hypot(boxes[:, 2], boxes[:, 3])
     return np.hypot(boxes[:, 0] - x, boxes[:, 1] - y) < reach + size + 40.0
+
+
+def _relevant(boxes: np.ndarray, x: float, y: float, reach: float) -> np.ndarray:
+    """Hazards within reach (+ their size), and always the 3 nearest (the model's 3 hazard slots)."""
+    keep = _near(boxes, x, y, reach)
+    if len(boxes) > 3:
+        keep[np.argsort(np.hypot(boxes[:, 0] - x, boxes[:, 1] - y))[:3]] = True
+    else:
+        keep[:] = True
+    return keep
 
 
 def _remaining(route, leg: int, lv):

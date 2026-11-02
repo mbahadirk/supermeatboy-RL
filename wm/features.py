@@ -114,13 +114,23 @@ def hazard_boxes(hz: list, keep=None) -> np.ndarray:
     return np.array(out, np.float64).reshape(-1, 5)
 
 
+def box_distances(x, y, boxes) -> np.ndarray:
+    """realpath.box_distance for every box at once: (n points, M boxes)."""
+    b = np.asarray(boxes, np.float64).reshape(-1, 5)
+    c, s = np.cos(b[:, 4]), np.sin(b[:, 4])
+    dx = np.asarray(x, np.float64)[:, None] - b[None, :, 0]
+    dy = np.asarray(y, np.float64)[:, None] - b[None, :, 1]
+    u, v = dx * c + dy * s, -dx * s + dy * c
+    return np.hypot(np.maximum(np.abs(u) - b[:, 2], 0.0), np.maximum(np.abs(v) - b[:, 3], 0.0))
+
+
 def hazard_features(x, y, boxes) -> np.ndarray:
     n = len(x)
     out = np.zeros((n, N_HAZ, 5), np.float32)
     out[:, :, 2] = 3.0                         # no hazard: far away
     if not len(boxes):
         return out.reshape(n, -1)
-    d = np.stack([box_distance(x, y, b) for b in boxes], 1)          # (n, boxes)
+    d = box_distances(x, y, boxes)                                   # (n, boxes)
     order = np.argsort(d, 1)[:, :N_HAZ]
     for j in range(order.shape[1]):
         b = boxes[order[:, j]]

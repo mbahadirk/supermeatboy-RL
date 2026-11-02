@@ -266,3 +266,80 @@ error. Both numbers are logged to `mpc_checks.csv` for the step 3 validation.
 - **Held-out set:** is 1-18, 1-19, 1-20, 2-5, 2-6, 2-7 fine? Once chosen, nothing trains on them.
 - **Moving platforms:** which level has them (the one in your earlier screenshot)? A few waves there would
   show whether platforms repeat like hazards do.
+
+## Step 2 results: retrained world model and minimal single-agent MPC
+
+### World model on the locked game (`runs/wm_locked`)
+
+**Data and training:**
+- Data: run `real_20261102-165351` (locked, levels 1-1 to 1-17) and the earlier run (variable steps,
+  1-5 to 1-11).
+- 7% of each attempt's steps plus every death and finish: 1.42 million transitions, every 5th attempt
+  held out.
+- 8 epochs, then self-correction on 8-step rollouts (35% share).
+- No held-out evaluation level appears in the data (`eval_levels.json`).
+
+**One step ahead** (held-out attempts): position error 0.10 median / 0.64 at 90%; deaths AUC 0.996,
+recall 0.96.
+
+**Multi-step** (`wm.evaluate`, held-out attempts of the locked run, 67,494 rollouts with the agents' real
+actions):
+
+| steps ahead (16.7 ms each) | new model, position median / 90% | old model (`wm_phase4mix`) on the same data |
+|---|---|---|
+| 1 | 0.11 / 0.43 | 0.50 / 2.26 |
+| 4 | 0.59 / 2.02 | 2.71 / 11.6 |
+| 8 | 1.47 / 4.98 | 7.25 / 30.6 |
+| 16 | 3.70 / 13.9 | 19.7 / 80.3 |
+| 32 | 8.86 / 38.1 | 53.3 / 177 |
+
+- **Deaths within 32 steps:** AUC 0.955, recall 0.95 (old model: 0.81, 0.69).
+- **First landing:** the step is right at the median (90%: off by 3), the spot is off by 2.3 units (90%:
+  13.5).
+- **Ensemble spread vs error:** rank correlation about 0.6. The spread is about 0.6x the real error, so the
+  planner's rule of "2 x spread" is on the safe side.
+- **Too cautious one step ahead:** 100% of true values fall within 2 predicted standard deviations.
+
+### The planner (`mpc/`, `realgame.py --control mpc|mpc+ppo`)
+
+**Built as proposed:**
+- Future hazards come from the level's recording, or are extrapolated with a growing safety radius.
+- Candidates: previous plan and mutations, PPO's top actions, and a library of moves.
+- Score: progress on the route field, death (model plus geometric check), landing, key, PPO value, and the
+  members' disagreement.
+- Optional time budget (a plan cut short is scored on the steps it has and labelled so).
+- `mpc+ppo` fallback.
+- One JSON line per decision in `mpc_plans.jsonl`.
+
+**Keeping PPO and the evaluation levels clean:**
+- Trajectories where the planner picked any action never reach PPO.
+- Planner data goes to `wm_data_mpc/`, labelled `source: mpc`.
+- Held-out levels give no PPO updates and no world-model data.
+
+**Checked without the game** (`python -m pytest smbrl/tests`, 9 tests):
+- batched rollout == the existing rollout;
+- vectorized route values == `RewardPath.value`;
+- the hazard filter and all-at-once hazard distances change nothing;
+- the PPO-only trainer path still sends every agent's steps to PPO;
+- with `--control mpc`, the planned agent's steps are kept out of PPO and its data is labelled;
+- a held-out level produces no data and no update.
+
+**Decision cost, measured on recorded 1-13 states** (`python -m mpc.offline`), with the PPO critic value:
+
+| candidates x frames ahead | median | 95% |
+|---|---|---|
+| 32 x 16 | 57 ms | 67 ms |
+| 16 x 16 | 50 ms | 55 ms |
+| 32 x 8 | 31 ms | 36 ms |
+
+- **Where the time goes** (32 x 16):
+  - rollout about 45 ms (network about 24 ms, model inputs 15 ms, physics and state updates 6 ms);
+  - PPO value 8 to 10 ms;
+  - scoring 3 to 6 ms.
+- **The cost is mostly per step ahead**, so the horizon matters more than the candidate count.
+- **Threads:** 2 to 4 are best; 6 is slower.
+- **With the lock**, 57 ms per decision means the game runs at about a quarter of real speed and the
+  physics are unchanged.
+- **Not checked yet:**
+  - the planner in the running game;
+  - its decisions against what really happens (step 3).
