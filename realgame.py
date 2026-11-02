@@ -1426,7 +1426,8 @@ class Trainer:
                   f"on screen now, if any, has the game's {GAME_POOL}: enter or restart a level for all)", flush=True)
         cfg = {"agents": self.want_agents, "pool": self.pool, "wave_frames": int(self.args.wave_seconds * HZ),
                "finish_frames": 60, "debug": bool(self.args.debug_spawn),
-               "finish_quota": max(0, self.args.end_after), "probe_frames": max(0, getattr(self.args, "probe_char", 0))}
+               "finish_quota": max(0, self.args.end_after), "probe_frames": max(0, getattr(self.args, "probe_char", 0)),
+               "lock_step": not getattr(self.args, "no_lock_step", False)}
         with open(JS, encoding="utf-8") as f:
             src = f.read().replace("__CONFIG__", json.dumps(cfg))
         try:
@@ -1501,6 +1502,9 @@ def main():
     ap.add_argument("--load", default=None, help="run folder or .pt to continue from")
     ap.add_argument("--name", default=None, help="run folder name under runs/ (default real_<time>)")
     ap.add_argument("--test", action="store_true", help="scripted inputs, no learning (checks the mod)")
+    ap.add_argument("--no-lock-step", action="store_true",
+                    help="let the game's time step grow with slow frames (default: locked to its fixed step, "
+                         "so the physics does not depend on how fast Python answers)")
     ap.add_argument("--wm-collect", action="store_true",
                     help="save world-model data (agent rows, the level's moving parts) to <run>/wm_data")
     ap.add_argument("--probe-char", type=int, default=0, metavar="FRAMES",

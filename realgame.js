@@ -28,9 +28,10 @@
 //          y +0x18, scale x/y +0x24/+0x28, angle +0x2c (radians).
 //   time:  the game's time step includes any wait on Python, so long work (paths, PPO) only happens at
 //          the level start and between waves, and agents are held still for the frame after a long wait.
+//          With lock_step (default) the game always takes its fixed step instead (see "game time step").
 //
 // Addresses are image VAs (base 0x400000), resolved against the ASLR base at runtime.
-const CFG = __CONFIG__;   // {agents, pool, wave_frames, finish_frames, finish_quota, probe_frames}
+const CFG = __CONFIG__;   // {agents, pool, wave_frames, finish_frames, finish_quota, probe_frames, lock_step}
 const base = Process.getModuleByName('SuperMeatBoy.exe').base;
 const img = a => base.add(a - 0x400000);
 const rd = fn => { try { return fn(); } catch (e) { return null; } };
@@ -50,8 +51,38 @@ function vcall(obj, off, ...args) {               // thiscall virtual with int-s
 }
 const V_RESPAWN = 0x30, V_RUN = 0x38, V_JUMP = 0x3c, V_LEFT = 0x40, V_RIGHT = 0x44;
 
+// ---- game time step ---------------------------------------------------------------------------------
+// FUN_00450e70 runs once per frame on the game timer (ecx): it adds the real elapsed microseconds to an
+// accumulator and, when a step is due (timer+0x88 = 1), sets the step length timer+0x68 (float s; +0x70 double):
+// the fixed step timer+0x18 if the frame came in time, else the whole real elapsed time (0x450ef0: compare,
+// then `jl 0x450f4b` = take the fixed step). So a slow frame (waiting on Python) moved everything by the wait.
+// lock_step turns that jl into jmp: always the fixed step. Physics then no longer depends on Python's speed
+// (the game runs in slow motion while Python is slow). The two bytes are checked first and put back on stop.
+const LOCK_AT = img(0x450ef6), LOCK_ORIG = [0x7c, 0x53], LOCK_ON = [0xeb, 0x53];
+let timer = null, lockOn = false;
+const timerHook = Interceptor.attach(img(0x450e70), {
+  onEnter() {
+    if (timer) return;
+    timer = this.context.ecx;
+    send({ ev: 'debug', msg: `game timer found: fixed step ${(1000 * timer.add(0x18).readFloat()).toFixed(2)} ms` +
+                             (lockOn ? ' (locked: every step is this long)' : '') });
+  }
+});
+function setLock(on) {
+  const cur = new Uint8Array(LOCK_AT.readByteArray(2));
+  if (cur[1] !== 0x53 || (cur[0] !== LOCK_ORIG[0] && cur[0] !== LOCK_ON[0])) {
+    send({ ev: 'error', msg: `time step lock: unexpected bytes ${cur[0].toString(16)} ${cur[1].toString(16)} at 0x450ef6, left alone` });
+    return false;
+  }
+  Memory.patchCode(LOCK_AT, 2, code => code.writeByteArray(on ? LOCK_ON : LOCK_ORIG));
+  lockOn = on;
+  return true;
+}
+if (CFG.lock_step && setLock(true)) send({ ev: 'debug', msg: "time step locked to the game's fixed step" });
+function stepMs() { return timer ? rd(() => 1000 * timer.add(0x68).readFloat()) : null; }   // this update's step
+
 let active = true;
-rpc.exports = { shutdown() { if (active) { active = false; releaseMain(); } return true; } };   // only when no frame waits
+rpc.exports = { shutdown() { if (lockOn) setLock(false); if (active) { active = false; releaseMain(); } return true; } };   // only when no frame waits
 
 // ---- level / main character -------------------------------------------------------------------
 let curName = null, main = null, settle = 0, agents = [], agentSet = new Set(), ready = false;
@@ -414,7 +445,7 @@ function pickKeys(c, i) {
 // frame after a PPO update. Long work (paths, PPO) therefore happens only at the level start and between
 // waves, and after any long wait one frame passes with the agents held still before they move again.
 let holdFrames = 0, pendingWave = false;
-function afterWait(t0) { if (Date.now() - t0 > 50) holdFrames = Math.max(holdFrames, 1); }
+function afterWait(t0) { if (!lockOn && Date.now() - t0 > 50) holdFrames = Math.max(holdFrames, 1); }
 function waitGo() {                                // Python's answer may carry a new agent count (next wave)
   const t0 = Date.now();
   recv('go', m => {
@@ -436,7 +467,9 @@ function exchange(w, gap) {                         // lockstep: send states, wa
   const changed = sig(pieces(w)) !== pieceSig;
   if (changed) buildLethal(w);                       // pieces came or went: the hazard list changes
   const msg = { ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards(), sh: rd(() => shots(w)) || [] };
-  if (gap !== undefined) msg.dt = gap;               // ms since the last step: the game's time step for this update
+  const st = stepMs();                               // the game's time step for this update (from its timer)
+  msg.dt = st !== null ? +st.toFixed(3) : gap;
+  if (gap !== undefined) msg.gap = gap;              // real ms since the last step
   if ((frame & 7) === 0) msg.fx = rd(() => forceFields(w));   // fans / orbs (they rarely move)
   const pf = rd(() => platforms(w));
   if (pf && pf.length) msg.pf = pf;                  // moving platforms: every frame
@@ -461,7 +494,7 @@ function stepAgents() {
   const now = Date.now(), gap = now - lastStep;
   lastStep = now;
   if (holdFrames > 0) { holdFrames--; return; }
-  if (gap > 80 && gap < 60000 && frame > 0) {
+  if (!lockOn && gap > 80 && gap < 60000 && frame > 0) {   // (locked: a slow frame is still one fixed step)
     if ((longFrames++ % 50) === 0) send({ ev: 'debug', msg: `long frame (${gap} ms): agents held still (${longFrames} so far)` });
     return;
   }
@@ -471,6 +504,7 @@ function stepAgents() {
   leader = act.leader;
   if (act.stop) {                                   // hand the characters back to the game
     active = false;
+    if (lockOn) setLock(false);
     crowd.forEach(c => c.add(0x9e0).writeU32(1));
     releaseMain();
     send({ ev: 'stopped' });
