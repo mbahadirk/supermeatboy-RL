@@ -261,3 +261,39 @@ trained on (every 5th wave), levels 1-6 and 1-7.
   - Rare events are found reliably but with false alarms at the 50% cut-off (they were weighted up in
     training).
   - Unseen levels are not tested yet (Phase 7).
+
+## Phase 4 results (multi-step rollouts)
+
+`python -m wm.evaluate <wm_data> --model <wm_model.pt>` rolls the model forward 32 steps with the agents'
+real actions. It used 17,500 rollouts from held-out waves of 1-6 to 1-11; hazards and platforms were at
+their recorded positions. Each ensemble member rolls its own trajectory.
+
+**Position error after h steps, median / 90% (game units; a tile is 20), with the real time steps:**
+
+| h (steps) | one-step model | + self-correction (all samples) | **+ self-correction, 35% share (default)** |
+|---|---|---|---|
+| 1 | 0.32 / 1.96 | 0.55 / 2.05 | 0.43 / 1.92 |
+| 2 | 0.74 / 4.06 | 1.13 / 3.99 | 0.94 / 3.75 |
+| 4 | 1.79 / 9.43 | 2.31 / 8.05 | 1.99 / 7.52 |
+| 8 | 4.37 / 22.86 | 4.50 / 17.87 | 4.12 / 17.42 |
+| 16 | 11.44 / 61.70 | 9.18 / 42.44 | 9.24 / 42.11 |
+| 32 | 31.11 / 160.42 | 21.37 / 95.63 | 21.56 / 103.35 |
+
+- **Self-correction** (`wm.train --init <model> --self-correct 8 --sc-share 0.35`): the model also trains on
+  its own 8-step rollouts. It learns to steer back toward where the agent really went, using only predicted
+  states within a tile of the truth. This cut the far-ahead tail errors by about a third. With all the
+  rollout samples (more than the real ones), one-step precision suffered; a 35% share keeps most of both.
+  Model: `runs/wm_phase4mix/wm_model.pt`.
+- **Deaths within 32 steps:** AUC 0.93; 88% of the deaths are predicted with probability > 0.5 (precision
+  0.28, so it errs on the safe side).
+- **First landing within 32 steps:** the step is right within 1 step at the median (90%: 5), the spot is off
+  by 5.3 units (90%: 34). In 14% of landings it predicts no landing in time.
+- **Ensemble spread:** rank correlation with the real error is about 0.7, so it shows where the model is
+  unsure. It is about half the real error, so a planner should scale it up (about x2).
+- **The time step is the biggest single error source.** With the wave's median step instead of the real
+  one, one-step error goes from 0.43 to 1.28 units and 8-step from 4.1 to 7.2 (median). A planner does not
+  know how long future frames will take, because that depends on how fast Python answers.
+  - **Proposed fix:** lock the game's time step (hook the game's step to a constant). Physics then no
+    longer depends on Python's speed: rollouts get the true step, hazards would repeat per wave exactly,
+    and PPO would see the same physics on every frame. The cost is that the game runs in slow motion when
+    Python is slow. Not done yet (it changes the game integration).

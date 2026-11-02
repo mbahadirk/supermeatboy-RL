@@ -140,6 +140,8 @@ def main():
                     help="then train on the model's own K-step rollouts (wm/selfcorrect.py)")
     ap.add_argument("--sc-starts", type=int, default=15, help="rollout start frames per wave for --self-correct")
     ap.add_argument("--sc-epochs", type=int, default=4)
+    ap.add_argument("--sc-share", type=float, default=0.35,
+                    help="self-correction samples as a share of the real ones (more: better far ahead, worse next step)")
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
     out = args.out or os.path.join(HERE, "runs", "wm_" + time.strftime("%Y%m%d-%H%M%S"))
@@ -175,6 +177,10 @@ def main():
         sc = generate(args.data, model, K=args.self_correct, starts=args.sc_starts, log=lambda *a: None)
         print(f"self-correction: {len(sc.get('X', []))} samples from the model's own {args.self_correct}-step "
               f"rollouts  [{time.time() - t0:.0f}s]", flush=True)
+        if sc and args.sc_share > 0 and len(sc["X"]) > args.sc_share * len(train_set["X"]):
+            pick = np.random.default_rng(2).choice(len(sc["X"]), int(args.sc_share * len(train_set["X"])), replace=False)
+            sc = {k: v[pick] for k, v in sc.items()}
+            print(f"self-correction: using {len(pick)} of them ({args.sc_share:.0%} of the real samples)", flush=True)
         if sc:
             train_set = {k: np.concatenate([train_set[k], sc[k]]) for k in train_set}
             fit(model, train_set, d, va_idx, args.sc_epochs, 3e-4, args.batch, t0)
