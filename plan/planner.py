@@ -342,10 +342,21 @@ class Planner:
                  branch: int = BRANCH_DEFAULT, S_final: int = S_DEFAULT, budget_ms: float = BUDGET_MS,
                  member: int = 0, memory: FailureMemory | None = None):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
-        self.lv = level
-        self.field = field
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms
         self.member = member
+        self.final_ms = FINAL_MS0
+        self.lib = list(LIBRARY)
+        self.lib_len = np.array([len(m) for m in self.lib])
+        self.lib_actions = np.stack([padded(m.actions, MAX_LEN) for m in self.lib])
+        self.set_level(level, field, memory)
+
+    # ---- level state -------------------------------------------------------------------------------------
+    def set_level(self, level, field: ProgressField, memory: FailureMemory | None = None):
+        """A (new) level for this planner; the loaded model and the final stage's cost estimate stay. The level
+        geometry, the progress field and every per-level memory (previous plans, failed moves, the surprise
+        tracker's predictions) start again."""
+        self.lv = level
+        self.field = field
         self.geom = LevelGeom(level.words0, {"ox": level.ox, "oy": level.oy})
         self.words = np.asarray(level.words0, np.uint32).copy()
         self.terrain = Terrain(level.words0, level.ox, level.oy)
@@ -353,12 +364,6 @@ class Planner:
         self.memory = memory if memory is not None else FailureMemory()
         self.surprise = SurpriseTracker()
         self.prev: dict[int, Plan] = {}
-        self.final_ms = FINAL_MS0
-        self.lib = list(LIBRARY)
-        self.lib_len = np.array([len(m) for m in self.lib])
-        self.lib_actions = np.stack([padded(m.actions, MAX_LEN) for m in self.lib])
-
-    # ---- level state -------------------------------------------------------------------------------------
     def tiles(self, changes):
         """Tile changes from the game [(cell index, word)]: the model's tile inputs and the support geometry."""
         if not changes:
@@ -558,7 +563,8 @@ class Planner:
         chosen_parts = {"progress": float(prog3[best]), "credit": float(credit[best]), "risk": float(risk3[best]),
                         "fail": float(fail3[best]), "unc": float(unc[best]), "spread": float(spread_end[best])}
         alts = self._alternatives(final, best, saf, prog3, credit, risk3, fail3, unc, spread_end, total3, vend_e,
-                                  v0, cell0, first_name, veto1, vf1, vk1, vid1, prog1, vend1, keep1)
+                                  v0, cell0, first_name, veto1, vf1, vk1, vid1, prog1, vend1, keep1,
+                                  paths=(out3["x"].mean(0), out3["y"].mean(0), out1["x"][0], out1["y"][0], up1))
         veto = None
         if saf.veto[best]:
             veto = {"frame": int(saf.veto_frame[best]), "id": saf.veto_id[best],
@@ -595,12 +601,23 @@ class Planner:
         return plan
 
     def _alternatives(self, final, best, saf, prog3, credit, risk3, fail3, unc, spread_end, total3, vend_e, v0,
-                      cell0, first_name, veto1, vf1, vk1, vid1, prog1, vend1, keep1) -> list[dict]:
+                      cell0, first_name, veto1, vf1, vk1, vid1, prog1, vend1, keep1, paths=None) -> list[dict]:
         """The top N_ALTERNATIVES rejected plans, each with the one reason that separates it from the chosen one:
         the final stage's next best by score (up to N_ALTERNATIVES - 2 of them first), then the stage-1 moves the
-        safety check vetoed with the most progress (up to 2), then more of the final stage."""
+        safety check vetoed with the most progress (up to 2), then more of the final stage.
+
+        With `paths` (final mean x, y (n3, H+1); stage-1 member-0 x, y (n1, K1+1); stage-1 frames judged (n1,)),
+        each alternative also carries its predicted path [[x, y], ...] (final: the members' mean over frames
+        0..H; stage 1: frames 0..its move's length) and whether it was vetoed (added keys: older readers ignore
+        them)."""
         names = lambda segs: [nm for nm, a, b in segs if nm != "pad"]
         vstr = lambda v: "inf" if not math.isfinite(v) else f"{v:.1f}"
+
+        def with_path(d, xs, ys, vetoed):
+            if paths is not None:
+                d["path"] = [[float(a), float(b)] for a, b in zip(xs, ys)]
+                d["vetoed"] = bool(vetoed)
+            return d
 
         def final_alt(c):
             vend = float(vend_e[:, c].mean())
@@ -622,12 +639,17 @@ class Planner:
                     reason = f"lower score than chosen: progress {prog3[c]:.1f} vs {prog3[best]:.1f}"
                     if unc[c] < 0.9:
                         reason += f" (uncertain: spread {spread_end[c]:.0f}u, credit x{unc[c]:.2f})"
-            return {"moves": names(final[c][0]), "total": float(total3[c]), "progress": float(prog3[c]),
-                    "stage": "final", "reason": reason}
+            d = {"moves": names(final[c][0]), "total": float(total3[c]), "progress": float(prog3[c]),
+                 "stage": "final", "reason": reason}
+            return with_path(d, paths[0][c], paths[1][c], saf.veto[c]) if paths is not None else d
 
         def stage1_alt(i):
-            return {"moves": [self.lib[i].name], "total": None, "progress": float(prog1[i]), "stage": "stage 1",
-                    "reason": hit_reason(int(vk1[i]), vid1[i], int(vf1[i]))}
+            d = {"moves": [self.lib[i].name], "total": None, "progress": float(prog1[i]), "stage": "stage 1",
+                 "reason": hit_reason(int(vk1[i]), vid1[i], int(vf1[i]))}
+            if paths is None:
+                return d
+            n = int(paths[4][i]) + 1
+            return with_path(d, paths[2][i][:n], paths[3][i][:n], True)
 
         fin = [int(c) for c in np.argsort(-total3, kind="stable") if c != best]
         vet = [int(i) for i in np.argsort(-prog1, kind="stable") if veto1[i]]

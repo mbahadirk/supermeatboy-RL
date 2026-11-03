@@ -54,7 +54,9 @@ class Plan:
     score: {progress, progress_credit, risk, uncertainty (factor), spread_end, failure, total}; v_start, v_end
     (mean over the members whose end is not a dead end), dead_end_members (ends with V = +inf), leg;
     end_supported.
-    alternatives: the top rejected plans {moves, total, reason}.
+    alternatives: the top rejected plans {moves, total, progress, stage, reason}, and from Planner.plan also
+    path (predicted [[x, y], ...]: final-stage ones the members' mean over frames 0..H, stage-1 ones member 0
+    over their move's frames) and vetoed (bool).
     predictions: {1: [x, y], 4: ..., 8: ..., 16: ...} for the surprise check.
     death_model: the learned death output (probability of dying within the plan, max over members): a second
     opinion only, never used for the decision.

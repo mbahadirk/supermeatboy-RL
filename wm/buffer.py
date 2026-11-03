@@ -11,8 +11,10 @@ before it, the action chosen for it (-1 when it chose none: dead / finished), an
 action earned (NaN on its first row). Rows are raw game values, not network inputs, so the world model can
 build its own features from them and the level data.
 
-Each shard's meta says who chose the actions (`source`: ppo / mpc / mpc+ppo) and why the run played
-(`mode`: train / eval), so planner-driven data can be kept apart from PPO data.
+Each shard's meta says who chose the actions (`source`: ppo / mpc / mpc+ppo, or from agent.py planner /
+explore / planner+explore) and why the run played (`mode`: train / eval), so planner-driven data can be kept
+apart from PPO data. agent.py also writes `agent_sources` ({"planner": [agent indices], "explore": [...]}) for
+shards that mix both.
 
 Reading (load_shards / transitions): consecutive rows of one agent give the transitions
 (state, action, next state, reward, terminated, truncated). load_shards reads one wave at a time.
@@ -49,6 +51,8 @@ class Collector:
     def __init__(self, out_dir: str, char_bytes: bool = False, source: str = "ppo", mode: str = "train"):
         self.dir = out_dir
         self.source, self.mode = source, mode
+        self.meta_extra: dict = {}              # more keys for every shard's meta (e.g. agent.py: which agent
+                                                # indices the planner drove and which explored)
         os.makedirs(os.path.join(out_dir, "levels"), exist_ok=True)
         self.char_bytes = char_bytes
         self.level_name = None
@@ -120,7 +124,7 @@ class Collector:
             base = os.path.join(self.dir, f"wave_{k:05d}")
             meta = {"level": self.level_name, "wave": wave, "why": m.get("why"), "frames": m.get("frame"),
                     "status": m.get("status"), "finish": m.get("finish"),
-                    "source": self.source, "mode": self.mode}
+                    "source": self.source, "mode": self.mode, **self.meta_extra}
             np.savez_compressed(base + ".npz", rows=np.concatenate(self.rows), meta=json.dumps(meta))
             with gzip.open(base + "_world.json.gz", "wt", encoding="utf-8") as f:
                 json.dump(self.world, f, separators=(",", ":"))

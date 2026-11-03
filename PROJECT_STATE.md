@@ -435,6 +435,68 @@ PPO updates and data collection there, and `wm.train` skips them.
 - **Not built yet:** the live planning viewer (Phase 6), validation of predictions against what really
   happened (step 3), the horizon/candidate benchmark, architecture experiments, the held-out evaluation.
 
+### 7.4 Planning agent (`agent.py`)
+
+The explainable beam planner (`plan/planner.py`) plays the real game; no PPO anywhere. Same game side as
+`realgame.py` (`realgame.js` unchanged), the time step always locked (it stops if the lock fails).
+
+**How to run** (start the game, enter a level, then from the project root):
+
+```bash
+python smbrl/agent.py --agents 1 --wm-collect
+```
+
+```bash
+python smbrl/agent.py --agents 1 --explore 40 --wm-collect
+```
+
+- `--agents N`: planned agents (0..N-1). `--explore K`: K more agents with sticky random actions (the previous
+  one kept with p = 0.75) mixed with random chains of 1-3 library moves, only for world-model data.
+- `--replan 2` (frames between a planned agent's decisions; in between it plays its plan), `--budget-ms 120`,
+  `--model runs/wm_locked/wm_model.pt`, `--wave-seconds 20`, `--end-after 1`, `--name` (default `plan_<time>`),
+  `--no-overlay`, `--telemetry 127.0.0.1:47800` (or `off`), `--death-memory smbrl/death_memory.json`,
+  `--threads 2`, `--seed 0`.
+- Stop: Ctrl+C or a file `runs/<name>/STOP`.
+
+**Per level:** the Level with its kill box, hazard boxes with measured reach, sealed pockets, the progress
+field V (outside cells closed), FutureWorld and the planner (one per run, `Planner.set_level` per level). V is
+rebuilt between waves when moving hazards are seen in new places, the kill box changes or a platform reaches
+new cells (at most 4 times per level). V is built on the level's start tiles, as the routes are; tile changes
+(crumble blocks, locks) reach the planner's model inputs and support geometry every frame (`Planner.tiles`).
+
+**Deaths.** Every death of a planned agent is checked with `plan.safety.explain_death` (the move into the death
+position against that frame's hazards and shots, or leaving the level). An unexplained one is added to the
+death memory (level, wave frame, position) and saved; the planner treats it as a hazard at that wave frame
+(+-30 frames) from then on, also in later runs. Not on held-out levels.
+- A death on a wave's last update (with one planned agent and no explore agents, every death) is never shown in
+  a frame message: its position is the plan's prediction for that frame (`estimated` in the log), checked
+  against the last frame's hazards and the ones predicted for the death frame.
+
+**Logs** in `runs/<name>/` (JSON lines, flushed every 200 lines and at every wave end):
+- `plans.jsonl`: one `Plan.to_dict()` per decision (moves, predicted path, landings, wall jumps, nearest
+  hazards, veto, score, the top rejected alternatives with their reason and predicted path, predictions at +1,
+  +4, +8, +16, timing, counts per stage) plus `level`, `wave` and `real` (the reported state that frame);
+- `events.jsonl`: surprises (`position`, `unpredicted death`), `death` (explained or not, estimated, added to
+  memory), `failed move`, `finish`, `level`, `kill box`, `hazards`, `field`, `plan error`, `lock`, `wave` (the
+  per-wave summary);
+- `states.jsonl`: per frame, frame, wave, level and every planned agent's `[i, x, y, vx, vy, status]` (replay);
+- `--wm-collect`: `wm_data/` shards with source `planner`, `explore` or `planner+explore`, and `agent_sources`
+  (which indices were planned / explored) in each shard's meta. The reward column is NaN (no reward here).
+
+**Per wave** one line: level, planned agents finished / died, deaths explained by geometry vs unexplained,
+surprises, decisions, ms per decision (median / 95%), decisions with stage 1 / stage 2 cut short, failed moves.
+
+**Drawn in the game** (first planned agent, at most every `--replan` frames): the chosen plan's predicted path
+(green), predicted landings (yellow dots), wall jumps (cyan dots), the top 3 rejected alternatives faintly
+(red when vetoed, grey otherwise).
+
+**Telemetry** for a separate viewer: JSON over UDP (`viz/telemetry.py`, the schema is in its docstring):
+`level` (map, kill box, goals; at the start and every 2 s), `frame` (agents, hazard boxes now and predicted at
++8 / +16 frames, remembered deaths), `plan` (every decision), `event`. Never blocks; drops are counted.
+
+**Checked without the game only** (`tests/test_agent.py`: a recorded 1-13 wave through a fake script). Not yet
+checked in the game: the overlay's look, decision cost with 2+ planned agents, the wave-end death estimate.
+
 ---
 
 ## 8. Results so far (measured)
@@ -591,4 +653,12 @@ python smbrl/hazard_reach.py --all
 
 ```bash
 python -m pytest smbrl/tests -q
+```
+
+```bash
+python smbrl/agent.py --agents 1 --wm-collect
+```
+
+```bash
+python smbrl/agent.py --agents 1 --explore 40 --wm-collect
 ```
