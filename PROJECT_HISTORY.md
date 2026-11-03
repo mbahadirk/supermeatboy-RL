@@ -174,6 +174,9 @@ Stop with Ctrl+C or by creating `runs/<name>/STOP`; never kill the process (that
     as before).
   - The agents' map shows the outside as hazard, with no surfaces.
   - The game's exact rule was not read from the binary: Ghidra timed out with the training running.
+- **Update:** the real rule was read later: dead outside the camera's view x 1.15, with the camera clamped
+  to the level's camera bounds. Agents now die at that kill box (sent to Python as `kb`; the map, routes and
+  safety check use it); the map-edge rule stays only for levels without camera bounds.
 - **Also:** `hazard_reach.py` with a placeholder folder had overwritten the measured table with an empty
   one. It now refuses folders that do not exist and data without deaths, keeps kinds the new data does not
   cover, and `--all` measures every recorded run.

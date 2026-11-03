@@ -4,7 +4,8 @@ death output (PLAN_PLANNER_AGENT.md, "Decisions after review", item 1).
 Hazards per frame are the lethal pieces as boxes grown by their measured kill reach (game.level.hazard_boxes,
 hazard_reach.json), plus flying shots as boxes (x, y, rad, rad, 0) as realgame.Trainer.on_frame builds them,
 plus remembered deaths the geometry did not explain (DeathMemory). Contact is the agents' map rule: the
-agent's centre within BODY (realpath.BODY) of a box. Leaving the level is the realgame.js rule (outOfLevel).
+agent's centre within BODY (realpath.BODY) of a box. Leaving the level is the realgame.js rule (outOfLevel):
+outside the level's camera-bounds kill box (Level.kill_box), or without one past the map edges.
 
 A trajectory is positions (members E, candidates n, frames K+1); frame 0 is now. Each step k -> k+1 is tested
 as a movement segment (a fall covers about 50 units per frame and would skip thin hazards between frames),
@@ -25,12 +26,11 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from realpath import BODY
-from game.level import hazard_boxes
+from game.level import OUT_BOTTOM, OUT_SIDE, alive_box, hazard_boxes   # noqa: F401 (OUT_*: fallback rule)
 from wm.features import box_distances
 
 VETO_FRAMES = 16            # contact in frames 1..VETO_FRAMES vetoes the candidate
 SUB_STEP = 3.0              # units: at most this far between the samples of one movement segment
-OUT_SIDE, OUT_BOTTOM = 10.0, 60.0    # realgame.js: dead this far past the left / right / top edge, or below
 # world model's 90% position error (units) by horizon (frames): the soft-risk margin
 ERR90 = ((1, 0.43), (4, 2.0), (8, 5.0), (16, 13.9), (32, 38.1), (48, 60.0))
 NEAREST = 3                 # boxes per candidate in the clearance summary
@@ -83,20 +83,23 @@ def record_boxes(rec: dict, keep=None, grow=None, memory=None) -> FrameBoxes:
 
 # ---- level bounds ---------------------------------------------------------------------------------------
 def level_bounds(lv) -> tuple[float, float, float, float]:
-    """(left, right, bottom, top) of the tile map (realgame.js levelBox / levelOY)."""
-    return float(lv.ox), float(lv.ox + lv.W * 20), float(lv.oy), float(lv.oy + lv.H * 20)
+    """(left, right, bottom, top) lines a centre must stay within (realgame.js outOfLevel): the level's
+    kill box (lv.kill_box: the camera bounds widened by the view x 0.15) when it has one, else the map edges
+    widened by OUT_SIDE (left / right / top) and OUT_BOTTOM (bottom) (game.level.alive_box)."""
+    return alive_box(lv.ox, lv.oy, lv.W, lv.H, getattr(lv, "kill_box", None))
 
 
 def out_clearance(bounds, x, y) -> np.ndarray:
-    """How far inside the alive area a centre is (negative: out of the level, realgame.js outOfLevel)."""
+    """How far inside the alive area a centre is (negative: out of the level, realgame.js outOfLevel).
+    bounds: level_bounds(lv)."""
     left, right, bottom, top = bounds
     x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
-    return np.minimum(np.minimum(x - (left - OUT_SIDE), (right + OUT_SIDE) - x),
-                      np.minimum((top + OUT_SIDE) - y, y - (bottom - OUT_BOTTOM)))
+    return np.minimum(np.minimum(x - left, right - x), np.minimum(top - y, y - bottom))
 
 
 def out_of_level(lv, x, y) -> np.ndarray:
-    """realgame.js outOfLevel: x < left-10, x > right+10, y > top+10 or y < bottom-60."""
+    """realgame.js outOfLevel: outside the kill box, or without one x < left-10, x > right+10, y > top+10 or
+    y < bottom-60 of the map."""
     return out_clearance(level_bounds(lv), x, y) < 0
 
 

@@ -100,7 +100,7 @@ Interceptor.attach(img(0x4e9020), { onEnter(a) {
   curName = n; main = null; settle = 0; ready = false; agents = []; crowd = []; agentSet = new Set(); pendingWave = false; holdFrames = 0;
   keyPos = []; keyLocks = []; lockWord = new Map(); lockOpen = new Map(); keysOf = [];
   finishing = 0; finishRequested = false; best = null; leader = -1; wave = 0; frame = 0;
-  tilemap = null; levelOY = null; levelBox = null; paths = []; prevTiles = null;   // the new level has its own tile map, pool and paths
+  tilemap = null; levelOY = null; levelBox = null; paths = []; prevTiles = null; kb = null; kbShown = false; kbPending = null;   // the new level has its own tile map, pool and paths
   send({ ev: 'level', name: n });
 } });
 
@@ -165,9 +165,57 @@ function setupAgents() {
 
 // static level facts from the game's memory: tile layer 0, origin, size; goal pieces (type flag 0x02)
 let tilemap = null, levelOY = null, levelBox = null;   // levelBox: [left, right, top] edges of the map
-// out of the level: the player dies off the screen; our agents skip the game's own check (mode 2), so an agent
-// further than OUT_SIDE past the map's left / right / top edge (or OUT_BOTTOM below it) is dead
-const OUT_SIDE = 10, OUT_BOTTOM = 60;
+// out of the level: the player (mode 0 only) dies when its position (+0x84, +0x88) leaves the camera's view
+// enlarged by 15% (FUN_00520d30, 0x520fd3..0x521092: the view box is copied from camera+0x144, camera =
+// [game+0x20]; half extents at box+0x8c / +0x90, times 1.15 (0x3f933333); centre box+0x50 / +0x60). The camera
+// (FUN_004a30c0) is clamped so its view stays inside the level's camera bounds ([game+0x24] = the level
+// object: min x +0x1d38, min y +0x1d3c, max x +0x1d40, max y +0x1d44; about +-1e8 when the level has none),
+// centred on an axis where the bounds are smaller than the view. Our agents are mode 2 (no such check), so for
+// a player the camera follows the kill lines per axis are: bounds wider than the view: [min - 0.15 h,
+// max + 0.15 h]; else [c - 1.15 h, c + 1.15 h] around the bounds' centre c (h: view half extent). That is
+// killBox(); an axis without bounds keeps the older rule: OUT_SIDE past the map's left / right / top edge,
+// OUT_BOTTOM below it.
+const OUT_SIDE = 10, OUT_BOTTOM = 60, VIEW_KILL = 1.15, NO_BOUNDS = 1e7;
+let kb = null, kbShown = false, kbPending = null;   // kb: [left, right, bottom, top] now (null: older rule)
+function camera() { return rd(() => GAME.readPointer().add(0x20).readPointer()); }
+function killBox() {                                 // {kb, cam_bounds, view_half, centre} or null
+  const lv = levelObj(), cam = camera();
+  if (!lv || lv.isNull() || !cam || cam.isNull() || !levelBox) return null;
+  const b = rd(() => [0x1d38, 0x1d3c, 0x1d40, 0x1d44].map(o => lv.add(o).readFloat()));
+  const view = cam.add(0x144);
+  const h = rd(() => [view.add(0x8c).readFloat(), view.add(0x90).readFloat()]);
+  const centre = rd(() => [view.add(0x50).readFloat(), view.add(0x60).readFloat()]);
+  if (!b || !h || !b.every(Number.isFinite) || !h.every(v => Number.isFinite(v) && v > 0 && v < 1e5)) return null;
+  const axis = (lo, hi, hh) => {
+    if (!(Math.abs(lo) < NO_BOUNDS && Math.abs(hi) < NO_BOUNDS && hi > lo)) return null;   // no bounds here
+    if (hi - lo >= 2 * hh) return [lo - (VIEW_KILL - 1) * hh, hi + (VIEW_KILL - 1) * hh];
+    const c = (lo + hi) / 2;
+    return [c - VIEW_KILL * hh, c + VIEW_KILL * hh];
+  };
+  const x = axis(b[0], b[2], h[0]), y = axis(b[1], b[3], h[1]);
+  if (!x && !y) return null;                         // no camera bounds at all: the older rule
+  const r = v => +v.toFixed(2);
+  const box = [...(x || [levelBox[0] - OUT_SIDE, levelBox[1] + OUT_SIDE]),
+               ...(y || [levelOY - OUT_BOTTOM, levelBox[2] + OUT_SIDE])].map(r);
+  return { kb: box, cam_bounds: b.map(r), view_half: h.map(r), centre: centre ? centre.map(r) : null };
+}
+function updateKillBox(where) {                     // at the level info and every wave start (camera zoom)
+  const k = killBox();
+  if (!k) return null;
+  const moved = !kb || k.kb.some((v, j) => Math.abs(v - kb[j]) > 1);
+  if (moved) {
+    if (where !== 'info') kbPending = k.kb;          // changed after the level info: goes with the next frame
+    kb = k.kb;
+  }
+  if (!kbShown || (moved && where !== 'info')) {
+    kbShown = true;
+    send({ ev: 'debug', msg: `level kill box: x ${kb[0].toFixed(1)}..${kb[1].toFixed(1)}, y ${kb[2].toFixed(1)}..${kb[3].toFixed(1)} ` +
+                             `(camera bounds ${k.cam_bounds.map(v => v.toFixed(1)).join(', ')}, view half ${k.view_half[0].toFixed(1)} x ${k.view_half[1].toFixed(1)}; ` +
+                             `camera centre ${k.centre ? k.centre.map(v => v.toFixed(1)).join(', ') : '?'}; map x ${levelBox[0].toFixed(0)}..${levelBox[1].toFixed(0)}, ` +
+                             `y ${levelOY.toFixed(0)}..${levelBox[2].toFixed(0)}; ${where})` });
+  }
+  return k;
+}
 Interceptor.attach(img(0x465b00), { onEnter() { if (!tilemap) tilemap = this.context.ecx; } });
 function validTilemap(G) {                           // levels are centred: origin = -(size * 10)
   const W = rd(() => G.add(0x20).readU16()), H = rd(() => G.add(0x22).readU16());
@@ -213,10 +261,14 @@ function sendLevelInfo() {
   const sp = levelObj().add(0x1d2c);
   spawnX = sp.readFloat(); spawnY = sp.add(4).readFloat();
   buildLethal(w);
+  kb = null; kbPending = null;
+  const k = rd(() => updateKillBox('info'));
+  if (!k && !kbShown) { kbShown = true; send({ ev: 'debug', msg: 'level kill box: none (no camera bounds or unreadable): map edges +10 / -60 rule' }); }
   send({ ev: 'info', name: curName, W, H, ox, oy, goals: goalPieces, spawn: [sp.readFloat(), sp.add(4).readFloat()],
          agents: agents.length, lethal: lethal.length, hz: hazards(), objs,
          lethalTypes: lethal.map(pc => pc.add(0x10).readU16() & 0xff), lethalIds: lethalInfo().ids,
-         fx: rd(() => forceFields(w)), portalTypes: rd(() => portalTypes(w)) || [], pf: rd(() => platforms(w)) || [] }, tiles);
+         fx: rd(() => forceFields(w)), portalTypes: rd(() => portalTypes(w)) || [], pf: rd(() => platforms(w)) || [],
+         kb: kb, cam_bounds: k ? k.cam_bounds : null, view_half: k ? k.view_half : null }, tiles);
   waitGo();                                          // Python builds the reward paths now
   return true;
 }
@@ -393,6 +445,7 @@ function startWave() {
   const want = Math.max(1, Math.min(wantAgents, crowd.length));
   if (want !== agents.length) { agents = crowd.slice(0, want); resetArrays(); leader = 0; }   // monitor slider
   wave++; frame = 0;
+  rd(() => updateKillBox('wave ' + wave));         // the view size can change (camera zoom): read it live
   vcall(main, V_RESPAWN);                          // resets the level's moving parts
   agents.forEach((c, i) => {
     const fl = c.add(0x7b4).readU32();
@@ -478,6 +531,7 @@ function exchange(w, gap) {                         // lockstep: send states, wa
   const pf = rd(() => platforms(w));
   if (pf && pf.length) msg.pf = pf;                  // moving platforms: every frame
   if (changed) msg.lt = lethalInfo();
+  if (kbPending) { msg.kb = kbPending; kbPending = null; }   // the kill box moved (rare)
   const tc = tileChanges();
   if (tc) msg.tc = tc;
   if (probeLeft > 0 && agents.length && status[0] === 0) {
@@ -556,6 +610,7 @@ function stepAgents() {
   else if (status.every(s => s !== 0) || frame >= CFG.wave_frames) endWave(frame >= CFG.wave_frames ? 'time' : 'done');
 }
 function outOfLevel(x, y) {
+  if (kb) return x < kb[0] || x > kb[1] || y < kb[2] || y > kb[3];
   if (levelOY !== null && y < levelOY - OUT_BOTTOM) return true;
   return levelBox !== null && (x < levelBox[0] - OUT_SIDE || x > levelBox[1] + OUT_SIDE || y > levelBox[2] + OUT_SIDE);
 }

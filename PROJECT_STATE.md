@@ -152,10 +152,13 @@ So Python's speed sets the game's speed.
 - **Death:**
   - The game asks a function (0x51e7d0) whether a lethal contact kills; for an agent the script records
     the death and answers "no", so the game's own death code never runs.
-  - Also counted as dead: being put back on the spawn by the game, and being more than 60 units below the
-    map or 10 units past its left, right or top edge (`outOfLevel`).
-  - Out of level is needed because mode 2 skips the game's own off-screen death. The 10-unit margin is a
-    choice; the game's exact rule was not read from the binary.
+  - Also counted as dead: being put back on the spawn by the game, and leaving the screen (`outOfLevel`).
+  - Off screen (read from the binary, 0x520fd3): the player (mode 0 only) dies when its centre leaves the
+    camera's view x 1.15. The camera is clamped to the level's camera bounds (level object +0x1d38..+0x1d44),
+    so for a followed player each axis dies at bounds -/+ 0.15 x the view half size (bounds narrower than
+    the view: centre +- 1.15 x half size). Mode 2 skips this check, so the script computes that kill box per
+    level and wave and kills agents outside it; levels without camera bounds keep the old map-edge rule
+    (10 units past left, right, top; 60 below). The agents' map and the routes treat outside cells as death.
 - **Finish:** a level-end call during an agent's update counts as its finish, if the agent is within 60
   units of a goal piece.
 

@@ -4,7 +4,7 @@ Writing (Collector, called by realgame.py with --wm-collect): per wave, one shar
   wave_<n>.npz        agent rows: one per agent per frame while it is alive (and the frame it dies / finishes)
   wave_<n>_world.json.gz   per frame: the game's time step and the level's moving parts
   wave_<n>_char.npy   (--probe-char) the first agent's character object, one row of bytes per frame
-  levels/<name>.npz   once per level: tile words, origin, spawn, goals, keys, bandages, portals
+  levels/<name>.npz   once per level: tile words, origin, spawn, goals, keys, bandages, portals, kill box
 
 An agent row holds the state the trainer saw at that frame (before the agent's input), the jump key as held
 before it, the action chosen for it (-1 when it chose none: dead / finished), and the reward its previous
@@ -69,7 +69,9 @@ class Collector:
         meta = {"name": lv.name, "W": lv.W, "H": lv.H, "ox": lv.ox, "oy": lv.oy, "spawn": list(lv.spawn),
                 "goals": [list(g) for g in lv.goals], "keys": [list(k) for k in lv.keys],
                 "bandages": [list(b) for b in lv.bandages], "portals": [[list(a), list(b)] for a, b in lv.portals],
-                "objs": info.get("objs", []), "lethalTypes": info.get("lethalTypes", [])}
+                "objs": info.get("objs", []), "lethalTypes": info.get("lethalTypes", []),
+                # the camera-bounds kill box [left, right, bottom, top] and what it came from (realgame.js)
+                "kb": info.get("kb"), "cam_bounds": info.get("cam_bounds"), "view_half": info.get("view_half")}
         np.savez_compressed(p, words=lv.words0.astype(np.uint32), meta=json.dumps(meta))
 
     def frame(self, m: dict, hz_ids: list, hz_keep: list | None = None):
@@ -83,6 +85,8 @@ class Collector:
             rec["tc"] = m["tc"]
         if m.get("fx"):
             rec["fx"] = _r(m["fx"])
+        if m.get("kb"):                         # the kill box changed (the camera's view changed size)
+            rec["kb"] = m["kb"]
         if hz_ids != self.ids_sent:             # which hazard is which (changes when pieces come or go), and
             rec["ids"] = list(hz_ids)           # which are real (the rest is decoration the trainer skips)
             if hz_keep is not None:

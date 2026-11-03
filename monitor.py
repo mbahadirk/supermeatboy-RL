@@ -50,6 +50,8 @@ ACCEL = (190, 70, 200)       # accelerator tiles
 ORB = (120, 200, 255)
 PLATFORM = (230, 190, 90)
 SEALED = (150, 50, 45)          # inside a lava pit (no space there in the game)
+OFFSCREEN = (70, 32, 38)        # outside the camera-bounds kill box (death off screen)
+KILLBOX = (220, 90, 90)         # the kill box's edges
 N_ROUTES = 4                 # 3 main routes + the bandage route
 POS, NEG = (235, 80, 70), (70, 140, 255)
 ACTION_NAMES = ["idle", "left", "right", "jump", "L+jump", "R+jump", "R+run", "R+run+J", "L+run", "L+run+J"]
@@ -257,6 +259,10 @@ class Monitor:
                 if wind is not None and wind[r, c] and not lv.solid[r, c]:
                     x0, y0 = self.ox0 + c * ts, self.oy0 + (lv.H - 1 - r) * ts
                     surf.fill(WIND, pygame.Rect(int(x0), int(y0), max(1, int(x0 + ts) - int(x0)), max(1, int(y0 + ts) - int(y0))))
+                out = getattr(lv, "outside_cells", None)
+                if out is not None and out[r, c] and not lv.solid[r, c]:   # off screen: death (agents' map: hazard)
+                    x0, y0 = self.ox0 + c * ts, self.oy0 + (lv.H - 1 - r) * ts
+                    surf.fill(OFFSCREEN, pygame.Rect(int(x0), int(y0), max(1, int(x0 + ts) - int(x0)), max(1, int(y0 + ts) - int(y0))))
                 sh, sw_ = getattr(lv, "sealed_haz", None), getattr(lv, "sealed_wall", None)
                 if (sh is not None and sh[r, c]) or (sw_ is not None and sw_[r, c]):   # nobody gets in (lava pits)
                     x0, y0 = self.ox0 + c * ts, self.oy0 + (lv.H - 1 - r) * ts
@@ -326,6 +332,10 @@ class Monitor:
             c, sn = math.cos(a), math.sin(a)
             pts = [self.pt(x + u * c - v * sn, y + u * sn + v * c) for u, v in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))]
             pygame.draw.polygon(scr, HAZ, pts)
+        kb = getattr(lv, "kill_box", None)
+        if kb is not None:                        # where the player dies off screen (realgame.js killBox)
+            (x0, y0), (x1, y1) = self.pt(kb[0], kb[3]), self.pt(kb[1], kb[2])
+            pygame.draw.rect(scr, KILLBOX, pygame.Rect(x0, y0, max(1, x1 - x0), max(1, y1 - y0)), 1)
         for kx, ky in getattr(lv, "keys", []):
             px, py = self.pt(kx, ky)
             pygame.draw.polygon(scr, KEY, [(px, py - 7), (px + 5, py), (px, py + 7), (px - 5, py)])

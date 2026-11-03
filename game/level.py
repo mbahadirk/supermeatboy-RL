@@ -30,9 +30,34 @@ PLAT_STILL = 240                          # frames: a platform seen in place thi
 SEALED_MAX = 150                          # cells: a pocket the player cannot get into larger than this is left open
                                           # (a moving saw at its start position could look like a seal)
 ACCEL_TILE = 98                           # Salt Factory surface tile (no special bit); what it does is not traced
+# off screen: the player dies when its centre leaves the camera's view x 1.15 (FUN_00520d30, mode 0 only); the
+# camera is clamped to the level's camera bounds, so for a followed player that is a fixed kill box per level
+# (realgame.js killBox, sent as info["kb"]). Without one (no camera bounds, unreadable): this far past the
+# map's left / right / top edge, or below its bottom, is dead (the older realgame.js rule).
+OUT_SIDE, OUT_BOTTOM = 10.0, 60.0
 
 
 # ---- level ------------------------------------------------------------------------------------------
+def parse_kill_box(kb):
+    """(left, right, bottom, top) from realgame.js `kb`, or None when absent or not a finite, non-empty box."""
+    try:
+        left, right, bottom, top = (float(v) for v in kb)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (left, right, bottom, top)) or left >= right or bottom >= top:
+        return None
+    return left, right, bottom, top
+
+
+def alive_box(ox: float, oy: float, W: int, H: int, kill_box=None) -> tuple[float, float, float, float]:
+    """(left, right, bottom, top) lines a centre must stay within to live: the kill box when there is one,
+    else the map's edges widened by OUT_SIDE (left, right, top) and OUT_BOTTOM (bottom)."""
+    if kill_box is not None:
+        return tuple(float(v) for v in kill_box)
+    return (float(ox) - OUT_SIDE, float(ox + W * TILE) + OUT_SIDE, float(oy) - OUT_BOTTOM,
+            float(oy + H * TILE) + OUT_SIDE)
+
+
 def tile_solid(words: np.ndarray) -> np.ndarray:
     """Cells the player cannot enter: ids 1-99, and special tiles (bit 8: crumble, lock, switch blocks)."""
     tid = words & 0xff
@@ -110,6 +135,38 @@ class Level:
         self.set_platforms(info.get("pf"))
         self.dist = self._bfs()
         self.diag = float(np.hypot(self.W, self.H))
+        # the camera-bounds kill box (realgame.js; raw inputs kept for the record)
+        self.cam_bounds, self.view_half = info.get("cam_bounds"), info.get("view_half")
+        self.kill_box = None
+        self.outside_cells = np.zeros((self.H, self.W), dtype=bool)
+        self.set_kill_box(info.get("kb"))
+
+    def set_kill_box(self, kb) -> bool:
+        """The kill box (left, right, bottom, top) from realgame.js, or None: the old map-edge rule. Recomputes
+        outside_cells (cells whose centre is outside it: hazard in the agents' map, closed for the routes and
+        the sealed pockets). True when it changed."""
+        kb = parse_kill_box(kb) if kb is not None else None
+        if kb == self.kill_box:
+            return False
+        self.kill_box = kb
+        cx = self.ox + (np.arange(self.W) + 0.5) * TILE
+        cy = self.oy + (np.arange(self.H) + 0.5) * TILE
+        if kb is None:
+            self.outside_cells = np.zeros((self.H, self.W), dtype=bool)
+        else:
+            self.outside_cells = self.out_of_level(cx[None, :], cy[:, None])
+        self.tile_ver += 1
+        return True
+
+    def alive_box(self) -> tuple[float, float, float, float]:
+        return alive_box(self.ox, self.oy, self.W, self.H, self.kill_box)
+
+    def out_of_level(self, x, y) -> np.ndarray:
+        """Where a centre (x, y) (arrays broadcast) is dead for being off screen: outside the kill box, or
+        without one past the map edges (left / right / top + OUT_SIDE, bottom - OUT_BOTTOM)."""
+        left, right, bottom, top = self.alive_box()
+        x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+        return (x < left) | (x > right) | (y < bottom) | (y > top)
 
     def set_fields(self, fx):
         """Fans [x, y, up x, up y, half width, range, strength] and orbs [x, y, r1, r2, s1, s2] from the game:
@@ -197,7 +254,7 @@ class Level:
         stacked lava pieces whose boxes leave gaps between them; in the game the pit is all lava. A pocket
         that touches a hazard counts as hazard, one closed in by walls as solid (agents' map, routes,
         monitor). Pockets over SEALED_MAX cells are left open. Returns the number of sealed cells."""
-        haz = self.hazard_mask(boxes)
+        haz = self.hazard_mask(boxes) | self.outside_cells   # off screen is death, like a hazard
         passable = (~self.solid0 | self.special) & ~haz
         seen = np.zeros((self.H, self.W), dtype=bool)
         todo = []
@@ -407,6 +464,8 @@ class Level:
         for r, c, _ in self.plat_cells:              # moving platforms where they are now
             if g[r, c] != C_SOLID:
                 g[r, c] = C_PLATFORM
+        if self.kill_box is not None:                # off screen (outside the camera-bounds kill box): death
+            g[self.outside_cells & (g != C_SOLID) & (g != C_GOAL)] = C_HAZARD
         cx = self.ox + (np.arange(self.W) + 0.5) * TILE
         cy = self.oy + (np.arange(self.H) + 0.5) * TILE
         for b in boxes:

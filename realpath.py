@@ -126,12 +126,14 @@ def box_distance(px, py, box) -> np.ndarray:
 
 class Planner:
     def __init__(self, words: np.ndarray, ox: float, oy: float, spawn, goals, hazards, sweeps=(), keys=(),
-                 bandages=(), portals=(), lift=None, blocks=None, doors=None):
+                 bandages=(), portals=(), lift=None, blocks=None, doors=None, outside=None):
         """words: H x W collision tile words; hazards: [(x, y, half w, half h, angle)] of pieces that stay put;
         sweeps: the same for every position a moving hazard was seen at; keys / bandages: [(x, y)]; portals:
         [((x, y), (x, y))] pairs (touching one end puts the player at the other). H x W masks: lift, cells
         where standing is free (wind, above platforms); blocks, extra walls (fixed platforms, sealed pockets);
-        doors, cells crossed only with timing (where moving platforms go: closed in the clear mode)."""
+        doors, cells crossed only with timing (where moving platforms go: closed in the clear mode); outside,
+        cells off screen (outside the camera-bounds kill box, game.level.Level.outside_cells): closed in every
+        mode like the bottom row, but not a surface to stand on or push against (they are death, not walls)."""
         self.cls = tile_classes(words)
         k = self.cls
         self.ox, self.oy = ox, oy
@@ -153,6 +155,8 @@ class Planner:
         # below the map is death (the player falls out): a route may not run along the bottom row
         self.pit = np.zeros((self.H, self.W), dtype=bool)
         self.pit[0, :] = True
+        if outside is not None:
+            self.pit = self.pit | outside
 
     # ---- geometry --------------------------------------------------------------------------------
     def cell(self, x: float, y: float) -> tuple[int, int]:

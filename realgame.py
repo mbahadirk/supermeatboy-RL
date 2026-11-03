@@ -175,7 +175,7 @@ def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float,
     gx, gy = lv.goals[0] if lv.goals else lv.spawn
     d = lv.goal_dist(x, y)
     c, r = lv.cell(x, y)
-    pad = np.pad(grid, K, constant_values=C_HAZARD)   # outside the level: death (realgame.js outOfLevel), not a wall
+    pad = np.pad(grid, K, constant_values=C_HAZARD)   # outside the map: death (realgame.js outOfLevel), not a wall
     rr, cc = min(max(r, -K), lv.H + K - 1) + K, min(max(c, -K), lv.W + K - 1) + K
     patch = pad[rr - K:rr + K + 1, cc - K:cc + K + 1]
     if patch.shape != (2 * K + 1, 2 * K + 1):
@@ -440,6 +440,10 @@ class Trainer:
               + (f", {len(lv.portals)} portal pair(s)" if lv.portals else "")
               + (f", {int(lv.accel.sum())} accelerator tiles" if lv.accel.any() else "")
               + f", {n} agents", flush=True)
+        kb = lv.kill_box
+        print(f"[level] {info['name']}: " + (f"kill box x {kb[0]:.0f}..{kb[1]:.0f}, y {kb[2]:.0f}..{kb[3]:.0f} "
+                                             f"({int(lv.outside_cells.sum())} map cells outside it)" if kb else
+                                             "no kill box from the game: map edges +10 / -60 rule"), flush=True)
         self.new_wave(n)
         if lv.keys:
             print(f"[keys] {lv.name}: " + ", ".join(f"key {k + 1} opens {len(g)} lock tile(s)"
@@ -529,6 +533,11 @@ class Trainer:
             lv.apply_tiles(m["tc"])
         if m.get("fx"):
             lv.set_fields(m["fx"])
+        if m.get("kb") and lv.set_kill_box(m["kb"]):   # the camera's view changed size (rare): new kill box
+            kb = lv.kill_box
+            print(f"[level] {lv.name}: kill box now x {kb[0]:.0f}..{kb[1]:.0f}, y {kb[2]:.0f}..{kb[3]:.0f} "
+                  f"(frame {m['frame']})", flush=True)
+            self.path_dirty = True
         if m.get("pf") and lv.set_platforms(m["pf"]) and self.paths_built:
             self.path_dirty = True           # a platform reached new cells: the routes may ride it there
         if m.get("lt"):                      # pieces came or went (shots): the hazard list changed
@@ -942,7 +951,8 @@ class Trainer:
         self.paths = Planner(lv.words0, lv.ox, lv.oy, lv.spawn, lv.goals, static, sweeps, lv.keys, lv.bandages,
                              list(lv.portals) + list(self.links), lift=lv.wind | lv.plat_support(),
                              blocks=lv.plat_blocks() | lv.sealed_haz | lv.sealed_wall,
-                             doors=lv.plat_doors()).find(self.args.paths)
+                             doors=lv.plat_doors(),
+                             outside=lv.outside_cells if lv.kill_box is not None else None).find(self.args.paths)
         self.route_stats = []
         if hasattr(self, "best_k"):          # new routes: progress on them starts again (no reward for that)
             self.best_k = [[None] * len(self.paths) for _ in self.best_k]

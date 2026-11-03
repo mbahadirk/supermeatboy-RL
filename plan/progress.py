@@ -117,9 +117,9 @@ class ProgressField:
     """V for one level. Built from the same inputs as realpath.Planner (or from a Planner: from_planner)."""
 
     def __init__(self, words, ox, oy, spawn, goals, hazards, sweeps=(), keys=(), bandages=(), portals=(),
-                 lift=None, blocks=None, doors=None):
+                 lift=None, blocks=None, doors=None, outside=None):
         self._build(Planner(words, ox, oy, spawn, goals, hazards, sweeps, keys, bandages, portals, lift=lift,
-                            blocks=blocks, doors=doors))
+                            blocks=blocks, doors=doors, outside=outside))
 
     @classmethod
     def from_planner(cls, pl: Planner) -> "ProgressField":

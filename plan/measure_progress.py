@@ -58,7 +58,8 @@ def level_from_data(d: str, name: str) -> Level:
 def planner_inputs(lv: Level, world: list) -> dict:
     """Planner keyword inputs as realgame.py builds them (track_hazards, build_paths), from one recorded wave:
     the level's pieces that never moved, every position the moving ones were seen at (rounded to 4 units),
-    fans, platforms (fixed ones are walls, moving ones doors) and the sealed pockets."""
+    fans, platforms (fixed ones are walls, moving ones doors), the sealed pockets and the cells off screen
+    (outside the camera-bounds kill box, when the recorded level has one)."""
     keep, ids, level_ids = list(lv.hz_keep), None, None
     start, moving, sweep = {}, set(), set()
     for rec in world:
@@ -94,6 +95,7 @@ def planner_inputs(lv: Level, world: list) -> dict:
     return {"hazards": static, "sweeps": sorted(sweep), "keys": lv.keys, "bandages": lv.bandages,
             "portals": list(lv.portals), "lift": lv.wind | lv.plat_support(),
             "blocks": lv.plat_blocks() | lv.sealed_haz | lv.sealed_wall, "doors": lv.plat_doors(),
+            "outside": lv.outside_cells if lv.kill_box is not None else None,
             "n_static": len(static), "n_moving": len(moving)}
 
 
@@ -102,7 +104,7 @@ def build_field(d: str, name: str, world: list):
     inp = planner_inputs(lv, world)
     args = (lv.words0, lv.ox, lv.oy, lv.spawn, lv.goals, inp["hazards"], inp["sweeps"], inp["keys"],
             inp["bandages"], inp["portals"])
-    kw = {"lift": inp["lift"], "blocks": inp["blocks"], "doors": inp["doors"]}
+    kw = {"lift": inp["lift"], "blocks": inp["blocks"], "doors": inp["doors"], "outside": inp["outside"]}
     pf = ProgressField(*args, **kw)                                  # timed build
     _, peak = measure_build(Planner(*args, **kw))                    # the same build again, for its memory
     pf.mem_peak = peak
