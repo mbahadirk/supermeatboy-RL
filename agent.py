@@ -121,6 +121,15 @@ def overlay_payload(plan) -> list:
     return out
 
 
+def followed_text(err: dict) -> str:
+    """'followed error +1 0.2/0.4, +4 ... (median/90%, n 120/110/90/60)' from SurpriseTracker.errors()."""
+    hs = [h for h in err if err[h][2]]
+    if not hs:
+        return "followed error: none"
+    return ("followed error " + ", ".join(f"+{h} {err[h][0]:.1f}/{err[h][1]:.1f}" for h in hs)
+            + " (median/90%, n " + "/".join(str(err[h][2]) for h in hs) + ")")
+
+
 class Runner:
     def __init__(self, args, telemetry=None):
         self.args = args
@@ -402,6 +411,7 @@ class Runner:
             k = frame - p.frame if p is not None else -1
             a = int(p.actions[k]) if p is not None and 0 <= k < len(p.actions) else 0
             acts[i], act_idx[i] = list(ACTIONS[a]), a
+            pl.played(i, frame, a)
         for i in range(self.n_plan, n):
             if self.alive[i] and int(states[i][6]) == 0:
                 a = self.explore_action(i)
@@ -603,12 +613,14 @@ class Runner:
         st = self.st
         ms = np.array(st["ms"]) if st["ms"] else None
         el = (time.time() - self.t0) / 60
+        err_f = self.planner.surprise.errors() if self.planner is not None else None
         line = (f"[wave {self.wave_no}] {lv.name if lv else '?'} ({m.get('why')}, {frame} frames): planned "
                 f"{st['finished']}/{self.n_plan} finished, {st['died']} died (geometry {st['explained']}, "
                 f"unexplained {st['unexplained']}" + (f", {st['estimated']} at the wave end: position predicted"
                                                       if st['estimated'] else "") + ")"
                 f" | surprises {st['surprise_pos'] + st['surprise_death']} (position {st['surprise_pos']}, death "
-                f"{st['surprise_death']}) | {st['decisions']} decisions"
+                f"{st['surprise_death']})" + (f" | {followed_text(err_f)}" if err_f else "")
+                + f" | {st['decisions']} decisions"
                 + (f", {np.median(ms):.0f}/{np.percentile(ms, 95):.0f} ms (median/95%)" if ms is not None else "")
                 + f" | cut short: stage 1 {st['cut1']}, stage 2 {st['cut2']} | failed moves {st['failed']}"
                 + (f" | explore {st['ex_finished']}/{self.n_explore} finished, {st['ex_died']} died"
@@ -620,11 +632,10 @@ class Runner:
         self.event("wave", frame, why=m.get("why"), frames=frame,
                    **{k: v for k, v in st.items() if k != "ms"},
                    ms_median=float(np.median(ms)) if ms is not None else None,
-                   ms_95=float(np.percentile(ms, 95)) if ms is not None else None)
+                   ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f)
         self.fw.new_wave()
         if self.planner is not None:
-            self.planner.new_wave()
-            self.planner.surprise.plans.clear()     # frames start again at 0: old predictions must not match
+            self.planner.new_wave()                 # also clears the surprise check's predictions and errors
         if lv is not None and self.field_dirty and self.rebuilds < FIELD_REBUILDS:
             self.rebuilds += 1
             self.build_field(f"rebuild {self.rebuilds}/{FIELD_REBUILDS}: moving hazards / kill box / platforms")

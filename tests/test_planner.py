@@ -103,9 +103,15 @@ def fake_plan(frame=10, preds=None, veto=None, risk=0.0):
                 predictions=preds, death_model=0.0, timing={}, counts={})
 
 
+def _play(st, f0, f1, a=2, agent=0):
+    for f in range(f0, f1):
+        st.played(agent, f, a)
+
+
 def test_surprise_tracker_events():
     st = SurpriseTracker()
     st.add(fake_plan())
+    _play(st, 10, 18)                                                             # the plan's own actions
     assert st.observe(0, 11, 101.1, 50.0) == []                                   # within 1.5 x 0.43
     ev = st.observe(0, 14, 104.0 + 10.0, 50.0)                                    # 10 units off at +4
     assert len(ev) == 1 and ev[0]["kind"] == "position" and ev[0]["horizon"] == 4
@@ -114,6 +120,30 @@ def test_surprise_tracker_events():
     assert [e["kind"] for e in ev] == ["unpredicted death"]
     st.add(fake_plan(frame=30, veto={"frame": 3, "id": "h1", "kind": "hazard"}))
     assert st.observe(0, 33, 0.0, 0.0, dead=True) == []                            # the plan saw it coming
+
+
+def test_surprise_counts_only_followed_plans():
+    st = SurpriseTracker()
+    st.add(fake_plan(frame=10))
+    _play(st, 10, 12)                                                             # followed for 2 frames,
+    _play(st, 12, 30, a=1)                                                        # then something else played
+    assert st.observe(0, 11, 101.0 + 3.0, 50.0) and st.err[1] == [pytest.approx(3.0)]   # +1: followed, counted
+    assert st.observe(0, 14, 0.0, 0.0) == []                                      # +4: replaced, not a surprise
+    assert st.observe(0, 18, 0.0, 0.0) == [] and st.err[8] == []
+    # an unpredicted death is still judged by the latest plan covering the frame, followed or not
+    st.add(fake_plan(frame=20))
+    ev = st.observe(0, 25, 0.0, 0.0, dead=True)
+    assert [e["kind"] for e in ev] == ["unpredicted death"] and ev[0]["plan_frame"] == 20
+    # errors per horizon: median, 90%, n; cleared by new_wave
+    st.add(fake_plan(frame=40))
+    _play(st, 40, 57)
+    for h in HORIZONS:
+        st.observe(0, 40 + h, 100.0 + h + 1.0, 50.0)                              # 1 unit off at every horizon
+    e = st.errors()
+    assert set(e) == {str(h) for h in HORIZONS}
+    assert e["4"] == [1.0, 1.0, 1] and e["1"][2] == 2 and e["16"][0] == pytest.approx(1.0)
+    st.new_wave()
+    assert st.errors()["1"] == [None, None, 0] and not st.plans and not st.played_at
 
 
 # ---- the planner with the world model -----------------------------------------------------------------------
@@ -238,5 +268,7 @@ def test_plan_on_a_recorded_state():
                    worlds, frames)
     assert len(plan.actions) == pl.H and plan.timing["total"] > 0
     json.dumps(plan.to_dict())
+    assert pl.observe(int(r["agent"]), f + 1, float(r["x"]) + 500.0, float(r["y"])) == []   # nothing played yet
+    pl.played(int(r["agent"]), f, plan.actions[0])
     ev = pl.observe(int(r["agent"]), f + 1, float(r["x"]) + 500.0, float(r["y"]))
     assert any(e["kind"] == "position" and e["horizon"] == 1 for e in ev)

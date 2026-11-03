@@ -378,6 +378,7 @@ class Planner:
     def new_wave(self):
         self.prev = {}
         self.memory.pending = {}
+        self.surprise.new_wave()
 
     def cell(self, x, y) -> tuple:
         return int((x - self.lv.ox) // 20.0), int((y - self.lv.oy) // 20.0)
@@ -396,6 +397,11 @@ class Planner:
         ev = self.surprise.observe(agent, frame, x, y, dead)
         v = None if dead else float(self.value(np.array([x]), np.array([y]), keys)[0][0])
         return ev + self.memory.update(agent, frame, v, dead)
+
+    def played(self, agent: int, frame: int, action: int):
+        """The runner calls this with the action index it really played for the agent on this frame (the
+        surprise check counts a prediction only while its plan was followed)."""
+        self.surprise.played(agent, frame, action)
 
     # ---- one decision ------------------------------------------------------------------------------------
     def plan(self, row, frame: int, worlds: list, frames: list, dt_ms: float = 16.667, agent: int = 0) -> Plan:

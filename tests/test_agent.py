@@ -149,6 +149,18 @@ def test_runner_plays_a_recorded_wave(tmp_path):
     assert end[0]["frame"] == states[-1]["frame"] + 1
     wave = [e for e in events if e["kind"] == "wave"]
     assert wave and wave[-1]["estimated"] == 0
+    # followed predictions' error per horizon; a position surprise only for a plan played that far
+    ef = wave[-1]["err_followed"]
+    assert set(ef) == {"1", "4", "8", "16"} and ef["1"][2] > 0
+    played = {}
+    for i in (0, 1):
+        mine = sorted((q for q in plans if q["agent"] == i), key=lambda q: q["frame"])
+        for q, nxt in zip(mine, mine[1:] + [None]):
+            for f in range(q["frame"], nxt["frame"] if nxt else q["frame"] + 2):
+                played[(i, f)] = q["actions"][f - q["frame"]]
+    for e in (e for e in events if e["kind"] == "position"):
+        q = next(q for q in plans if q["agent"] == e["agent"] and q["frame"] == e["plan_frame"])
+        assert all(played.get((e["agent"], e["plan_frame"] + k)) == q["actions"][k] for k in range(e["horizon"]))
     assert any(e["kind"] == "wave" for e in events) and any(e["kind"] == "field" for e in events)
     # world-model data: one shard, labelled
     shard = np.load(next((run / "wm_data").glob("wave_*.npz")))

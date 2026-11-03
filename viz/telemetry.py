@@ -81,7 +81,8 @@ Message types
  expected_drop, real_drop, dead, count, reason}), "death" ({agent, x, y, explained: bool, cause: str,
  estimated: bool (the position was predicted, not reported: deaths on a wave's last frame), memory_added:
  bool}), "level", "kill box", "hazards", "field" (progress field built / rebuilt), "plan error", "wave"
- (the per-wave summary), "lock", "stop".
+ (the per-wave summary; err_followed {"1": [median, 90%, n], "4", "8", "16"}: position error of predictions
+ whose plan was followed that far), "lock", "stop".
 """
 from __future__ import annotations
 

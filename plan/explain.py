@@ -120,41 +120,81 @@ class Plan:
 class SurpriseTracker:
     """Compares each real state with what earlier plans predicted for that frame (+1, +4, +8, +16) and emits
     surprise events: a position error over SURPRISE_FACTOR x the measured 90% error at that horizon, or a death
-    the plan did not predict (no veto and no soft risk)."""
+    the plan did not predict (no veto and no soft risk).
+
+    A prediction at horizon h of a plan made at frame f counts only if the plan was followed that far: the
+    actions really played on frames f .. f+h-1 (played()) equal the plan's actions[0:h]. A plan replaced
+    before then predicted a future that was never played. The followed predictions' position errors are kept
+    per horizon until new_wave() (errors()). An unpredicted death is judged by the latest plan covering the
+    frame, followed or not."""
 
     def __init__(self, factor: float = SURPRISE_FACTOR, err90: dict | None = None):
         self.factor = factor
         self.err90 = dict(err90 or ERR90_AT)
-        self.plans: dict[int, list] = {}        # agent -> [(frame, predictions, veto, soft risk, H)]
+        self.plans: dict[int, list] = {}        # agent -> [(frame, predictions, veto, soft risk, H, name, actions)]
+        self.played_at: dict[int, dict] = {}    # agent -> {frame: action index played on that frame}
+        self.err: dict[int, list] = {h: [] for h in HORIZONS}
 
     def add(self, plan: Plan):
         lst = self.plans.setdefault(int(plan.agent), [])
         lst.append((int(plan.frame), {int(k): v for k, v in plan.predictions.items()}, plan.veto,
-                    float(plan.soft_risk), len(plan.actions), plan.name))
+                    float(plan.soft_risk), len(plan.actions), plan.name, [int(a) for a in plan.actions]))
+
+    def played(self, agent: int, frame: int, action: int):
+        """The action index the runner really played for this agent on this frame."""
+        self.played_at.setdefault(int(agent), {})[int(frame)] = int(action)
+
+    def followed(self, agent: int, f0: int, actions: list, h: int) -> bool:
+        """The plan made at f0 was played unchanged for its first h frames."""
+        pl = self.played_at.get(int(agent), {})
+        return h <= len(actions) and all(pl.get(f0 + k) == actions[k] for k in range(h))
 
     def observe(self, agent: int, frame: int, x: float, y: float, dead: bool = False) -> list[dict]:
         events = []
         lst = self.plans.get(int(agent), [])
-        for f0, preds, veto, risk, H, name in lst:
+        for f0, preds, veto, risk, H, name, acts in lst:
             h = frame - f0
-            if h in preds and preds[h] is not None and not dead:
-                px, py = preds[h]
-                err = math.hypot(x - px, y - py)
-                thr = self.factor * self.err90.get(h, max(self.err90.values()))
-                if err > thr:
-                    events.append({"kind": "position", "agent": int(agent), "frame": int(frame), "plan_frame": f0,
-                                   "horizon": h, "predicted": [round(px, 2), round(py, 2)],
-                                   "real": [round(float(x), 2), round(float(y), 2)], "error": round(err, 2),
-                                   "threshold": round(thr, 2), "plan": name})
+            if dead or h not in preds or preds[h] is None or not self.followed(agent, f0, acts, h):
+                continue
+            px, py = preds[h]
+            err = math.hypot(x - px, y - py)
+            if h in self.err:
+                self.err[h].append(err)
+            thr = self.factor * self.err90.get(h, max(self.err90.values()))
+            if err > thr:
+                events.append({"kind": "position", "agent": int(agent), "frame": int(frame), "plan_frame": f0,
+                               "horizon": h, "predicted": [round(px, 2), round(py, 2)],
+                               "real": [round(float(x), 2), round(float(y), 2)], "error": round(err, 2),
+                               "threshold": round(thr, 2), "plan": name})
         if dead:
             cover = [p for p in lst if 0 < frame - p[0] <= p[4]]
             if cover:
-                f0, _, veto, risk, H, name = max(cover, key=lambda p: p[0])     # the latest plan
+                f0, _, veto, risk, H, name, _ = max(cover, key=lambda p: p[0])     # the latest plan
                 if veto is None and risk <= 0.0:
                     events.append({"kind": "unpredicted death", "agent": int(agent), "frame": int(frame),
                                    "plan_frame": f0, "x": round(float(x), 2), "y": round(float(y), 2), "plan": name})
             self.plans[int(agent)] = []
+            self.played_at.pop(int(agent), None)
         else:
             keep = max(HORIZONS)
             self.plans[int(agent)] = [p for p in lst if frame - p[0] < keep]
+            pl = self.played_at.get(int(agent))
+            if pl and len(pl) > keep:
+                self.played_at[int(agent)] = {f: a for f, a in pl.items() if f >= frame - keep}
         return events
+
+    def errors(self) -> dict:
+        """Position error of the followed predictions since new_wave(), per horizon:
+        {"1": [median, 90%, n], ...} (median / 90% None when n is 0)."""
+        out = {}
+        for h in HORIZONS:
+            e = self.err.get(h) or []
+            out[str(h)] = ([round(float(np.median(e)), 2), round(float(np.percentile(e, 90)), 2), len(e)]
+                           if e else [None, None, 0])
+        return out
+
+    def new_wave(self):
+        """Frames start again at 0: old predictions and played actions must not match."""
+        self.plans.clear()
+        self.played_at.clear()
+        self.err = {h: [] for h in HORIZONS}
