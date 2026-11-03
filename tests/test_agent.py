@@ -53,8 +53,11 @@ def _runner(tmp_path, tel):
     return r
 
 
-def _drive_wave(r):
-    """info, N_FRAMES recorded frames (agent 1 dies at DIE_AT), wave end with agent 0 dead on the last update."""
+def _drive_wave(r, exact: bool = True):
+    """info, N_FRAMES recorded frames (agent 1 dies at DIE_AT), wave end with agent 0 dead on the last update.
+    exact: the wave_end carries the final states `s` and the hazards / shots `hz` / `sh` (realgame.js now);
+    otherwise it is the older message without them. Returns (acts, dead_xy, died_frame, end_xy): end_xy is
+    agent 0's final position sent with the wave end (None without `s`)."""
     from wm.buffer import load_level
     import glob
     import gzip
@@ -93,11 +96,17 @@ def _drive_wave(r):
         act = [p for p in new if p["type"] == "act"]
         assert len(act) == 1, new                                   # exactly one answer per frame
         acts.append(act[0]["payload"])
-    last = world[N_FRAMES - 1]["f"]
-    r.on_message({"type": "send", "payload": {"ev": "wave_end", "wave": 1, "status": [1, 1], "finish": [-1, -1],
-                                              "frame": last + 1, "why": "done"}}, None)
+    w_last = world[N_FRAMES - 1]
+    end = {"ev": "wave_end", "wave": 1, "status": [1, 1], "finish": [-1, -1], "frame": w_last["f"] + 1, "why": "done"}
+    end_xy = None
+    if exact:                                                   # agent 0 moved a little on the last update, died
+        s0 = list(st[0])
+        s0[0], s0[1], s0[6] = s0[0] + 3.25, s0[1] - 1.5, 1
+        end_xy = (s0[0], s0[1])
+        end.update(s=[s0, st[1]], hz=w_last.get("hz", []), sh=w_last.get("sh", []))
+    r.on_message({"type": "send", "payload": end}, None)
     assert r.script.posts[-1]["type"] == "go"
-    return acts, dead_xy, died_frame
+    return acts, dead_xy, died_frame, end_xy
 
 
 @need_data
@@ -105,7 +114,7 @@ def test_runner_plays_a_recorded_wave(tmp_path):
     from plan import safety as S
     tel = _CaptureTel()
     r = _runner(tmp_path, tel)
-    acts, dead_xy, died_frame = _drive_wave(r)
+    acts, dead_xy, died_frame, end_xy = _drive_wave(r)
     r.close()
     # replies: one per frame, 2 agents, 4 keys of 0/1 each, a leader index
     assert len(acts) == N_FRAMES
@@ -133,9 +142,13 @@ def test_runner_plays_a_recorded_wave(tmp_path):
                for d in saved["deaths"])
     mem = S.DeathMemory.load(str(tmp_path / "deaths.json"))
     assert len(mem.boxes(LEVEL, died_frame + 5)) >= 1
-    # agent 0 died on the wave's last update: its position is the plan's prediction
+    # agent 0 died on the wave's last update: its exact final position from the wave_end message
     end = [e for e in deaths if e["agent"] == 0]
-    assert len(end) == 1 and end[0]["estimated"]
+    assert len(end) == 1 and not end[0]["estimated"]
+    assert abs(end[0]["x"] - end_xy[0]) < 1e-2 and abs(end[0]["y"] - end_xy[1]) < 1e-2   # (events: 3 decimals)
+    assert end[0]["frame"] == states[-1]["frame"] + 1
+    wave = [e for e in events if e["kind"] == "wave"]
+    assert wave and wave[-1]["estimated"] == 0
     assert any(e["kind"] == "wave" for e in events) and any(e["kind"] == "field" for e in events)
     # world-model data: one shard, labelled
     shard = np.load(next((run / "wm_data").glob("wave_*.npz")))
@@ -170,6 +183,20 @@ def test_runner_plays_a_recorded_wave(tmp_path):
     after = [m for m in frames if m["frame"] > died_frame]
     assert all(m["memory"] for m in after)
     assert any(b[5] == S.KIND_MEMORY for m in after for b in m["future"]["8"])
+
+
+@need_data
+def test_old_wave_end_without_final_states(tmp_path):
+    """An older realgame.js wave_end without `s` / `hz` / `sh`: the last-update death still counts, its position
+    predicted from the plan (estimated)."""
+    r = _runner(tmp_path, None)
+    _, _, _, end_xy = _drive_wave(r, exact=False)
+    r.close()
+    assert end_xy is None
+    events = [json.loads(l) for l in open(tmp_path / "run" / "events.jsonl", encoding="utf-8")]
+    end = [e for e in events if e["kind"] == "death" and e["agent"] == 0]
+    assert len(end) == 1 and end[0]["estimated"]
+    assert [e for e in events if e["kind"] == "wave"][-1]["estimated"] == 1
 
 
 def test_telemetry_udp_roundtrip_and_never_blocks():

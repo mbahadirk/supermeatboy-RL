@@ -560,11 +560,14 @@ class Runner:
         self.wave_no = int(m.get("wave", self.wave_no))
         status = m.get("status", [])
         frame = int(m.get("frame", 0))
-        # agents that died or finished on the wave's last update: no frame message shows them. Their death
-        # position is the plan's prediction for that frame, checked against the last frame's hazards and the
-        # ones predicted for the death frame
+        # agents that died or finished on the wave's last update: no frame message shows them. realgame.js
+        # sends their final states `s` with the hazards / shots of that moment: the death is checked exactly
+        # as in on_frame. Without `s` (older script) the death position is the plan's prediction for that
+        # frame, checked against the last frame's hazards and the ones predicted for the death frame
+        final = m.get("s") or None
         box1 = None
-        if self.last_msg is not None and self.fw.last is not None and self.fw.last[0] == self.last_msg["frame"]:
+        if final is None and self.last_msg is not None and self.fw.last is not None \
+                and self.fw.last[0] == self.last_msg["frame"]:
             try:
                 box1 = future_inputs(self.fw, int(self.last_msg["frame"]), 1, float(self.last_msg.get("dt") or 16.667),
                                      lv.name, self.deaths)[1][1] if lv is not None else None
@@ -578,7 +581,13 @@ class Runner:
                 self.st["finished" if planned else "ex_finished"] += 1
             elif not planned:
                 self.st["ex_died"] += 1
-            elif self.planner is None or lv is None or self.last_state[i] is None:
+            elif self.planner is None or lv is None:
+                self.st["died"] += 1
+            elif final is not None and i < len(final):
+                f = final[i]
+                self.on_death(i, frame, self.prev_xy[i], (float(f[0]), float(f[1])),
+                              int(f[7]) if len(f) > 7 else 0, m, None, estimated=False)
+            elif self.last_state[i] is None:
                 self.st["died"] += 1
             else:
                 s = self.last_state[i]

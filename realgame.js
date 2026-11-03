@@ -615,7 +615,11 @@ function outOfLevel(x, y) {
   return levelBox !== null && (x < levelBox[0] - OUT_SIDE || x > levelBox[1] + OUT_SIDE || y > levelBox[2] + OUT_SIDE);
 }
 function endWave(why) {
-  send({ ev: 'wave_end', wave, frame, why, status: status.slice(), finish: finishFrame.slice() });
+  // s / hz / sh: the agents' final states and the hazards and shots now (as in a frame message), so a death
+  // on the wave's last update (no frame message shows it) has its exact position. Read failures never stop
+  // the wave from ending.
+  send({ ev: 'wave_end', wave, frame, why, status: status.slice(), finish: finishFrame.slice(),
+         s: rd(() => agents.map(agentState)) || [], hz: rd(hazards) || [], sh: rd(() => shots(world())) || [] });
   waitGo();                                          // Python learns (PPO) now
   frame = 0;
   pendingWave = true;                                // the next wave starts on a following frame
