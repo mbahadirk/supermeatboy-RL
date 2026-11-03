@@ -494,6 +494,28 @@ surprises, decisions, ms per decision (median / 95%), decisions with stage 1 / s
 `level` (map, kill box, goals; at the start and every 2 s), `frame` (agents, hazard boxes now and predicted at
 +8 / +16 frames, remembered deaths), `plan` (every decision), `event`. Never blocks; drops are counted.
 
+**Viewer** (`viz/viewer.py`, pygame, its own process; it never sends anything to the agent). Live, next to a
+running `agent.py` (listens on 127.0.0.1:47800, `--listen host:port` for another address):
+
+```bash
+python smbrl/viz/viewer.py
+```
+
+Replay of a finished run's logs (`plans.jsonl`, `events.jsonl`, `states.jsonl`); the folder name is the run's
+name that `agent.py` prints (`plan_<date>-<time>` by default), for example:
+
+```bash
+python smbrl/viz/viewer.py --replay smbrl/runs/plan_20261103-120000
+```
+
+The newest run: `python smbrl/viz/viewer.py --replay latest` (the newest `runs/plan_*` folder). Per decision it
+shows the chosen path, predicted landings and wall jumps, the clearance to the nearest hazards, the rejected
+alternatives with their reasons, and each prediction (+1 / +4 / +8 / +16) against the real position (the full
+list is in the module docstring). Keys: Tab agent, H help, A alternatives, F future hazards, Z zoom on the agent,
+S screenshot; replay: Space, Left / Right, + / -, N next event, D next surprise or unexplained death. A replay
+has hazards only when the run has `wm_data` (`--wm-collect`); its +8 / +16 boxes are the recorded ones, not the
+planner's prediction (that is not logged).
+
 **Checked without the game only** (`tests/test_agent.py`: a recorded 1-13 wave through a fake script). Not yet
 checked in the game: the overlay's look, decision cost with 2+ planned agents, the wave-end death estimate.
 
