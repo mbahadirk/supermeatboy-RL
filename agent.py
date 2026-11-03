@@ -22,8 +22,11 @@ moves). A death of a planned agent the geometry does not explain (plan.safety.ex
 
 Logs in runs/<name>/: plans.jsonl (one Plan.to_dict() per decision, with the level, wave and the real state),
 events.jsonl (surprises, deaths, failed moves, level / kill box / hazard / field messages, wave summaries),
-states.jsonl (per frame: frame, wave, every planned agent's [i, x, y, vx, vy, status]); --wm-collect: world-model
-data in runs/<name>/wm_data (shards' source: planner, explore or planner+explore, with agent_sources).
+states.jsonl (per frame: frame, wave, every planned agent's [i, x, y, vx, vy, status]), times.jsonl (every
+finish, planned and explore: level, wave, agent, source, frames, seconds, lock, time of day); --wm-collect:
+world-model data in runs/<name>/wm_data (shards' source: planner, explore or planner+explore, with agent_sources).
+Best finish times per level (planned and explore apart, time-step lock on only): --best-times (default
+smbrl/best_times.json; the old best.json is not used).
 In the game (unless --no-overlay): the first planned agent's chosen path (green), predicted landings (yellow),
 wall jumps (cyan) and the top rejected alternatives (faint red when vetoed, grey otherwise).
 Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
@@ -62,6 +65,7 @@ MAX_AGENTS = 200                 # realgame.py: the game's 40 spare Meat Boys, m
 GAME_POOL = 40
 DEFAULT_MODEL = os.path.join("runs", "wm_locked", "wm_model.pt")
 DEFAULT_DEATHS = os.path.join(HERE, "death_memory.json")
+DEFAULT_BEST = os.path.join(HERE, "best_times.json")
 FIELD_REBUILDS = 4               # progress field rebuilds per level (between waves)
 STICKY = 0.75                    # explore: keep the previous action with this probability
 CHAIN_P = 0.03                   # explore: per free frame, chance to start a chain of 1-3 library moves
@@ -130,6 +134,64 @@ def followed_text(err: dict) -> str:
             + " (median/90%, n " + "/".join(str(err[h][2]) for h in hs) + ")")
 
 
+class BestTimes:
+    """Best finish time per level, planned and explore agents apart:
+    {level: {"planned": {seconds, frames, run, wave, agent, date}, "explore": {...}}}. Written atomically (temp
+    file + replace); re-read before each update. A file that cannot be read is left alone (no updates)."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self.data, self.ok = self._load()
+
+    def _load(self):
+        if not os.path.exists(self.path):
+            return {}, True
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                d = json.load(f)
+            if not isinstance(d, dict):
+                raise ValueError("not a JSON object")
+            return d, True
+        except (OSError, ValueError) as e:
+            print(f"[times] cannot read {self.path} ({e}): best times are not updated", flush=True)
+            return {}, False
+
+    def best(self, level: str, source: str) -> dict | None:
+        return (self.data.get(level) or {}).get(source)
+
+    def offer(self, level: str, source: str, rec: dict) -> bool:
+        """rec becomes the level's best for source if it is faster; True when it did (and was saved)."""
+        if not self.ok:
+            return False
+        d, self.ok = self._load()
+        if not self.ok:
+            return False
+        self.data = d
+        cur = (d.get(level) or {}).get(source)
+        if cur is not None and cur.get("seconds") is not None and float(cur["seconds"]) <= float(rec["seconds"]):
+            return False
+        d.setdefault(level, {})[source] = rec
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(d, f, indent=1)
+            os.replace(tmp, self.path)
+        except OSError as e:
+            print(f"[times] could not save {self.path}: {e}", flush=True)
+            return False
+        return True
+
+
+def best_text(seconds, best: dict | None, new_best: bool, lock) -> str:
+    """'4.25 s (best 4.25 s, new best)' for the console."""
+    if lock is not True:
+        return f"{seconds:.2f} s (time-step lock not confirmed: not a best time)"
+    if best is None:
+        return f"{seconds:.2f} s"
+    return f"{seconds:.2f} s (best {float(best['seconds']):.2f} s" + (", new best)" if new_best else ")")
+
+
 class Runner:
     def __init__(self, args, telemetry=None):
         self.args = args
@@ -156,6 +218,10 @@ class Runner:
         self.f_plans = open(os.path.join(self.run_dir, "plans.jsonl"), "a", encoding="utf-8")
         self.f_events = open(os.path.join(self.run_dir, "events.jsonl"), "a", encoding="utf-8")
         self.f_states = open(os.path.join(self.run_dir, "states.jsonl"), "a", encoding="utf-8")
+        self.f_times = open(os.path.join(self.run_dir, "times.jsonl"), "a", encoding="utf-8")
+        self.best = BestTimes(args.best_times)
+        self.lock = None                        # the time-step lock: True / False once realgame.js said so
+        self.dt_ms = 16.667                     # the frame time of the last frame message (ms)
         self.lines = 0
         self.wm = None
         if args.wm_collect:
@@ -193,7 +259,7 @@ class Runner:
 
     def flush(self):
         self.lines = 0
-        for f in (self.f_plans, self.f_events, self.f_states):
+        for f in (self.f_plans, self.f_events, self.f_states, self.f_times):
             try:
                 f.flush()
             except (OSError, ValueError):
@@ -220,6 +286,8 @@ class Runner:
         self.st = {"finished": 0, "died": 0, "explained": 0, "unexplained": 0, "estimated": 0, "memory": 0,
                    "surprise_pos": 0, "surprise_death": 0, "decisions": 0, "ms": [], "cut1": 0, "cut2": 0,
                    "failed": 0, "errors": 0, "ex_finished": 0, "ex_died": 0}
+        self.fin = {"planned": [], "explore": []}     # this wave's finish times (s)
+        self.new_best = False
 
     def on_info(self, info: dict, tiles: bytes):
         if info["W"] * info["H"] == 0 or len(tiles or b"") != info["W"] * info["H"] * 4:
@@ -355,6 +423,7 @@ class Runner:
             self.build_field("first frame")
             pl = self.planner
         dt = float(m.get("dt") or 16.667)
+        self.dt_ms = dt
         self.fw.observe(frame, m.get("hz", []), m.get("pf"), m.get("sh", []), lv.hz_keep, lv.fans, dt, lv.hz_grow)
         if self.wm and not self.protected:
             self.wm.frame(m, list(lv.hz_ids), list(lv.hz_keep))
@@ -375,9 +444,9 @@ class Runner:
                 self.alive[i] = False
                 planned = i < self.n_plan
                 if st == 2:
-                    self.st["finished" if planned else "ex_finished"] += 1
-                    if planned:
-                        self.event("finish", frame, agent=i, x=x, y=y)
+                    # realgame.js counts frame++ after each update: status 2 first shown in the message of
+                    # frame f means the goal was touched in update f - 1
+                    self.on_finish(i, frame - 1, x, y)
                 elif planned and pl is None:
                     self.st["died"] += 1
                 elif not planned:
@@ -513,6 +582,33 @@ class Runner:
                   f"unexplained{' (position predicted)' if estimated else ''}"
                   + (" - remembered as a hazard" if added else ""), flush=True)
 
+    def on_finish(self, i: int, finish_frame: int, x, y):
+        """Agent i touched the goal in update `finish_frame` (0 = the wave's first update). Its time is the
+        updates played up to and including that one, frames = finish_frame + 1, x the frame time (the
+        messages' dt; 16.667 ms with the time-step lock) / 1000. Every finish goes to times.jsonl; with the
+        lock on it is offered as the level's best (planned and explore apart); planned finishes are events."""
+        planned = i < self.n_plan
+        source = "planned" if planned else "explore"
+        self.st["finished" if planned else "ex_finished"] += 1
+        lv = self.level.name if self.level else None
+        frames = int(finish_frame) + 1
+        seconds = round(frames * self.dt_ms / 1000.0, 3)
+        rec = {"level": lv, "wave": self.wave_no, "agent": int(i), "source": source, "frame": int(finish_frame),
+               "frames": frames, "seconds": seconds, "dt_ms": round(self.dt_ms, 3), "lock": self.lock,
+               "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        self._write(self.f_times, rec)
+        self.fin[source].append(seconds)
+        new = False
+        if self.lock is True and lv is not None:
+            new = self.best.offer(lv, source, {"seconds": seconds, "frames": frames, "run": self.args.name,
+                                               "wave": self.wave_no, "agent": int(i), "date": rec["time"]})
+        if planned:
+            self.new_best |= new
+            best = self.best.best(lv, "planned") if lv is not None else None
+            self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds,
+                       dt_ms=rec["dt_ms"], lock=self.lock, best=float(best["seconds"]) if best else None,
+                       new_best=new)
+
     def explore_action(self, i: int) -> int:
         """Sticky random actions mixed with random chains of library moves (world-model data only)."""
         q = self.ex_queue[i]
@@ -588,7 +684,14 @@ class Runner:
                 continue
             planned = i < self.n_plan
             if st == 2:
-                self.st["finished" if planned else "ex_finished"] += 1
+                # wave_end's `finish` is realgame.js finishFrame: the update (0-based) in which the agent
+                # touched the goal; `frame` is the count after the last update (finish = frame - 1 when it
+                # finished on the last update, as with a 'quota' end)
+                fin = m.get("finish") or []
+                ff = int(fin[i]) if i < len(fin) and fin[i] is not None and int(fin[i]) >= 0 else frame - 1
+                last = final[i] if final is not None and i < len(final) else self.last_state[i]
+                fx, fy = (float(last[0]), float(last[1])) if last is not None else (None, None)
+                self.on_finish(i, ff, fx, fy)
             elif not planned:
                 self.st["ex_died"] += 1
             elif self.planner is None or lv is None:
@@ -614,8 +717,13 @@ class Runner:
         ms = np.array(st["ms"]) if st["ms"] else None
         el = (time.time() - self.t0) / 60
         err_f = self.planner.surprise.errors() if self.planner is not None else None
+        fin_p = min(self.fin["planned"]) if self.fin["planned"] else None
+        fin_x = min(self.fin["explore"]) if self.fin["explore"] else None
+        best_p = self.best.best(lv.name, "planned") if lv is not None else None
         line = (f"[wave {self.wave_no}] {lv.name if lv else '?'} ({m.get('why')}, {frame} frames): planned "
-                f"{st['finished']}/{self.n_plan} finished, {st['died']} died (geometry {st['explained']}, "
+                f"{st['finished']}/{self.n_plan} finished"
+                + (f" in {best_text(fin_p, best_p, self.new_best, self.lock)}" if fin_p is not None else "")
+                + f", {st['died']} died (geometry {st['explained']}, "
                 f"unexplained {st['unexplained']}" + (f", {st['estimated']} at the wave end: position predicted"
                                                       if st['estimated'] else "") + ")"
                 f" | surprises {st['surprise_pos'] + st['surprise_death']} (position {st['surprise_pos']}, death "
@@ -623,7 +731,8 @@ class Runner:
                 + f" | {st['decisions']} decisions"
                 + (f", {np.median(ms):.0f}/{np.percentile(ms, 95):.0f} ms (median/95%)" if ms is not None else "")
                 + f" | cut short: stage 1 {st['cut1']}, stage 2 {st['cut2']} | failed moves {st['failed']}"
-                + (f" | explore {st['ex_finished']}/{self.n_explore} finished, {st['ex_died']} died"
+                + (f" | explore {st['ex_finished']}/{self.n_explore} finished"
+                   + (f" (fastest {fin_x:.2f} s)" if fin_x is not None else "") + f", {st['ex_died']} died"
                    if self.n_explore else "")
                 + (f" | {st['errors']} plan errors" if st["errors"] else "")
                 + (f" | death memory +{st['memory']} ({len(self.deaths)})" if st["memory"] else "")
@@ -632,7 +741,9 @@ class Runner:
         self.event("wave", frame, why=m.get("why"), frames=frame,
                    **{k: v for k, v in st.items() if k != "ms"},
                    ms_median=float(np.median(ms)) if ms is not None else None,
-                   ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f)
+                   ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f,
+                   finish_s=fin_p, explore_finish_s=fin_x, best_s=float(best_p["seconds"]) if best_p else None,
+                   new_best=self.new_best, lock=self.lock)
         self.fw.new_wave()
         if self.planner is not None:
             self.planner.new_wave()                 # also clears the surprise check's predictions and errors
@@ -672,10 +783,12 @@ class Runner:
                 if "time step lock" in str(p.get("msg", "")):
                     print("the time step could not be locked: the planner needs it (it assumes every future step is "
                           "the game's fixed step); stopping", flush=True)
+                    self.lock = False
                     self.event("lock", None, ok=False, msg=p.get("msg"))
                     self.stopping = True
             elif ev == "debug":
                 if "time step locked" in str(p.get("msg", "")):
+                    self.lock = True
                     self.event("lock", None, ok=True)
                 print(f"[game] {p.get('msg')}", flush=True)
             elif ev in ("ready", "wave", "continue", "level_end"):
@@ -702,7 +815,7 @@ class Runner:
 
     def close(self):
         self.flush()
-        for f in (self.f_plans, self.f_events, self.f_states):
+        for f in (self.f_plans, self.f_events, self.f_states, self.f_times):
             try:
                 f.close()
             except OSError:
@@ -792,6 +905,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--death-memory", default=DEFAULT_DEATHS,
                     help="unexplained deaths remembered as hazards (loaded at start, saved on every new one; "
                          "default smbrl/death_memory.json)")
+    ap.add_argument("--best-times", default=DEFAULT_BEST,
+                    help="best finish times per level (default smbrl/best_times.json; time-step lock on only)")
     ap.add_argument("--threads", type=int, default=2, help="torch threads for the world model (default 2)")
     ap.add_argument("--seed", type=int, default=0, help="random seed of the explore agents")
     ap.add_argument("--no-lock-step", action="store_true", help=argparse.SUPPRESS)

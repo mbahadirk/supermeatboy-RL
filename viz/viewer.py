@@ -24,7 +24,8 @@ with their frame, the nearest hazards' clearance (a thin line from the path poin
 box of that kind, labelled with the planner's own clearance number), the rejected alternatives (red vetoed,
 grey otherwise; hover for the reason), the plan's predictions at +1 / +4 / +8 / +16 (hollow circles) and, for
 each horizon, the latest prediction whose frame has arrived with a line to the real position and the error
-(green within the surprise threshold, red over it).
+(green within the surprise threshold, red over it). The info panel also shows the last planned finish time and
+the level's best (from the finish events; before any, from smbrl/best_times.json).
 
 Keys: Tab next planned agent, H help, A alternatives, F future hazards, Z zoom on the selected agent (mouse wheel or
 [ / ] zoom in / out), S screenshot (replay: into the run folder; live: the current folder), Esc / Q quit. Replay: Space play / pause, Left / Right one step, + / - speed,
@@ -60,6 +61,7 @@ from viz import telemetry as T                                            # noqa
 from plan.explain import HORIZONS, ERR90_AT, SURPRISE_FACTOR             # noqa: E402
 
 RUNS = os.path.join(HERE, "runs")
+BEST_TIMES = os.path.join(HERE, "best_times.json")      # agent.py --best-times default
 TILE = 20.0
 FPS = 30
 HZ = 60                       # game frames per second (replay speed 1x)
@@ -331,7 +333,9 @@ def event_text(e: dict) -> str:
     if k == "failed move":
         return f"{fs}failed move a{e.get('agent')}: {e.get('reason') or e.get('move')}"
     if k == "finish":
-        return f"{fs}finish a{e.get('agent')}"
+        t = e.get("seconds")
+        return f"{fs}finish a{e.get('agent')}" + (f" in {t:.2f} s" if t is not None else "") + \
+            (" NEW BEST" if e.get("new_best") else "")
     if k == "wave":
         return f"{fs}wave end ({e.get('why')}): {e.get('finished')} finished, {e.get('died')} died"
     if k == "plan error":
@@ -355,6 +359,8 @@ class Stats:
     def __init__(self):
         self.ms = []
         self.surprises = self.unexplained = self.deaths = self.failed = 0
+        self.last_finish = None                  # the last planned finish event with a time
+        self.best = {}                           # level -> best planned time (s) as the finish events said
 
     def plan(self, p: dict):
         self.ms.append(float((p.get("timing") or {}).get("total") or 0.0))
@@ -368,6 +374,10 @@ class Stats:
             self.unexplained += int(not e.get("explained"))
         elif k == "failed move":
             self.failed += 1
+        elif k == "finish" and e.get("seconds") is not None:
+            self.last_finish = e
+            if e.get("best") is not None:
+                self.best[e.get("level")] = float(e["best"])
 
     def summary(self) -> dict:
         n = len(self.ms)
@@ -375,7 +385,41 @@ class Stats:
         return {"decisions": n, "ms_mean": float(ms.mean()) if n else None,
                 "ms_95": float(np.percentile(ms, 95)) if n else None,
                 "surprises": self.surprises, "surprises_per_100": 100.0 * self.surprises / n if n else None,
-                "deaths": self.deaths, "unexplained": self.unexplained, "failed": self.failed}
+                "deaths": self.deaths, "unexplained": self.unexplained, "failed": self.failed,
+                "last_finish": self.last_finish, "best": dict(self.best)}
+
+
+_best_cache = {"mtime": None, "data": {}}
+
+
+def file_best(level: str | None, path: str = BEST_TIMES) -> float | None:
+    """The planned agents' best time (s) for a level from best_times.json (re-read when it changes)."""
+    try:
+        mt = os.path.getmtime(path)
+        if mt != _best_cache["mtime"]:
+            with open(path, encoding="utf-8") as f:
+                _best_cache["data"], _best_cache["mtime"] = json.load(f), mt
+        b = ((_best_cache["data"].get(level) or {}).get("planned") or {}).get("seconds")
+        return float(b) if b is not None else None
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+
+
+def finish_lines(stats: dict, level: str | None) -> list[str]:
+    """The info panel's finish lines: the last planned finish time and the level's best."""
+    out = []
+    e = stats.get("last_finish")
+    if e:
+        out.append(f"last finish: {e['seconds']:.2f} s ({e.get('frames')} frames) {e.get('level')} wave "
+                   f"{e.get('wave')} a{e.get('agent')}" + (", NEW BEST" if e.get("new_best") else "")
+                   + ("" if e.get("lock") else " (lock not confirmed)"))
+    b = (stats.get("best") or {}).get(level)
+    if b is not None:
+        out.append(f"level best: {b:.2f} s")
+    else:
+        fb = file_best(level)
+        out.append(f"level best: {fb:.2f} s (best_times.json)" if fb is not None else "level best: -")
+    return out
 
 
 # ---- live source ---------------------------------------------------------------------------------------------
@@ -1194,6 +1238,8 @@ class Renderer:
         small(f"surprises {st.get('surprises', 0)} ({fmt(st.get('surprises_per_100'), '.1f')} per 100 decisions), "
               f"deaths {st.get('deaths', 0)} (unexplained {st.get('unexplained', 0)}), failed moves "
               f"{st.get('failed', 0)}", TEXT)
+        for s in finish_lines(st, scene.level_name):
+            small(s, GOOD)
         small(f"future boxes: {scene.future_note}" + ("" if self.show_future else " [hidden: F]") +
               "   H: help", FAINT)
 

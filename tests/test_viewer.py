@@ -263,3 +263,22 @@ def test_matcher():
     assert math.isclose(V.box_closest(10.0, 0.0, [0, 0, 2, 1, 0.0])[0], 2.0)
     x, y = V.box_closest(0.0, 10.0, [0, 0, 2, 1, math.pi / 2])  # rotated: the long side is vertical
     assert math.isclose(x, 0.0, abs_tol=1e-9) and math.isclose(y, 2.0)
+
+
+def test_finish_times_in_the_panel(tmp_path):
+    st = V.Stats()
+    e = {"t": "event", "level": "1-6", "wave": 3, "kind": "finish", "frame": 254, "agent": 0, "frames": 255,
+         "seconds": 4.25, "lock": True, "best": 4.25, "new_best": True}
+    st.event(e)
+    lines = V.finish_lines(st.summary(), "1-6")
+    assert lines[0].startswith("last finish: 4.25 s (255 frames) 1-6 wave 3 a0, NEW BEST")
+    assert lines[1] == "level best: 4.25 s"
+    assert "4.25 s" in V.event_text(e) and "NEW BEST" in V.event_text(e)
+    # no finish on this level yet: the best from best_times.json, labelled
+    p = tmp_path / "best_times.json"
+    p.write_text(json.dumps({"1-7": {"planned": {"seconds": 3.5}}}), encoding="utf-8")
+    assert V.file_best("1-7", str(p)) == 3.5 and V.file_best("1-8", str(p)) is None
+    # live: the event message reaches the running stats
+    src = V.LiveSource(bind=False)
+    src.handle(e)
+    assert src.scene().stats["last_finish"]["seconds"] == 4.25

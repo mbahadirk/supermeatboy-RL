@@ -47,7 +47,8 @@ def _runner(tmp_path, tel):
     import agent
     args = agent.build_parser().parse_args(
         ["--agents", "2", "--replan", "2", "--budget-ms", "60", "--model", MODEL, "--name", str(tmp_path / "run"),
-         "--wm-collect", "--death-memory", str(tmp_path / "deaths.json"), "--telemetry", "off"])
+         "--wm-collect", "--death-memory", str(tmp_path / "deaths.json"), "--telemetry", "off",
+         "--best-times", str(tmp_path / "best_times.json")])
     r = agent.Runner(args, telemetry=tel)
     r.script = _FakeScript()
     return r
@@ -209,6 +210,106 @@ def test_old_wave_end_without_final_states(tmp_path):
     end = [e for e in events if e["kind"] == "death" and e["agent"] == 0]
     assert len(end) == 1 and end[0]["estimated"]
     assert [e for e in events if e["kind"] == "wave"][-1]["estimated"] == 1
+
+
+def _recorded():
+    """The first recorded 1-13 wave: (level words, meta, rows, world records)."""
+    from wm.buffer import load_level
+    import glob
+    import gzip
+    words, meta = load_level(DATA, LEVEL)
+    for p in sorted(glob.glob(os.path.join(DATA, "wave_*.npz"))):
+        z = np.load(p)
+        if json.loads(str(z["meta"])).get("level") == LEVEL:
+            world = json.load(gzip.open(p[:-4] + "_world.json.gz", "rt", encoding="utf-8"))
+            return words, meta, z["rows"].copy(), world
+    raise AssertionError("no recorded 1-13 wave")
+
+
+@need_data
+def test_finish_times_and_best_times(tmp_path, capsys):
+    """Finishes seen in a frame message and on the wave's last update: the exact finishing update, the time
+    (frames x dt), times.jsonl for planned and explore agents, best_times.json (lock on only), the finish
+    events (also over telemetry) and the wave summary line."""
+    import agent
+    best = tmp_path / "best_times.json"
+    args = agent.build_parser().parse_args(
+        ["--agents", "1", "--explore", "1", "--replan", "2", "--budget-ms", "40", "--model", MODEL,
+         "--name", str(tmp_path / "run"), "--death-memory", str(tmp_path / "deaths.json"), "--telemetry", "off",
+         "--best-times", str(best)])
+    tel = _CaptureTel()
+    r = agent.Runner(args, telemetry=tel)
+    r.script = _FakeScript()
+    words, meta, rows, world = _recorded()
+    a0 = sorted(set(rows["agent"].tolist()))[0]
+    r.on_message({"type": "send", "payload": {"ev": "debug", "msg": "time step locked to the game's fixed step"}},
+                 None)
+    r.on_message({"type": "send", "payload": dict(meta, name=LEVEL, agents=2, ev="info")},
+                 words.astype("<u4").tobytes())
+
+    def wave(no, n_frames, status_at, end_status, end_finish):
+        """status_at(agent, frame) -> status in the frame messages; then the wave end after n_frames."""
+        last = None
+        for k, w in enumerate(world[:n_frames]):
+            q = rows[(rows["agent"] == a0) & (rows["frame"] == w["f"])][0]
+            s = [float(q["x"]), float(q["y"]), float(q["vx"]), float(q["vy"]), int(q["flags"]), int(q["state"]), 0,
+                 int(q["keys"])]
+            st = [list(s[:6]) + [status_at(i, k), s[7]] for i in range(2)]
+            msg = dict(w, ev="frame", frame=k, wave=no, s=st, dt=16.667)
+            msg.pop("f")
+            r.on_message({"type": "send", "payload": msg}, None)
+            last = st
+        final = [list(x[:6]) + [end_status[i], x[7]] for i, x in enumerate(last)]
+        r.on_message({"type": "send", "payload": {"ev": "wave_end", "wave": no, "status": end_status,
+                                                  "finish": end_finish, "frame": n_frames, "why": "quota",
+                                                  "s": final, "hz": [], "sh": []}}, None)
+
+    # wave 1: the explore agent's finish shows in frame 6's message (update 5); the planned agent finishes on
+    # the last update (9 of 0..9)
+    wave(1, 10, lambda i, k: 2 if i == 1 and k >= 6 else 0, [2, 2], [9, 5])
+    # wave 2: planned, slower (update 14 of 0..14): no new best
+    wave(2, 15, lambda i, k: 0, [2, 1], [14, -1])
+    # wave 3: planned finish seen in frame 8's message (update 7): new best; the wave end repeats it
+    wave(3, 12, lambda i, k: 2 if i == 0 and k >= 8 else 0, [2, 1], [7, -1])
+    r.close()
+    out = capsys.readouterr().out
+    run = tmp_path / "run"
+    times = [json.loads(l) for l in open(run / "times.jsonl", encoding="utf-8")]
+    assert [(t["wave"], t["source"], t["frame"], t["frames"]) for t in times] == \
+        [(1, "explore", 5, 6), (1, "planned", 9, 10), (2, "planned", 14, 15), (3, "planned", 7, 8)]
+    assert all(t["lock"] is True and t["level"] == LEVEL and t["seconds"] == round(t["frames"] * 0.016667, 3)
+               for t in times)
+    b = json.load(open(best, encoding="utf-8"))
+    assert b[LEVEL]["planned"]["frames"] == 8 and b[LEVEL]["planned"]["wave"] == 3
+    assert b[LEVEL]["planned"]["seconds"] == pytest.approx(0.133) and b[LEVEL]["explore"]["frames"] == 6
+    events = [json.loads(l) for l in open(run / "events.jsonl", encoding="utf-8")]
+    fin = [e for e in events if e["kind"] == "finish"]
+    assert [(e["wave"], e["frame"], e["frames"], e["new_best"]) for e in fin] == \
+        [(1, 9, 10, True), (2, 14, 15, False), (3, 7, 8, True)]
+    assert [e["best"] for e in fin] == [pytest.approx(0.167), pytest.approx(0.167), pytest.approx(0.133)]
+    waves = [e for e in events if e["kind"] == "wave"]
+    assert [w["finished"] for w in waves] == [1, 1, 1] and waves[0]["ex_finished"] == 1
+    assert waves[1]["finish_s"] == pytest.approx(0.25) and waves[1]["best_s"] == pytest.approx(0.167)
+    assert "finished in 0.17 s (best 0.17 s, new best)" in out and "finished in 0.25 s (best 0.17 s)" in out
+    assert "fastest 0.10 s" in out
+    sent = [T.decode(d) for d in tel.out]
+    assert [m["seconds"] for m in sent if m["t"] == "event" and m["kind"] == "finish"] == [0.167, 0.25, 0.133]
+
+
+def test_best_times_file(tmp_path, capsys):
+    import agent
+    p = tmp_path / "best_times.json"
+    bt = agent.BestTimes(str(p))
+    rec = {"seconds": 4.25, "frames": 255, "run": "r", "wave": 1, "agent": 0, "date": "d"}
+    assert bt.offer("1-1", "planned", rec) and not bt.offer("1-1", "planned", dict(rec, seconds=4.3))
+    assert bt.offer("1-1", "explore", dict(rec, seconds=5.0))
+    assert json.load(open(p))["1-1"]["planned"]["seconds"] == 4.25 and not os.path.exists(str(p) + ".tmp")
+    assert agent.best_text(4.25, bt.best("1-1", "planned"), True, True) == "4.25 s (best 4.25 s, new best)"
+    assert "not a best time" in agent.best_text(4.25, None, False, None)
+    # an unreadable file is never overwritten
+    p.write_text("{broken", encoding="utf-8")
+    bt = agent.BestTimes(str(p))
+    assert not bt.offer("1-1", "planned", dict(rec, seconds=1.0)) and p.read_text(encoding="utf-8") == "{broken"
 
 
 def test_telemetry_udp_roundtrip_and_never_blocks():

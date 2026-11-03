@@ -80,7 +80,10 @@ Message types
  plan}), "unpredicted death" (surprise: {agent, x, y, plan_frame, plan}), "failed move" ({agent, move, cell,
  expected_drop, real_drop, dead, count, reason}), "death" ({agent, x, y, explained: bool, cause: str,
  estimated: bool (the position was predicted, not reported: deaths on a wave's last frame), memory_added:
- bool}), "level", "kill box", "hazards", "field" (progress field built / rebuilt), "plan error", "wave"
+ bool}), "finish" (a planned agent touched the goal: {agent, x, y, frame: the update it touched it in,
+ frames: frame + 1, seconds: frames x dt_ms / 1000, dt_ms, lock: the time-step lock was on (best times only
+ then), best: the level's best planned time (s) after this finish or null, new_best: bool}), "level",
+ "kill box", "hazards", "field" (progress field built / rebuilt), "plan error", "wave"
  (the per-wave summary; err_followed {"1": [median, 90%, n], "4", "8", "16"}: position error of predictions
  whose plan was followed that far), "lock", "stop".
 """
