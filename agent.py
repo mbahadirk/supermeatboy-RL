@@ -30,6 +30,10 @@ smbrl/best_times.json; the old best.json is not used).
 In the game (unless --no-overlay): the first planned agent's chosen path (green), predicted landings (yellow),
 wall jumps (cyan) and the top rejected alternatives (faint red when vetoed, grey otherwise).
 Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
+Per wave, after the summary line, a [cost] line (FrameCost): ms per frame (mean, median, 95%) spent planning,
+observing (surprises, failed moves, deaths), on the explore agents, world-model data, telemetry, file logging, the
+overlay, the level's live state, the rest, and waiting for the game (from the reply to the next frame message),
+plus the game speed (game seconds per wall-clock second); the same numbers go into the wave event.
 Stop: Ctrl+C or a file runs/<name>/STOP (the characters are handed back to the game).
 """
 from __future__ import annotations
@@ -134,6 +138,72 @@ def followed_text(err: dict) -> str:
             + " (median/90%, n " + "/".join(str(err[h][2]) for h in hs) + ")")
 
 
+class FrameCost:
+    """Where each frame's wall time goes (perf_counter only). A frame runs from its message's arrival to the
+    reply being posted; go(cat) charges the time since the last switch to the current category and switches
+    (returns the previous one, to switch back after a nested part). wait: from posting a reply to the next
+    frame message (the game's own work and the message transport)."""
+    CATS = ("planning", "observe", "explore", "wm_data", "telemetry", "logging", "overlay", "level", "other")
+    SHORT = {"planning": "plan", "wm_data": "wm", "telemetry": "tel", "logging": "log"}
+
+    def __init__(self):
+        self.cat = None
+        self.reset()
+
+    def reset(self):
+        """A new wave: the per-frame rows start again (the wait after a wave end is not a frame's wait)."""
+        self.rows, self.wait = [], []
+        self.t_first = self.sent = None
+
+    def begin(self):
+        now = time.perf_counter()
+        if self.sent is not None:
+            self.wait.append(now - self.sent)
+        if self.t_first is None:
+            self.t_first = now
+        self.acc = dict.fromkeys(self.CATS, 0.0)
+        self.cat, self.t = "other", now
+
+    def go(self, cat):
+        if self.cat is None or cat is None:         # outside a frame (level start, wave end)
+            return None
+        now = time.perf_counter()
+        self.acc[self.cat] += now - self.t
+        prev, self.cat, self.t = self.cat, cat, now
+        return prev
+
+    def end(self):
+        if self.cat is None:
+            return
+        now = time.perf_counter()
+        self.acc[self.cat] += now - self.t
+        self.rows.append([self.acc[c] for c in self.CATS])
+        self.cat, self.sent = None, now
+
+    def summary(self, frames: int, dt_ms: float) -> dict | None:
+        """{cat: [mean, median, 95%] ms per frame, ..., "python", "wait"}, game_speed (game s per wall s)."""
+        if not self.rows:
+            return None
+        a = 1000.0 * np.asarray(self.rows)
+        stat = lambda v: [round(float(np.mean(v)), 2), round(float(np.median(v)), 2),
+                          round(float(np.percentile(v, 95)), 2)]
+        out = {c: stat(a[:, k]) for k, c in enumerate(self.CATS)}
+        out["python"] = stat(a.sum(1))
+        if self.wait:
+            out["wait"] = stat(1000.0 * np.asarray(self.wait))
+        wall = time.perf_counter() - self.t_first
+        game = frames * dt_ms / 1000.0
+        return {"cost_ms": out, "wall_s": round(wall, 2), "game_s": round(game, 2),
+                "game_speed": round(game / wall, 3) if wall > 0 else None}
+
+    def text(self, s: dict) -> str:
+        c = s["cost_ms"]
+        f = lambda v: f"{v[0]:.1f} ({v[1]:.1f}/{v[2]:.0f})"
+        return ("[cost] ms/frame mean (median/95%): " + " ".join(f"{self.SHORT.get(k, k)} {f(c[k])}" for k in self.CATS)
+                + f" | python {f(c['python'])}" + (f" | wait {f(c['wait'])}" if "wait" in c else "")
+                + f" | {s['game_s']:.1f} game s in {s['wall_s']:.1f} s: speed {s['game_speed']}x")
+
+
 class BestTimes:
     """Best finish time per level, planned and explore agents apart:
     {level: {"planned": {seconds, frames, run, wave, agent, date}, "explore": {...}}}. Written atomically (temp
@@ -222,6 +292,7 @@ class Runner:
         self.best = BestTimes(args.best_times)
         self.lock = None                        # the time-step lock: True / False once realgame.js said so
         self.dt_ms = 16.667                     # the frame time of the last frame message (ms)
+        self.cost = FrameCost()
         self.lines = 0
         self.wm = None
         if args.wm_collect:
@@ -252,10 +323,12 @@ class Runner:
 
     # ---- logs ------------------------------------------------------------------------------------------------
     def _write(self, f, obj):
+        prev = self.cost.go("logging")
         f.write(json.dumps(T._plain(obj), separators=(",", ":")) + "\n")
         self.lines += 1
         if self.lines >= FLUSH_LINES:
             self.flush()
+        self.cost.go(prev)
 
     def flush(self):
         self.lines = 0
@@ -270,7 +343,9 @@ class Runner:
         self._write(self.f_events, {"time": round(time.time(), 3), "level": self.level.name if self.level else None,
                                     "wave": self.wave_no, **ev})
         if self.tel is not None:
+            prev = self.cost.go("telemetry")
             self.tel.send(T.event_message(self.level.name if self.level else None, self.wave_no, ev))
+            self.cost.go(prev)
 
     # ---- level / waves ---------------------------------------------------------------------------------------
     def new_wave(self, n: int):
@@ -296,6 +371,7 @@ class Runner:
         if info["name"] in (None, "unknown"):
             info["name"] = identify_level(info, tiles) or "unknown"
         self.level = lv = Level(info, tiles)
+        self.cost.reset()
         from wm.buffer import eval_levels
         self.protected = info["name"] in eval_levels()
         if self.wm and not self.protected:
@@ -391,7 +467,9 @@ class Runner:
         if len(self.alive) != n:
             self.new_wave(n)
         pl = self.planner
+        C = self.cost
         # the level's live state (as realgame.Trainer.on_frame)
+        C.go("level")
         if m.get("tc"):
             lv.apply_tiles(m["tc"])
             if pl is not None:
@@ -426,9 +504,11 @@ class Runner:
         self.dt_ms = dt
         self.fw.observe(frame, m.get("hz", []), m.get("pf"), m.get("sh", []), lv.hz_keep, lv.fans, dt, lv.hz_grow)
         if self.wm and not self.protected:
+            C.go("wm_data")
             self.wm.frame(m, list(lv.hz_ids), list(lv.hz_keep))
 
         # what happened since the last frame: deaths, finishes, surprises, failed moves
+        C.go("observe")
         alive_before, held_before = list(self.alive), list(self.held)
         for i, s in enumerate(states):
             if not self.alive[i]:
@@ -455,6 +535,7 @@ class Runner:
             self.last_state[i] = s
 
         # decisions
+        C.go("planning")
         acts, act_idx = [NOOP] * n, [-1] * n
         fboxes = None
         live_plan = [i for i in range(min(self.n_plan, n)) if self.alive[i]] if pl is not None else []
@@ -481,10 +562,12 @@ class Runner:
             a = int(p.actions[k]) if p is not None and 0 <= k < len(p.actions) else 0
             acts[i], act_idx[i] = list(ACTIONS[a]), a
             pl.played(i, frame, a)
+        C.go("explore")
         for i in range(self.n_plan, n):
             if self.alive[i] and int(states[i][6]) == 0:
                 a = self.explore_action(i)
                 acts[i], act_idx[i] = list(ACTIONS[a]), a
+        C.go("other")
         for i in range(n):
             if act_idx[i] >= 0:
                 self.held[i] = int(next_held(np.array([self.held[i]]), np.array([act_idx[i]]),
@@ -492,7 +575,9 @@ class Runner:
             else:
                 self.held[i] = 0
         self.last_msg = m
+        C.go("overlay")
         self.post_overlay(frame)
+        C.go("other")
         won = [i for i, s in enumerate(states) if int(s[6]) == 2]
         live = [i for i, s in enumerate(states) if int(s[6]) == 0 and self.alive[i]]
         leader = won[0] if won else (live_plan[0] if live_plan else (live[0] if live else 0))
@@ -501,9 +586,12 @@ class Runner:
                                                 round(float(states[i][2]), 2), round(float(states[i][3]), 2),
                                                 int(states[i][6])] for i in range(min(self.n_plan, n))]})
         if self.tel is not None:
+            C.go("telemetry")
             self.send_frame(m, frame, states, act_idx, boxes, kept, fboxes, dt)
         if self.wm and not self.protected:
+            C.go("wm_data")
             self.wm.agents(self.wave_no, frame, states, alive_before, held_before, act_idx, [float("nan")] * n)
+        C.go("other")
         return {"a": acts, "leader": int(leader)}
 
     def need_plan(self, i: int, frame: int) -> bool:
@@ -523,13 +611,16 @@ class Runner:
         s2 = c.get("stage2", {})
         if "skipped" in s2 or s2.get("steps", 0) < s2.get("of_steps", 0):
             st["cut2"] += 1
+        prev = self.cost.go("logging")
         d = plan.to_dict()
         d.update({"level": self.level.name, "wave": self.wave_no,
                   "real": {"x": s[0], "y": s[1], "vx": s[2], "vy": s[3], "flags": int(s[4]), "state": int(s[5]),
                            "status": int(s[6]), "keys": int(s[7]) if len(s) > 7 else 0}})
         self._write(self.f_plans, d)
         if self.tel is not None:
+            self.cost.go("telemetry")
             self.tel.send(T.plan_message(self.level.name, self.wave_no, d))
+        self.cost.go(prev)
 
     def observe(self, i, frame, x, y, keys, dead):
         """Planner.observe: surprises and failed moves, counted and logged."""
@@ -717,6 +808,7 @@ class Runner:
         ms = np.array(st["ms"]) if st["ms"] else None
         el = (time.time() - self.t0) / 60
         err_f = self.planner.surprise.errors() if self.planner is not None else None
+        cost = self.cost.summary(frame, self.dt_ms)
         fin_p = min(self.fin["planned"]) if self.fin["planned"] else None
         fin_x = min(self.fin["explore"]) if self.fin["explore"] else None
         best_p = self.best.best(lv.name, "planned") if lv is not None else None
@@ -738,7 +830,9 @@ class Runner:
                 + (f" | death memory +{st['memory']} ({len(self.deaths)})" if st["memory"] else "")
                 + f"  [{el:.1f} min]")
         print(line, flush=True)
-        self.event("wave", frame, why=m.get("why"), frames=frame,
+        if cost is not None:
+            print(self.cost.text(cost), flush=True)
+        self.event("wave", frame, **(cost or {}), why=m.get("why"), frames=frame,
                    **{k: v for k, v in st.items() if k != "ms"},
                    ms_median=float(np.median(ms)) if ms is not None else None,
                    ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f,
@@ -753,6 +847,7 @@ class Runner:
         self.new_wave(len(status) if status else len(self.alive))
         self.post_overlay(0, force=True)
         self.flush()
+        self.cost.reset()
 
     # ---- frida -------------------------------------------------------------------------------------------------
     def on_message(self, msg, data):
@@ -761,6 +856,8 @@ class Runner:
             return
         p = msg["payload"]
         ev = p.get("ev")
+        if ev == "frame":
+            self.cost.begin()
         reply = None
         try:
             if ev == "frame":
@@ -811,7 +908,9 @@ class Runner:
                 reply = {"a": [NOOP] * len(p.get("s", [])), "leader": 0}
             if self.stopping:
                 reply["stop"] = True
+            self.cost.go("other")
             self.script.post({"type": "act", "payload": reply})
+            self.cost.end()
 
     def close(self):
         self.flush()

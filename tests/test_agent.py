@@ -150,6 +150,12 @@ def test_runner_plays_a_recorded_wave(tmp_path):
     assert end[0]["frame"] == states[-1]["frame"] + 1
     wave = [e for e in events if e["kind"] == "wave"]
     assert wave and wave[-1]["estimated"] == 0
+    # per-frame cost: every category, the python total and the wait for the game, the game speed
+    cm = wave[-1]["cost_ms"]
+    assert set(cm) == set(agent_mod().FrameCost.CATS) | {"python", "wait"}
+    assert all(len(v) == 3 and v[0] >= 0 for v in cm.values()) and cm["planning"][0] > 0
+    assert cm["python"][0] == pytest.approx(sum(cm[c][0] for c in agent_mod().FrameCost.CATS), abs=0.1)
+    assert wave[-1]["game_speed"] > 0 and wave[-1]["game_s"] == pytest.approx(N_FRAMES * 0.016667, abs=0.01)
     # followed predictions' error per horizon; a position surprise only for a plan played that far
     ef = wave[-1]["err_followed"]
     assert set(ef) == {"1", "4", "8", "16"} and ef["1"][2] > 0
@@ -210,6 +216,40 @@ def test_old_wave_end_without_final_states(tmp_path):
     end = [e for e in events if e["kind"] == "death" and e["agent"] == 0]
     assert len(end) == 1 and end[0]["estimated"]
     assert [e for e in events if e["kind"] == "wave"][-1]["estimated"] == 1
+
+
+def agent_mod():
+    import agent
+    return agent
+
+
+def test_frame_cost_accounting(monkeypatch):
+    """Exclusive time per category (a nested part goes back to its caller's category), the wait between the
+    reply and the next frame, nothing outside frames, and the game speed."""
+    import agent
+    clock = [0.0]
+    monkeypatch.setattr(agent.time, "perf_counter", lambda: clock[0])
+    c = agent.FrameCost()
+
+    def tick(ms):
+        clock[0] += ms / 1000.0
+    for _ in range(4):
+        c.begin()
+        c.go("planning"); tick(10)
+        prev = c.go("logging"); tick(2); c.go(prev); tick(5)          # planning 15, logging 2
+        c.go("telemetry"); tick(1)
+        c.end()
+        tick(3)                                                        # the game's turn
+    assert c.go("planning") is None                                    # outside a frame: nothing charged
+    tick(5)
+    s = c.summary(4, 16.667)
+    cm = s["cost_ms"]
+    assert cm["planning"] == [15.0, 15.0, 15.0] and cm["logging"][0] == 2.0 and cm["telemetry"][0] == 1.0
+    assert cm["python"][0] == 18.0 and cm["wait"] == [3.0, 3.0, 3.0]
+    assert s["wall_s"] == pytest.approx(0.089, abs=0.006) and s["game_speed"] == pytest.approx(4 * 0.016667 / 0.089, abs=1e-3)
+    assert "speed" in c.text(s)
+    c.reset()
+    assert c.summary(1, 16.667) is None
 
 
 def _recorded():
