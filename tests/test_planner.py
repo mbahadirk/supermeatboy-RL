@@ -152,7 +152,8 @@ needs_model = pytest.mark.skipif(not os.path.exists(MODEL), reason="no world mod
 
 @pytest.fixture(scope="module")
 def flat():
-    """A flat level: floor rows 0-1, spawn left, goal right; and a planner on it."""
+    """A flat level: floor rows 0-1, spawn left, goal right; and a planner on it without deadlines (the
+    assertions below need the complete search, whatever the machine's load)."""
     from game.level import Level
     from plan.planner import Planner
     from plan.progress import ProgressField
@@ -163,7 +164,7 @@ def flat():
             "goals": [[50 * T + 10, 50.0]], "objs": [], "lethalTypes": []}
     lv = Level(info, w.astype("<u4").tobytes())
     field = ProgressField(w, 0.0, 0.0, lv.spawn, lv.goals, [], [], [], [], [])
-    return lv, Planner(MODEL, lv, field)
+    return lv, Planner(MODEL, lv, field, budget_ms=None)
 
 
 def empty_inputs(H, boxes=None):
@@ -195,6 +196,20 @@ def test_plan_has_full_horizon_predictions_and_serialises(flat):
     # the next decision keeps the previous plan, shifted, as a candidate
     plan2 = pl.plan(standing(), 102, worlds, frames)
     assert plan2.counts["final"]["prev_included"]
+
+
+@needs_model
+def test_no_budget_runs_every_stage_complete(flat):
+    from plan.planner import BUDGET_MS, Planner
+    lv, pl = flat
+    assert pl.budget is None and BUDGET_MS == 120.0
+    import inspect
+    assert inspect.signature(Planner).parameters["budget_ms"].default == BUDGET_MS     # default unchanged
+    pl.new_wave()
+    worlds, frames = empty_inputs(pl.H)
+    c = pl.plan(standing(), 100, worlds, frames).counts
+    assert c["stage1"]["steps"] == MAX_LEN and c["stage1"]["complete"] == len(LIBRARY)
+    assert c["stage2"]["steps"] == c["stage2"]["of_steps"] and "skipped" not in c["stage2"]
 
 
 @needs_model

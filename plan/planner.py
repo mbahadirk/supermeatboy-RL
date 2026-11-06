@@ -18,7 +18,8 @@ A time budget (120 ms) gives stage 1 a deadline at 30% of it and stage 2 one at 
 stage's measured cost (a running average; at least 45% of the budget); a cut stage is recorded as cut
 (candidates and steps actually evaluated in Plan.counts), never passed off as complete, and its candidates are
 ranked on the frames they have. The final stage always runs to the horizon, so a decision can exceed the
-budget by what the final stage takes beyond its estimate.
+budget by what the final stage takes beyond its estimate. budget_ms=None: no deadlines, every stage runs
+complete (tests and offline checks whose result must not depend on the machine's load).
 
 Score of a candidate (higher is better; units of V, about tiles):
 - progress = V(start) - V(end) on the agent's current leg (ProgressField.leg_of(keys)). V(end) is V_support
@@ -339,7 +340,7 @@ class Planner:
     """One planner per level (several agents may share it; the previous plan is kept per agent)."""
 
     def __init__(self, model, level, field: ProgressField, H: int = H_DEFAULT, B1: int = B1_DEFAULT,
-                 branch: int = BRANCH_DEFAULT, S_final: int = S_DEFAULT, budget_ms: float = BUDGET_MS,
+                 branch: int = BRANCH_DEFAULT, S_final: int = S_DEFAULT, budget_ms: float | None = BUDGET_MS,
                  member: int = 0, memory: FailureMemory | None = None):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms
@@ -431,7 +432,8 @@ class Planner:
         n1 = len(self.lib)
         K1 = MAX_LEN
         out1 = imagine(self.model, mem, self.geom, np.repeat(row, n1), self.lib_actions, dt_ms, worlds,
-                       deadline=t0 + STAGE1_SHARE * self.budget / 1000.0, keep_rows=True)
+                       deadline=None if self.budget is None else t0 + STAGE1_SHARE * self.budget / 1000.0,
+                       keep_rows=True)
         steps1 = out1["steps"]
         up1 = np.minimum(self.lib_len, steps1)
         fr1 = _near_frames(frames[:steps1 + 1], out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1])
@@ -476,7 +478,8 @@ class Planner:
                     segs = [(self.lib[i].name, 0, L), (sm.name, L, L2)] + ([("pad", L2, H)] if L2 < H else [])
                     cands.append((segs, full))
             s0 = np.array(s0, ROW)
-            dl2 = t0 + max(STAGE2_SHARE * self.budget, self.budget - self.final_ms) / 1000.0
+            dl2 = (None if self.budget is None else
+                   t0 + max(STAGE2_SHARE * self.budget, self.budget - self.final_ms) / 1000.0)
             out2 = imagine(self.model, mem, self.geom, s0, np.stack(acts2), dt_ms, worlds, offsets=offs, deadline=dl2)
             steps2 = out2["steps"]
             n2 = len(cands)
