@@ -229,6 +229,60 @@ def sweep(xs, ys, frames, bounds=None) -> Sweep:
                  out_min.reshape(sh2), out_frame.reshape(sh2), step_clear.reshape(E, n, K))
 
 
+def first_contact(xs, ys, boxes, first=None, upto=None):
+    """The same swept segment test against boxes that are touched rather than deadly (the goal, a key): fixed
+    boxes (M, 5) in the contact convention (centre within BODY: game.level.Level.goal_boxes / key_boxes).
+    xs, ys (E, n, K+1). Per trajectory the first frame k (step k-1 -> k) that touches a box, only frames
+    first..upto (first, upto: broadcast to (E, n); None: 1 and K), and the index of the box; -1 when none.
+    A box the trajectory starts in contact with (frame 0) is not counted for it: the game said it was not
+    touched there."""
+    xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+    E, n, K1 = xs.shape
+    K = K1 - 1
+    frame = np.full((E, n), -1, np.int64)
+    which = np.full((E, n), -1, np.int64)
+    b = np.asarray(boxes, np.float64).reshape(-1, 5)
+    if not len(b) or K < 1:
+        return frame, which
+    reach = np.hypot(b[:, 2], b[:, 3]) + BODY
+    near = ((b[:, 0] >= xs.min() - reach) & (b[:, 0] <= xs.max() + reach) & (b[:, 1] >= ys.min() - reach)
+            & (b[:, 1] <= ys.max() + reach))
+    if not near.any():
+        return frame, which
+    idx = np.nonzero(near)[0]
+    fb = FrameBoxes(b[idx], np.zeros(len(idx), np.int8), [str(i) for i in idx])
+    P = E * n
+    X, Y = xs.reshape(P, K1), ys.reshape(P, K1)
+    def lim(v, default):
+        if v is None:
+            return np.full(P, default, np.int64)
+        return np.broadcast_to(np.asarray(v, np.int64), (E, n)).reshape(P)
+    lo, hi = lim(first, 1), np.minimum(lim(upto, K), K)
+    # only the paths that come near a box, every step at once
+    b = fb.boxes
+    r = np.hypot(b[:, 2], b[:, 3]) + BODY
+    cand = np.nonzero(((X.min(1)[:, None] <= b[:, 0] + r) & (X.max(1)[:, None] >= b[:, 0] - r)
+                       & (Y.min(1)[:, None] <= b[:, 1] + r) & (Y.max(1)[:, None] >= b[:, 1] - r)).any(1)
+                      & (lo <= hi))[0]
+    if not len(cand):
+        return frame, which
+    Xc, Yc = X[cand], Y[cand]
+    clear, _ = segment_clearance(Xc[:, :-1], Yc[:, :-1], Xc[:, 1:], Yc[:, 1:], fb)
+    clear = clear.reshape(len(cand), K, len(b))
+    start_in = box_distances(Xc[:, 0], Yc[:, 0], b) - BODY < 0              # (paths, M)
+    clear = np.where(start_in[:, None, :], np.inf, clear)
+    j = clear.argmin(2)                                                      # (paths, K)
+    ks = np.arange(1, K + 1)
+    hit = ((np.take_along_axis(clear, j[:, :, None], 2)[:, :, 0] < 0) & (ks >= lo[cand][:, None])
+           & (ks <= hi[cand][:, None]))
+    got = hit.any(1)
+    k1 = hit.argmax(1)
+    out_f, out_w = frame.reshape(P), which.reshape(P)
+    out_f[cand[got]] = k1[got] + 1
+    out_w[cand[got]] = idx[j[np.arange(len(cand)), k1][got]]
+    return out_f.reshape(E, n), out_w.reshape(E, n)
+
+
 # ---- decision rule --------------------------------------------------------------------------------------
 def margin(k) -> np.ndarray:
     """Soft-risk margin (units) at horizon k frames: the world model's 90% position error, interpolated

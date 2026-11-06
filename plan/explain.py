@@ -60,6 +60,11 @@ class Plan:
     predictions: {1: [x, y], 4: ..., 8: ..., 16: ...} for the surprise check.
     death_model: the learned death output (probability of dying within the plan, max over members): a second
     opinion only, never used for the decision.
+    goal_touch: None, or where the plan touches the goal {frame (the members' median), x, y (mean touch point),
+    members (how many touch it safely)}: a success (plan/planner.py, goal contact). key_touches: the route's
+    next keys the plan picks up [{frame, key (index in the level's key list), x, y}].
+    finish_model: the learned finish head along the plan (max probability over members and frames): a
+    cross-check of goal_touch only, never used for the decision.
     timing: ms per stage; counts: candidates and rolled-out steps actually evaluated per stage, and whether the
     stage ran to the end (never pretended). segments: [[move, from frame, to frame]] of the H frames.
     """
@@ -91,6 +96,9 @@ class Plan:
     counts: dict
     segments: list = field(default_factory=list)      # [[move name or "pad", first frame, end frame], ...]
     first_move_frames: int = 0
+    goal_touch: dict | None = None
+    key_touches: list = field(default_factory=list)
+    finish_model: float | None = None
 
     @property
     def name(self) -> str:
@@ -112,7 +120,10 @@ class Plan:
         veto = f" VETO {self.veto['id']} f{self.veto['frame']}" if self.veto else ""
         alt = self.alternatives[0] if self.alternatives else None
         alt_s = f" | rejected '{' > '.join(alt['moves'])}': {alt['reason']}" if alt else ""
-        return (f"{'[prev] ' if self.from_prev else ''}{self.name}: progress {sc['progress']:+.2f} (V {v0} -> {v1}, "
+        gt = self.goal_touch
+        touch = (f"touches the princess at f{gt['frame']} ({gt['members']} members); " if gt else "") + "".join(
+            f"takes key {k['key']} at f{k['frame']}; " for k in self.key_touches or [])
+        return (f"{'[prev] ' if self.from_prev else ''}{self.name}: {touch}progress {sc['progress']:+.2f} (V {v0} -> {v1}, "
                 f"leg {self.leg}), risk {sc['risk']:.2f}, unc x{sc['uncertainty']:.2f}, total {sc['total']:+.2f}; "
                 f"{near_s}; {land_s}{wj}{veto}{alt_s}")
 

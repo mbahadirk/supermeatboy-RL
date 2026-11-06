@@ -15,12 +15,13 @@ hazards from the run's wm_data world records (the recorded hazards at +8 / +16 f
 planner's expectation, which is not logged; waves repeat exactly under the time-step lock); remembered deaths
 from the run's death events (memory_added). Without wm_data the replay has no hazards (said in the panel).
 
-Drawn (map, y up): tiles (solid, special, gone), the kill box / alive box, goal, spawn, keys; hazards now (red,
+Drawn (map, y up): tiles (solid, special, gone), the kill box / alive box, goal and keys with the planner's
+contact region (outline: what counts as touching them), spawn; hazards now (red,
 rotated, already grown by their kill reach), predicted at +8 / +16 (faint outlines), remembered deaths
 (purple); planned agents (white) and explore agents (small dim dots) with a velocity arrow (0.1 s); deaths
 (X: red unexplained, orange explained). For the selected agent: the chosen path (green; dashed and faded where
 the ensemble spread is over 20 units; the part already played thinner), landings (yellow) and wall jumps (cyan)
-with their frame, the nearest hazards' clearance (a thin line from the path point at that frame to the closest
+with their frame, where it touches the princess (pink ring) or picks a key (yellow ring), the nearest hazards' clearance (a thin line from the path point at that frame to the closest
 box of that kind, labelled with the planner's own clearance number), the rejected alternatives (red vetoed,
 grey otherwise; hover for the reason), the plan's predictions at +1 / +4 / +8 / +16 (hollow circles) and, for
 each horizon, the latest prediction whose frame has arrived with a line to the real position and the error
@@ -63,6 +64,7 @@ from plan.explain import HORIZONS, ERR90_AT, SURPRISE_FACTOR             # noqa:
 RUNS = os.path.join(HERE, "runs")
 BEST_TIMES = os.path.join(HERE, "best_times.json")      # agent.py --best-times default
 TILE = 20.0
+BODY = 6.0                    # realpath.BODY: a goal / key box is touched within this of it
 FPS = 30
 HZ = 60                       # game frames per second (replay speed 1x)
 PANEL_W = 480
@@ -227,6 +229,8 @@ class LevelView:
     explore: int
     field: str | None
     key: tuple                   # changes when the drawn tiles change
+    goal_boxes: list = field(default_factory=list)    # [x, y, hw, hh, angle]: touched within BODY (planner)
+    key_boxes: list = field(default_factory=list)
 
     @classmethod
     def from_message(cls, m: dict) -> "LevelView | None":
@@ -245,7 +249,8 @@ class LevelView:
                        tuple(m["spawn"]) if m.get("spawn") else None, [tuple(k) for k in m.get("keys") or []],
                        [tuple(b) for b in m.get("bandages") or []], m.get("portals") or [],
                        int(ag.get("planned", 0)), int(ag.get("explore", 0)), m.get("field"),
-                       (m.get("name"), W, H, ox, oy, hash(m.get("solid")), m.get("words") is not None))
+                       (m.get("name"), W, H, ox, oy, hash(m.get("solid")), m.get("words") is not None),
+                       [list(b) for b in m.get("goal_boxes") or []], [list(b) for b in m.get("key_boxes") or []])
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -961,6 +966,10 @@ class Renderer:
             pg.draw.rect(surf, KILLBOX if lv.kill_box else ALIVEBOX, pg.Rect(x0, y0, max(1, x1 - x0), max(1, y1 - y0)), 1)
             if lv.spawn:
                 pg.draw.circle(surf, SPAWN, m.pt(*lv.spawn[:2]), min(14, max(4, int(8 * m.sc))), 2)
+            for b in lv.goal_boxes:          # the planner's contact region: the box grown by the body
+                self.poly(surf, m, [b[0], b[1], b[2] + BODY, b[3] + BODY, b[4]], GOAL, 1)
+            for b in lv.key_boxes:
+                self.poly(surf, m, [b[0], b[1], b[2] + BODY, b[3] + BODY, b[4]], KEY, 1)
             for g in lv.goals:
                 pg.draw.circle(surf, GOAL, m.pt(*g[:2]), min(16, max(5, int(10 * m.sc))))
             for kx, ky in [k[:2] for k in lv.keys]:
@@ -1061,6 +1070,16 @@ class Renderer:
             p = m.pt(wj["x"], wj["y"])
             pg.draw.circle(surf, WALL, p, 6, 2)
             self.text(surf, f"WJ f{wj['frame']} {wj.get('side', '')}", p[0] + 7, p[1] - 14, WALL, self.small)
+        # where the plan touches the princess / picks a key
+        gt = plan.get("goal_touch")
+        if gt:
+            p = m.pt(gt["x"], gt["y"])
+            pg.draw.circle(surf, GOAL, p, 8, 2)
+            self.text(surf, f"princess f{gt['frame']}", p[0] + 9, p[1] - 16, GOAL, self.small)
+        for kt in plan.get("key_touches") or []:
+            p = m.pt(kt["x"], kt["y"])
+            pg.draw.circle(surf, KEY, p, 7, 2)
+            self.text(surf, f"key {kt.get('key')} f{kt['frame']}", p[0] + 8, p[1] + 2, KEY, self.small)
         # the nearest hazards: path point at that frame -> the closest box of that kind then
         lv = scene.level
         for nh in (plan.get("nearest") or [])[:NEAREST_DRAWN]:
@@ -1203,6 +1222,12 @@ class Renderer:
                       + f"; death model {fmt(plan.get('death_model'), '.2f')}", GOOD if not plan.get("soft_risk") else WARN)
             lands = ", ".join(f"f{d['frame']} {d.get('on')} ({d['x']:.0f},{d['y']:.0f})" for d in plan.get("landings") or [])
             wjs = ", ".join(f"f{d['frame']} {d.get('side')} ({d['x']:.0f},{d['y']:.0f})" for d in plan.get("wall_jumps") or [])
+            gt = plan.get("goal_touch")
+            fm = plan.get("finish_model")
+            small((f"princess: touched at f{gt['frame']} ({gt.get('members')} members)" if gt else
+                   "princess: not reached") + (f"; finish model {fmt(fm, '.2f')}" if fm is not None else "")
+                  + "".join(f"; key {k.get('key')} at f{k['frame']}" for k in plan.get("key_touches") or []),
+                  GOAL if gt else DIM)
             small("lands: " + (lands or "-"), LAND)
             small("wall jumps: " + (wjs or "-"), WALL)
             near = plan.get("nearest") or []

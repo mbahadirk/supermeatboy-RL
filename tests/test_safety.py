@@ -133,3 +133,27 @@ def test_explain_death_uses_hazards_shots_and_bounds():
     assert not S.explain_death(LV, rec, keep, grow, 600, 200, 610, 200)
     assert not S.explain_death(LV, rec, [False], grow, 150, 200, 185, 200)   # decoration does not kill
     assert S.explain_death(LV, rec, keep, [(20.0, 0.0)], 150, 200, 165, 200)  # kill reach grown by 20
+
+
+def test_first_contact_goal_and_key_boxes():
+    goal = (100.0, 200.0, 20.0, 1.0, 0.0)                    # touched within BODY of it, like a hazard
+    key = (300.0, 50.0, 5.0, 5.0, 0.0)
+    pts = [(100, 260), (100, 240), (100, 150), (300, 70), (300, 50)]
+    xs, ys = traj(pts)
+    f, w = S.first_contact(xs, ys, [goal, key])
+    assert f[0, 0] == 2 and w[0, 0] == 0                     # the fall 240 -> 150 sweeps through the thin goal
+    f, w = S.first_contact(xs, ys, [goal, key], first=3)
+    assert f[0, 0] == 4 and w[0, 0] == 1                     # from frame 3 on: the key at frame 4
+    f, _ = S.first_contact(xs, ys, [goal, key], upto=1)
+    assert f[0, 0] == -1                                     # not within the judged frames
+    # a path that starts in contact with a box does not count it (the game said it was not touched)
+    xs, ys = traj([(100, 204), (100, 203), (100, 150)])
+    f, _ = S.first_contact(xs, ys, [goal])
+    assert f[0, 0] == -1
+    f, _ = S.first_contact(xs, ys, np.zeros((0, 5)))
+    assert f[0, 0] == -1
+    # per member limits broadcast over (E, n)
+    xs = np.array([[[0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0]]])
+    ys = np.array([[[100.0, 50.0, 0.0]], [[100.0, 90.0, 0.0]]])
+    f, _ = S.first_contact(xs, ys, [(0.0, 0.0, 1.0, 1.0, 0.0)], first=np.array([[1], [3]]))
+    assert f[:, 0].tolist() == [2, -1]

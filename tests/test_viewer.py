@@ -282,3 +282,33 @@ def test_finish_times_in_the_panel(tmp_path):
     src = V.LiveSource(bind=False)
     src.handle(e)
     assert src.scene().stats["last_finish"]["seconds"] == 4.25
+
+
+def test_goal_contact_boxes_and_touch_markers():
+    """The level message carries the planner's goal / key contact boxes; a plan's goal and key touches are drawn
+    (map markers and the panel line) and sent to the in-game overlay as dots."""
+    from game.level import tile_solid
+    words = _words()
+    gb, kb = [90.0, -30.0, 6.0, 5.7, 0.0], [0.0, 0.0, 11.3, 11.3, 0.0]
+    lv = _Lv(name=LEVEL, W=W, H=H, ox=OX, oy=OY, kill_box=None, words=words, solid=tile_solid(words),
+             goals=[(90.0, -30.0)], spawn=(-60.0, -30.0), keys=[(0.0, 0.0)], bandages=[], portals=[],
+             goal_boxes=lambda: [tuple(gb)], key_boxes=lambda: [tuple(kb)])
+    m = T.decode(T.Telemetry(None).fit(T.level_message(lv, 1, 1, 0, "clear")))
+    assert m["goal_boxes"] == [gb] and m["key_boxes"] == [kb]
+    view = V.LevelView.from_message(m)
+    assert view.goal_boxes == [gb] and view.key_boxes == [kb]
+    src = V.LiveSource(bind=False)
+    src.handle(m)
+    p = _plan(4)
+    p["goal_touch"] = {"frame": 12, "x": 84.0, "y": -30.0, "members": 4}
+    p["key_touches"] = [{"frame": 6, "key": 0, "x": 0.0, "y": -2.0}]
+    p["finish_model"] = 0.97
+    src.handle(T.decode(T.Telemetry(None).fit(T.plan_message(LEVEL, 1, p))))
+    sc = src.scene()
+    assert sc.plans[0]["goal_touch"]["frame"] == 12
+    V.Renderer().render(_surface(), sc)
+    import agent
+    plan = SimpleNamespace(alternatives=[], path=p["path"], landings=[], wall_jumps=[],
+                           goal_touch=p["goal_touch"], key_touches=p["key_touches"])
+    dots = [d for d in agent.overlay_payload(plan) if d["col"] in (agent.COL_GOAL, agent.COL_KEY)]
+    assert [d["pts"] for d in dots] == [[[0.0, -2.0]], [[84.0, -30.0]]]

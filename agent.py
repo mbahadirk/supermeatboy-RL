@@ -28,7 +28,8 @@ world-model data in runs/<name>/wm_data (shards' source: planner, explore or pla
 Best finish times per level (planned and explore apart, time-step lock on only): --best-times (default
 smbrl/best_times.json; the old best.json is not used).
 In the game (unless --no-overlay): the first planned agent's chosen path (green), predicted landings (yellow),
-wall jumps (cyan) and the top rejected alternatives (faint red when vetoed, grey otherwise).
+wall jumps (cyan), where it touches the princess (pink) or picks a key (gold), and the top rejected
+alternatives (faint red when vetoed, grey otherwise).
 Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
 Per wave, after the summary line, a [cost] line (FrameCost): ms per frame (mean, median, 95%) spent planning,
 observing (surprises, failed moves, deaths), on the explore agents, world-model data, telemetry, file logging, the
@@ -80,6 +81,7 @@ NOOP = [0, 0, 0, 0]
 # overlay colours (0xAARRGGBB) and widths (pixels, realgame.js drawPaths)
 COL_PLAN, COL_LAND, COL_WALL = 0xE020E040, 0xF0FFE020, 0xF020E0FF
 COL_ALT_VETO, COL_ALT = 0x60FF4040, 0x50B0B0B0
+COL_GOAL, COL_KEY = 0xF0FF78B9, 0xF0FFE628      # where the plan touches the princess / picks a key
 OVERLAY_ALTS, PLAN_STEP, ALT_STEP = 3, 3, 4
 
 
@@ -113,7 +115,8 @@ def _sub(pts, step: int) -> list:
 
 def overlay_payload(plan) -> list:
     """realgame.js 'path' payload [{pts, col, w}] for one plan: the top rejected alternatives faintly (red when
-    vetoed, grey otherwise), the chosen path (green), landings (yellow) and wall jumps (cyan) as dots."""
+    vetoed, grey otherwise), the chosen path (green), landings (yellow) and wall jumps (cyan) as dots, and where
+    it touches the princess (pink) or picks a key (gold) as larger dots."""
     if plan is None:
         return []
     out = []
@@ -126,6 +129,11 @@ def overlay_payload(plan) -> list:
         out.append({"pts": [[round(p["x"], 1), round(p["y"], 1)]], "col": COL_LAND, "w": 4})
     for p in plan.wall_jumps[:4]:
         out.append({"pts": [[round(p["x"], 1), round(p["y"], 1)]], "col": COL_WALL, "w": 4})
+    touches = [(p, COL_KEY) for p in (getattr(plan, "key_touches", None) or [])[:2]]
+    if getattr(plan, "goal_touch", None):
+        touches.append((plan.goal_touch, COL_GOAL))
+    for p, col in touches:
+        out.append({"pts": [[round(p["x"], 1), round(p["y"], 1)]], "col": col, "w": 6})
     return out
 
 

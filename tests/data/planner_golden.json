@@ -1,0 +1,1348 @@
+{
+ "about": "planner decisions before goal / key contact (tests/test_planner_golden.py)",
+ "model_sha256": "a138422c944181f416d4d188539fff3599398cf631113b1aeba328a1eaac9a20",
+ "cases": [
+  [
+   "flat standing",
+   {
+    "chosen": [
+     "run-jump R hold 6 after 8f",
+     "run-jump R hold 15 after 4f"
+    ],
+    "actions": [
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6
+    ],
+    "segments": [
+     [
+      "run-jump R hold 6 after 8f",
+      0,
+      20
+     ],
+     [
+      "run-jump R hold 15 after 4f",
+      20,
+      44
+     ],
+     [
+      "pad",
+      44,
+      48
+     ]
+    ],
+    "pad": 4,
+    "from_prev": false,
+    "score": {
+     "progress": 11.4,
+     "progress_credit": 3.9299115011284274,
+     "risk": 0.0,
+     "uncertainty": 0.34472907904635325,
+     "spread_end": 20.649964485696696,
+     "failure": 0.0,
+     "total": 3.9299115011284274
+    },
+    "v_start": 40.0,
+    "v_end": 28.6,
+    "dead_end_members": 0,
+    "leg": 0,
+    "veto": null,
+    "soft_risk": 0.0,
+    "soft_frame": -1,
+    "end_supported": false,
+    "first_move_frames": 20,
+    "alternatives": [
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 6 after 4f"
+      ],
+      "total": 3.881841656483303,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.4 (uncertain: spread 21u, credit x0.34)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 10 after 4f"
+      ],
+      "total": 3.681292543345019,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.4 (uncertain: spread 21u, credit x0.32)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 15"
+      ],
+      "total": 3.3183912261375923,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.4 (uncertain: spread 22u, credit x0.29)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run R 16f"
+      ],
+      "total": 3.0447552041425774,
+      "progress": 11.2,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.2 vs 11.4 (uncertain: spread 23u, credit x0.27)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run R 24f"
+      ],
+      "total": 3.0447552041425774,
+      "progress": 11.2,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.2 vs 11.4 (uncertain: spread 23u, credit x0.27)",
+      "vetoed": false
+     }
+    ],
+    "counts": {
+     "stage1": {
+      "candidates": 73,
+      "steps": 24,
+      "complete": 73,
+      "vetoed": 0
+     },
+     "stage2": {
+      "candidates": 128,
+      "steps": 32,
+      "of_steps": 32,
+      "complete": 128,
+      "vetoed": 0,
+      "second_moves": [
+       "wait 8f",
+       "run L 16f",
+       "run R 16f",
+       "run-jump L hold 15",
+       "run-jump R hold 15",
+       "wall-jump L hold 8",
+       "wall-jump R hold 8",
+       "jump up hold 15",
+       "run R 24f",
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 10 after 8f",
+       "walk R 24f",
+       "run-jump R hold 6 after 4f",
+       "run-jump R hold 10 after 4f",
+       "run-jump R hold 15 after 4f",
+       "wait 16f"
+      ]
+     },
+     "final": {
+      "candidates": 16,
+      "members": 5,
+      "steps": 48,
+      "vetoed": 0,
+      "prev_included": false
+     }
+    }
+   }
+  ],
+  [
+   "flat standing, previous plan",
+   {
+    "chosen": [
+     "run-jump R hold 6 after 8f",
+     "run-jump R hold 15 after 4f"
+    ],
+    "actions": [
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6
+    ],
+    "segments": [
+     [
+      "run-jump R hold 6 after 8f",
+      0,
+      18
+     ],
+     [
+      "run-jump R hold 15 after 4f",
+      18,
+      42
+     ],
+     [
+      "pad",
+      42,
+      48
+     ]
+    ],
+    "pad": 6,
+    "from_prev": true,
+    "score": {
+     "progress": 11.2,
+     "progress_credit": 4.5589365187256154,
+     "risk": 0.0,
+     "uncertainty": 0.4070479034576443,
+     "spread_end": 18.988244015523847,
+     "failure": 0.0,
+     "total": 4.5589365187256154
+    },
+    "v_start": 40.0,
+    "v_end": 28.8,
+    "dead_end_members": 0,
+    "leg": 0,
+    "veto": null,
+    "soft_risk": 0.0,
+    "soft_frame": -1,
+    "end_supported": false,
+    "first_move_frames": 18,
+    "alternatives": [
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 15 after 4f"
+      ],
+      "total": 3.9299115011284274,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.2 (uncertain: spread 21u, credit x0.34)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 6 after 4f"
+      ],
+      "total": 3.881841656483303,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.2 (uncertain: spread 21u, credit x0.34)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 10 after 4f"
+      ],
+      "total": 3.681292543345019,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.2 (uncertain: spread 21u, credit x0.32)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 15"
+      ],
+      "total": 3.3183912261375923,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.2 (uncertain: spread 22u, credit x0.29)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run R 16f"
+      ],
+      "total": 3.0447552041425774,
+      "progress": 11.2,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.2 vs 11.2 (uncertain: spread 23u, credit x0.27)",
+      "vetoed": false
+     }
+    ],
+    "counts": {
+     "stage1": {
+      "candidates": 73,
+      "steps": 24,
+      "complete": 73,
+      "vetoed": 0
+     },
+     "stage2": {
+      "candidates": 128,
+      "steps": 32,
+      "of_steps": 32,
+      "complete": 128,
+      "vetoed": 0,
+      "second_moves": [
+       "wait 8f",
+       "run L 16f",
+       "run R 16f",
+       "run-jump L hold 15",
+       "run-jump R hold 15",
+       "wall-jump L hold 8",
+       "wall-jump R hold 8",
+       "jump up hold 15",
+       "run R 24f",
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 10 after 8f",
+       "walk R 24f",
+       "run-jump R hold 6 after 4f",
+       "run-jump R hold 10 after 4f",
+       "run-jump R hold 15 after 4f",
+       "wait 16f"
+      ]
+     },
+     "final": {
+      "candidates": 17,
+      "members": 5,
+      "steps": 48,
+      "vetoed": 0,
+      "prev_included": true
+     }
+    }
+   }
+  ],
+  [
+   "flat hazard strip",
+   {
+    "chosen": [
+     "walk L 8f",
+     "jump up hold 15"
+    ],
+    "actions": [
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "segments": [
+     [
+      "walk L 8f",
+      0,
+      8
+     ],
+     [
+      "jump up hold 15",
+      8,
+      29
+     ],
+     [
+      "pad",
+      29,
+      48
+     ]
+    ],
+    "pad": 19,
+    "from_prev": false,
+    "score": {
+     "progress": -2.6828427124746184,
+     "progress_credit": -2.6828427124746184,
+     "risk": 0.9617665354526361,
+     "uncertainty": 0.5033079964468642,
+     "spread_end": 16.865529772933236,
+     "failure": 0.0,
+     "total": -3.6446092479272547
+    },
+    "v_start": 40.0,
+    "v_end": 42.682842712474624,
+    "dead_end_members": 0,
+    "leg": 0,
+    "veto": null,
+    "soft_risk": 0.09617665354526361,
+    "soft_frame": 25,
+    "end_supported": false,
+    "first_move_frames": 8,
+    "alternatives": [
+     {
+      "moves": [
+       "walk L 8f",
+       "wall-jump L hold 8"
+      ],
+      "total": -4.6,
+      "progress": -4.6,
+      "stage": "final",
+      "reason": "no progress (V 40.0 -> 44.6)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "walk L 16f",
+       "wall-jump L hold 8"
+      ],
+      "total": -5.832406973178424,
+      "progress": -4.482842712474619,
+      "stage": "final",
+      "reason": "no progress (V 40.0 -> 44.5)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "walk L 8f",
+       "run-jump R hold 15"
+      ],
+      "total": -6.794188834313751,
+      "progress": 6.8343145750507635,
+      "stage": "final",
+      "reason": "risk 1.00 near h0 at frame 20 (chosen 0.10)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run R 24f"
+      ],
+      "total": null,
+      "progress": 5.0,
+      "stage": "stage 1",
+      "reason": "hits h0 at frame 10",
+      "vetoed": true
+     },
+     {
+      "moves": [
+       "run R 16f"
+      ],
+      "total": null,
+      "progress": 3.0,
+      "stage": "stage 1",
+      "reason": "hits h0 at frame 10",
+      "vetoed": true
+     }
+    ],
+    "counts": {
+     "stage1": {
+      "candidates": 73,
+      "steps": 24,
+      "complete": 73,
+      "vetoed": 24
+     },
+     "stage2": {
+      "candidates": 128,
+      "steps": 40,
+      "of_steps": 40,
+      "complete": 128,
+      "vetoed": 76,
+      "second_moves": [
+       "wait 8f",
+       "run L 16f",
+       "run R 16f",
+       "run-jump L hold 15",
+       "run-jump R hold 15",
+       "wall-jump L hold 8",
+       "wall-jump R hold 8",
+       "jump up hold 15",
+       "run R 8f",
+       "jump R hold 6",
+       "run-jump R hold 3",
+       "wall-jump R hold 6",
+       "wall-climb R hold 6",
+       "walk L 8f",
+       "walk L 16f",
+       "run L 8f"
+      ]
+     },
+     "final": {
+      "candidates": 16,
+      "members": 5,
+      "steps": 48,
+      "vetoed": 0,
+      "prev_included": false
+     }
+    }
+   }
+  ],
+  [
+   "flat airborne, hazard ahead",
+   {
+    "chosen": [
+     "run-jump R hold 15",
+     "run-jump R hold 15"
+    ],
+    "actions": [
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6
+    ],
+    "segments": [
+     [
+      "run-jump R hold 15",
+      0,
+      21
+     ],
+     [
+      "run-jump R hold 15",
+      21,
+      42
+     ],
+     [
+      "pad",
+      42,
+      48
+     ]
+    ],
+    "pad": 6,
+    "from_prev": false,
+    "score": {
+     "progress": 17.57817459305203,
+     "progress_credit": 17.57817459305203,
+     "risk": 4.523631105008087,
+     "uncertainty": 1.0,
+     "spread_end": 7.683580722035993,
+     "failure": 0.0,
+     "total": 13.054543488043944
+    },
+    "v_start": 40.77817459305203,
+    "v_end": 23.2,
+    "dead_end_members": 0,
+    "leg": 0,
+    "veto": null,
+    "soft_risk": 0.4523631105008087,
+    "soft_frame": 18,
+    "end_supported": false,
+    "first_move_frames": 21,
+    "alternatives": [
+     {
+      "moves": [
+       "run-jump R hold 15",
+       "run-jump R hold 10"
+      ],
+      "total": 13.054543488043944,
+      "progress": 17.57817459305203,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 17.6 vs 17.6",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 15",
+       "run wall-jump R hold 8"
+      ],
+      "total": 13.054543488043944,
+      "progress": 17.57817459305203,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 17.6 vs 17.6",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 15",
+       "run-jump R hold 6 after 4f"
+      ],
+      "total": 12.971700775569325,
+      "progress": 17.49533188057741,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 17.5 vs 17.6",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run R 24f"
+      ],
+      "total": null,
+      "progress": 9.778174593052029,
+      "stage": "stage 1",
+      "reason": "hits h0 at frame 16",
+      "vetoed": true
+     },
+     {
+      "moves": [
+       "run R 16f"
+      ],
+      "total": null,
+      "progress": 7.3639610306789365,
+      "stage": "stage 1",
+      "reason": "hits h0 at frame 16",
+      "vetoed": true
+     }
+    ],
+    "counts": {
+     "stage1": {
+      "candidates": 73,
+      "steps": 24,
+      "complete": 73,
+      "vetoed": 4
+     },
+     "stage2": {
+      "candidates": 128,
+      "steps": 34,
+      "of_steps": 34,
+      "complete": 128,
+      "vetoed": 8,
+      "second_moves": [
+       "wait 8f",
+       "run L 16f",
+       "run R 16f",
+       "run-jump L hold 15",
+       "run-jump R hold 15",
+       "wall-jump L hold 8",
+       "wall-jump R hold 8",
+       "jump up hold 15",
+       "run-jump R hold 22",
+       "run-jump R hold 6 after 4f",
+       "run-jump R hold 10",
+       "walk R 16f",
+       "wall-jump R hold 10",
+       "wall-climb R hold 10",
+       "run wall-jump R hold 8",
+       "wait 16f"
+      ]
+     },
+     "final": {
+      "candidates": 16,
+      "members": 5,
+      "steps": 48,
+      "vetoed": 0,
+      "prev_included": false
+     }
+    }
+   }
+  ],
+  [
+   "flat with a far key",
+   {
+    "chosen": [
+     "run-jump R hold 6 after 8f",
+     "run-jump R hold 15 after 4f"
+    ],
+    "actions": [
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6
+    ],
+    "segments": [
+     [
+      "run-jump R hold 6 after 8f",
+      0,
+      20
+     ],
+     [
+      "run-jump R hold 15 after 4f",
+      20,
+      44
+     ],
+     [
+      "pad",
+      44,
+      48
+     ]
+    ],
+    "pad": 4,
+    "from_prev": false,
+    "score": {
+     "progress": 11.4,
+     "progress_credit": 3.9299115011284274,
+     "risk": 0.0,
+     "uncertainty": 0.34472907904635325,
+     "spread_end": 20.649964485696696,
+     "failure": 0.0,
+     "total": 3.9299115011284274
+    },
+    "v_start": 40.0,
+    "v_end": 28.6,
+    "dead_end_members": 0,
+    "leg": 0,
+    "veto": null,
+    "soft_risk": 0.0,
+    "soft_frame": -1,
+    "end_supported": false,
+    "first_move_frames": 20,
+    "alternatives": [
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 6 after 4f"
+      ],
+      "total": 3.881841656483303,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.4 (uncertain: spread 21u, credit x0.34)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 10 after 4f"
+      ],
+      "total": 3.681292543345019,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.4 (uncertain: spread 21u, credit x0.32)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 15"
+      ],
+      "total": 3.3183912261375923,
+      "progress": 11.4,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.4 vs 11.4 (uncertain: spread 22u, credit x0.29)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run R 16f"
+      ],
+      "total": 3.0447552041425774,
+      "progress": 11.2,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.2 vs 11.4 (uncertain: spread 23u, credit x0.27)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 6 after 8f",
+       "run R 24f"
+      ],
+      "total": 3.0447552041425774,
+      "progress": 11.2,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.2 vs 11.4 (uncertain: spread 23u, credit x0.27)",
+      "vetoed": false
+     }
+    ],
+    "counts": {
+     "stage1": {
+      "candidates": 73,
+      "steps": 24,
+      "complete": 73,
+      "vetoed": 0
+     },
+     "stage2": {
+      "candidates": 128,
+      "steps": 32,
+      "of_steps": 32,
+      "complete": 128,
+      "vetoed": 0,
+      "second_moves": [
+       "wait 8f",
+       "run L 16f",
+       "run R 16f",
+       "run-jump L hold 15",
+       "run-jump R hold 15",
+       "wall-jump L hold 8",
+       "wall-jump R hold 8",
+       "jump up hold 15",
+       "run R 24f",
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 10 after 8f",
+       "walk R 24f",
+       "run-jump R hold 6 after 4f",
+       "run-jump R hold 10 after 4f",
+       "run-jump R hold 15 after 4f",
+       "wait 16f"
+      ]
+     },
+     "final": {
+      "candidates": 16,
+      "members": 5,
+      "steps": 48,
+      "vetoed": 0,
+      "prev_included": false
+     }
+    }
+   }
+  ],
+  [
+   "1-13 recorded f200",
+   {
+    "chosen": [
+     "run wall-jump R hold 15",
+     "run-jump R hold 15"
+    ],
+    "actions": [
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6
+    ],
+    "segments": [
+     [
+      "run wall-jump R hold 15",
+      0,
+      21
+     ],
+     [
+      "run-jump R hold 15",
+      21,
+      42
+     ],
+     [
+      "pad",
+      42,
+      48
+     ]
+    ],
+    "pad": 6,
+    "from_prev": false,
+    "score": {
+     "progress": 2.5230447378299514,
+     "progress_credit": 1.0744487429371783,
+     "risk": 0.0,
+     "uncertainty": 0.4258540194817561,
+     "spread_end": 18.53658668712913,
+     "failure": 0.0,
+     "total": 1.0744487429371783
+    },
+    "v_start": 55.093607692702584,
+    "v_end": 52.57056295487263,
+    "dead_end_members": 0,
+    "leg": 0,
+    "veto": null,
+    "soft_risk": 0.0,
+    "soft_frame": -1,
+    "end_supported": false,
+    "first_move_frames": 21,
+    "alternatives": [
+     {
+      "moves": [
+       "run wall-jump R hold 15",
+       "run wall-jump R hold 15"
+      ],
+      "total": 1.0475172377889173,
+      "progress": 2.5230447378299514,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 2.5 vs 2.5 (uncertain: spread 19u, credit x0.42)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run wall-jump R hold 15",
+       "run-jump R hold 22"
+      ],
+      "total": 0.9576863216332924,
+      "progress": 2.5230447378299514,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 2.5 vs 2.5 (uncertain: spread 20u, credit x0.38)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 22",
+       "run wall-jump R hold 15"
+      ],
+      "total": 0.413910220220461,
+      "progress": 2.4987806691180223,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 2.5 vs 2.5 (uncertain: spread 28u, credit x0.17)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 22",
+       "run-jump R hold 15 after 4f"
+      ],
+      "total": 0.4083140111635296,
+      "progress": 2.4987806691180223,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 2.5 vs 2.5 (uncertain: spread 28u, credit x0.16)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 22",
+       "run-jump R hold 15"
+      ],
+      "total": 0.39640521625680486,
+      "progress": 2.4987806691180223,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 2.5 vs 2.5 (uncertain: spread 28u, credit x0.16)",
+      "vetoed": false
+     }
+    ],
+    "counts": {
+     "stage1": {
+      "candidates": 73,
+      "steps": 24,
+      "complete": 73,
+      "vetoed": 0
+     },
+     "stage2": {
+      "candidates": 128,
+      "steps": 40,
+      "of_steps": 40,
+      "complete": 128,
+      "vetoed": 0,
+      "second_moves": [
+       "wait 8f",
+       "run L 16f",
+       "run R 16f",
+       "run-jump L hold 15",
+       "run-jump R hold 15",
+       "wall-jump L hold 8",
+       "wall-jump R hold 8",
+       "jump up hold 15",
+       "run-jump R hold 22",
+       "run wall-jump R hold 15",
+       "run R 24f",
+       "run-jump R hold 15 after 4f",
+       "run-jump R hold 10 after 8f",
+       "walk L 8f",
+       "walk R 8f",
+       "run R 8f"
+      ]
+     },
+     "final": {
+      "candidates": 16,
+      "members": 5,
+      "steps": 48,
+      "vetoed": 0,
+      "prev_included": false
+     }
+    }
+   }
+  ],
+  [
+   "1-13 recorded f400",
+   {
+    "chosen": [
+     "run R 24f",
+     "run-jump R hold 15 after 4f"
+    ],
+    "actions": [
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6
+    ],
+    "segments": [
+     [
+      "run R 24f",
+      0,
+      24
+     ],
+     [
+      "run-jump R hold 15 after 4f",
+      24,
+      48
+     ]
+    ],
+    "pad": 0,
+    "from_prev": false,
+    "score": {
+     "progress": 11.414213562373092,
+     "progress_credit": 11.414213562373092,
+     "risk": 0.0,
+     "uncertainty": 1.0,
+     "spread_end": 4.6906481631552035,
+     "failure": 0.0,
+     "total": 11.414213562373092
+    },
+    "v_start": 60.62914159863532,
+    "v_end": 49.21492803626223,
+    "dead_end_members": 0,
+    "leg": 0,
+    "veto": null,
+    "soft_risk": 0.0,
+    "soft_frame": -1,
+    "end_supported": false,
+    "first_move_frames": 24,
+    "alternatives": [
+     {
+      "moves": [
+       "run R 24f",
+       "run wall-jump R hold 15"
+      ],
+      "total": 11.214213562373093,
+      "progress": 11.214213562373093,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 11.2 vs 11.4",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run R 24f",
+       "run-jump R hold 10 after 8f"
+      ],
+      "total": 10.562531376599141,
+      "progress": 10.614213562373092,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 10.6 vs 11.4",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run R 24f",
+       "run-jump R hold 10 after 4f"
+      ],
+      "total": 10.414213562373092,
+      "progress": 10.414213562373092,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 10.4 vs 11.4",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 22",
+       "run-jump R hold 22"
+      ],
+      "total": 9.614213562373092,
+      "progress": 9.614213562373092,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 9.6 vs 11.4",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 22",
+       "run-jump R hold 10 after 8f"
+      ],
+      "total": 9.614213562373092,
+      "progress": 9.614213562373092,
+      "stage": "final",
+      "reason": "lower score than chosen: progress 9.6 vs 11.4",
+      "vetoed": false
+     }
+    ],
+    "counts": {
+     "stage1": {
+      "candidates": 73,
+      "steps": 24,
+      "complete": 73,
+      "vetoed": 0
+     },
+     "stage2": {
+      "candidates": 128,
+      "steps": 28,
+      "of_steps": 28,
+      "complete": 128,
+      "vetoed": 0,
+      "second_moves": [
+       "wait 8f",
+       "run L 16f",
+       "run R 16f",
+       "run-jump L hold 15",
+       "run-jump R hold 15",
+       "wall-jump L hold 8",
+       "wall-jump R hold 8",
+       "jump up hold 15",
+       "run-jump R hold 22",
+       "run-jump R hold 10 after 8f",
+       "run-jump R hold 15 after 4f",
+       "run R 24f",
+       "run wall-jump R hold 15",
+       "run-jump R hold 6 after 8f",
+       "run-jump R hold 10 after 4f",
+       "run-jump R hold 10"
+      ]
+     },
+     "final": {
+      "candidates": 16,
+      "members": 5,
+      "steps": 48,
+      "vetoed": 0,
+      "prev_included": false
+     }
+    }
+   }
+  ]
+ ]
+}

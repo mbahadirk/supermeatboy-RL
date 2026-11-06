@@ -287,3 +287,86 @@ def test_plan_on_a_recorded_state():
     pl.played(int(r["agent"]), f, plan.actions[0])
     ev = pl.observe(int(r["agent"]), f + 1, float(r["x"]) + 500.0, float(r["y"]))
     assert any(e["kind"] == "position" and e["horizon"] == 1 for e in ev)
+
+
+# ---- goal and key contact -----------------------------------------------------------------------------------
+def test_touches_needs_a_majority_of_members():
+    from plan.planner import Planner
+    xs = np.tile(np.arange(49, dtype=float), (5, 1))
+    ys = np.zeros((5, 49))
+    g, _ = Planner._touches(xs, ys, np.array([10, 12, -1, -1, -1]), [], 5)
+    assert g is None                                                         # 2 of 5: not a success
+    g, k = Planner._touches(xs, ys, np.array([10, 12, 14, 20, -1]), [(0, np.array([3, 4, 5, -1, -1]),
+                                                                       np.array([1, 1, 1, -1, -1]))], 5)
+    assert g == {"frame": 12, "x": pytest.approx(14.0), "y": 0.0, "members": 4}    # lower median of 10 12 14 20
+    assert k == [{"frame": 4, "key": 1, "x": pytest.approx(4.0), "y": 0.0}]
+
+
+def contact_planner(goal_x, keys=()):
+    """A flat level (as `flat`) with the goal at goal_x and keys [(x, y)], planner without deadlines."""
+    from game.level import Level
+    from plan.planner import Planner
+    from plan.progress import ProgressField
+    H, W = 20, 60
+    w = np.zeros((H, W), np.uint32)
+    w[0:2, :] = 1
+    info = {"name": "test-contact", "W": W, "H": H, "ox": 0.0, "oy": 0.0, "spawn": [10 * T + 10, 46.0],
+            "goals": [[goal_x, 50.0]], "objs": [[0, float(x), float(y), 0x40] for x, y in keys], "lethalTypes": []}
+    lv = Level(info, w.astype("<u4").tobytes())
+    field = ProgressField(w, 0.0, 0.0, lv.spawn, lv.goals, [], [], lv.keys, [], [])
+    return lv, Planner(MODEL, lv, field, budget_ms=None)
+
+
+@needs_model
+def test_touching_the_goal_ranks_first_and_earliest():
+    from plan.planner import SUCCESS_SCORE
+    lv, pl = contact_planner(300.0)                   # 90 units right of the agent
+    assert len(pl.goal_boxes) == 1
+    worlds, frames = empty_inputs(pl.H)
+    plan = pl.plan(standing(), 10, worlds, frames)
+    gt = plan.goal_touch
+    assert gt is not None and 1 <= gt["frame"] <= 30 and gt["members"] >= 3
+    assert abs(gt["x"] - 300.0) < 20.0
+    assert plan.score["total"] == pytest.approx(SUCCESS_SCORE - gt["frame"], abs=0.5)
+    assert f"touches the princess at f{gt['frame']}" in plan.summary()
+    assert plan.counts["final"]["goal"] >= 1 and 0.0 <= plan.finish_model <= 1.0
+    for a in plan.alternatives:
+        if a["stage"] != "final":
+            continue
+        if a["reason"].startswith("reaches the princess"):
+            assert a["total"] <= plan.score["total"]
+        else:
+            assert a["total"] < SUCCESS_SCORE - pl.H                         # below every success
+    d = json.loads(json.dumps(plan.to_dict()))
+    assert d["goal_touch"]["frame"] == gt["frame"] and d["key_touches"] == []
+
+
+@needs_model
+def test_frames_after_the_goal_touch_are_ignored():
+    lv, pl = contact_planner(300.0)
+    worlds, frames = empty_inputs(pl.H, [(322.0, 150.0, 2.0, 150.0, 0.0)])   # a strip right behind the goal
+    plan = pl.plan(standing(), 10, worlds, frames)
+    assert plan.goal_touch is not None and plan.veto is None
+    assert plan.soft_frame <= plan.goal_touch["frame"]                       # risk only up to the touch
+
+
+@needs_model
+def test_starting_inside_the_goal_box_is_not_a_touch():
+    lv, pl = contact_planner(10 * T + 10 + 4.0)       # the agent stands 4 units from the goal piece
+    worlds, frames = empty_inputs(pl.H)
+    plan = pl.plan(standing(), 10, worlds, frames)
+    assert plan.counts["final"]["start_in_goal"] and plan.goal_touch is None
+
+
+@needs_model
+def test_a_key_pickup_continues_on_the_next_leg():
+    lv, pl = contact_planner(600.0, keys=[(330.0, 50.0)])
+    assert pl.field.n_legs == 2 and len(pl.key_boxes) == 1
+    worlds, frames = empty_inputs(pl.H)
+    plan = pl.plan(standing(), 10, worlds, frames)
+    assert plan.goal_touch is None and plan.leg == 0
+    assert plan.key_touches and plan.key_touches[0]["key"] == 0
+    assert "takes key 0 at f" in plan.summary()
+    ex, ey = plan.path[-1]
+    v_leg0 = float(pl.field.values(np.array([ex]), np.array([ey]), 0, True)[0])
+    assert plan.v_end is not None and plan.v_end < v_leg0 - 1.0              # V of the leg after the key

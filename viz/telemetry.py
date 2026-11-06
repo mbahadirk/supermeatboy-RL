@@ -44,6 +44,9 @@ Message types
  agents (game.level.Level.solid: crumbled / opened tiles are 0), else 0,
  "goals": [[x, y], ...], "spawn": [x, y], "keys": [[x, y], ...], "bandages": [[x, y], ...],
  "portals": [[[x, y], [x, y]], ...],
+ "goal_boxes": [[x, y, hw, hh, angle], ...], "key_boxes": [...] (one per key, in the order of "keys"): what the
+ planner counts as touching the goal / a key (game.level.Level.goal_boxes / key_boxes, contact_reach.json):
+ the agent's centre within BODY of the box, as for hazards; [] when unknown,
  "agents": {"planned": n, "explore": k} (agent indices 0..n-1 are planned, n..n+k-1 explore),
  "field": str (the progress field's summary line) or null}
  Sent when a level's data is ready and then every 2 seconds (a viewer started late still gets it).
@@ -171,6 +174,8 @@ def level_message(lv, wave: int, planned: int, explore: int, field_summary: str 
             "solid": _pack(np.asarray(lv.solid, np.uint8)),
             "goals": [list(g) for g in lv.goals], "spawn": list(lv.spawn), "keys": [list(k) for k in lv.keys],
             "bandages": [list(b) for b in lv.bandages], "portals": [[list(a), list(b)] for a, b in lv.portals],
+            "goal_boxes": [[float(v) for v in b] for b in (lv.goal_boxes() if hasattr(lv, "goal_boxes") else [])],
+            "key_boxes": [[float(v) for v in b] for b in (lv.key_boxes() if hasattr(lv, "key_boxes") else [])],
             "agents": {"planned": int(planned), "explore": int(explore)}, "field": field_summary}
 
 
