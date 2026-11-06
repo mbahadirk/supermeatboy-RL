@@ -1,0 +1,143 @@
+{
+ "about": "goal and key contact reach (contact_reach.py): touched when the agent's centre is within body of the box (x, y, reach_x - body, reach_y - body), as plan/safety.py for hazards",
+ "body": 6.0,
+ "rule": {
+  "percentiles": [
+   100,
+   99,
+   98,
+   95,
+   90,
+   75
+  ],
+  "safe_inside": 0.02,
+  "rest_vx": 30.0,
+  "near": 40.0
+ },
+ "measured_from": [
+  "runs/mpc_dev1/wm_data_mpc",
+  "runs/plan_20261103-150026/wm_data",
+  "runs/plan_20261103-152013/wm_data",
+  "runs/plan_20261103-162219/wm_data",
+  "runs/plan_20261103-163922/wm_data",
+  "runs/real_20261102-035612/wm_data",
+  "runs/real_20261102-165351/wm_data",
+  "runs/real_20261103-003413/wm_data",
+  "runs/real_20261103-010400/wm_data",
+  "runs/real_20261103-010905/wm_data",
+  "runs/real_20261103-011833/wm_data",
+  "runs/real_20261103-012157/wm_data"
+ ],
+ "shards": 1293,
+ "key_pickups": 0,
+ "goal": {
+  "touches": 1961,
+  "dist_abs_dx": {
+   "50": 8.45,
+   "75": 10.26,
+   "90": 11.4,
+   "95": 11.97,
+   "98": 12.32,
+   "99": 12.45,
+   "100": 13.47
+  },
+  "dist_abs_dy": {
+   "50": 4.02,
+   "75": 10.12,
+   "90": 11.6,
+   "95": 11.73,
+   "98": 12.08,
+   "99": 12.34,
+   "100": 12.83
+  },
+  "dx_range": [
+   -13.47,
+   13.34
+  ],
+  "dy_range": [
+   -1.46,
+   12.83
+  ],
+  "free_near": 278753,
+  "candidates": [
+   {
+    "percentile": 100,
+    "reach_x": 13.47,
+    "reach_y": 12.83,
+    "touches_inside": 1959,
+    "free_inside": 526,
+    "rest_inside": 49,
+    "pre_inside": 272,
+    "pre": 1961
+   },
+   {
+    "percentile": 99,
+    "reach_x": 12.45,
+    "reach_y": 12.34,
+    "touches_inside": 1860,
+    "free_inside": 80,
+    "rest_inside": 17,
+    "pre_inside": 31,
+    "pre": 1961
+   },
+   {
+    "percentile": 98,
+    "reach_x": 12.32,
+    "reach_y": 12.08,
+    "touches_inside": 1782,
+    "free_inside": 64,
+    "rest_inside": 15,
+    "pre_inside": 27,
+    "pre": 1961
+   },
+   {
+    "percentile": 95,
+    "reach_x": 11.97,
+    "reach_y": 11.73,
+    "touches_inside": 1671,
+    "free_inside": 32,
+    "rest_inside": 0,
+    "pre_inside": 21,
+    "pre": 1961
+   },
+   {
+    "percentile": 90,
+    "reach_x": 11.4,
+    "reach_y": 11.6,
+    "touches_inside": 1314,
+    "free_inside": 0,
+    "rest_inside": 0,
+    "pre_inside": 0,
+    "pre": 1961
+   },
+   {
+    "percentile": 75,
+    "reach_x": 10.26,
+    "reach_y": 10.12,
+    "touches_inside": 928,
+    "free_inside": 0,
+    "rest_inside": 0,
+    "pre_inside": 0,
+    "pre": 1961
+   }
+  ],
+  "reach_x": 11.97,
+  "reach_y": 11.73,
+  "percentile": 95,
+  "measured": true,
+  "half_w": 5.97,
+  "half_h": 5.73,
+  "skipped": {
+   "finish_frame_mismatch": 1,
+   "no_status2_row": 865
+  }
+ },
+ "key": {
+  "measured": false,
+  "reach_x": 17.31,
+  "reach_y": 17.31,
+  "half_w": 11.31,
+  "half_h": 11.31,
+  "rule": "no key pickups in the data: realgame.js KEY_R = 22 (a circle at the end of each update), as the largest rounded box inside it"
+ }
+}

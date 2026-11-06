@@ -2,7 +2,7 @@
 live from the game's changes, goals, spawn, keys, locks, portals, fans, orbs, moving platforms, sealed pockets,
 the agents' cell codes and surface codes, the lethal pieces as rotated boxes, and which extracted level file the
 game shows. Moved out of realgame.py (the PPO trainer), which re-exports every name here, so the planner can use
-it without importing the trainer. Needs the smbrl folder on sys.path (realpath, hazard_reach)."""
+it without importing the trainer. Needs the smbrl folder on sys.path (realpath, hazard_reach, contact_reach)."""
 from __future__ import annotations
 
 import math
@@ -15,6 +15,7 @@ import numpy as np
 
 from realpath import box_distance, tile_classes
 import hazard_reach
+import contact_reach
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the smbrl folder (tools/, imported/)
 
@@ -426,6 +427,19 @@ class Level:
 
     def cell(self, x: float, y: float) -> tuple[int, int]:
         return int((x - self.ox) // TILE), int((y - self.oy) // TILE)
+
+    def goal_boxes(self) -> list:
+        """Contact boxes of the goals, (x, y, half w, half h, 0) in game units: touched when the agent's centre
+        is within BODY (6 units) of a box, the convention plan/safety.py uses for hazards (the box excludes the
+        body). Reach measured from recorded touches (contact_reach.json); empty without that table."""
+        return [b for b in (contact_reach.box("goal", x, y) for x, y in self.goals) if b is not None]
+
+    def key_boxes(self) -> list:
+        """Contact boxes of the keys in the order of self.keys (bit k of the keys mask), as goal_boxes. The key
+        reach is unmeasured while no recorded level has keys (contact_reach.json says so): a fallback from
+        realgame.js's pickup rule. Empty without the table."""
+        out = [contact_reach.box("key", x, y) for x, y in self.keys]
+        return out if all(b is not None for b in out) else []
 
     def _bfs(self) -> np.ndarray:
         """Path length (tiles) from each open cell to the nearest goal, 4-connected; inf where unreachable."""
