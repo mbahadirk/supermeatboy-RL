@@ -30,7 +30,10 @@ states.jsonl (per frame: frame, wave, every planned agent's [i, x, y, vx, vy, st
 finish, planned and explore: level, wave, agent, source, frames, seconds, lock, time of day); --wm-collect:
 world-model data in runs/<name>/wm_data (shards' source: planner, explore or planner+explore, with agent_sources).
 Best finish times per level (planned and explore apart, time-step lock on only): --best-times (default
-smbrl/best_times.json; the old best.json is not used).
+smbrl/best_times.json; the old best.json is not used); the [level] line shows the planned agents' best.
+S in the game (focused) finishes the level the game's way and writes the planned agents' best for it as the
+level's time (the game keeps it only if better than its record); 999.99 without one. The save file
+(UserData/savegame.dat next to the game) is copied to smbrl/backups/save_<date-time>/ before the first write.
 In the game (unless --no-overlay): the first planned agent's chosen path (green), predicted landings (yellow),
 wall jumps (cyan), where it touches the princess (pink) or picks a key (gold), and the top rejected
 alternatives (faint red when vetoed, grey otherwise).
@@ -80,6 +83,8 @@ GAME_POOL = 40
 DEFAULT_MODEL = os.path.join("runs", "wm_locked", "wm_model.pt")
 DEFAULT_DEATHS = os.path.join(HERE, "death_memory.json")
 DEFAULT_BEST = os.path.join(HERE, "best_times.json")
+BACKUPS = os.path.join(HERE, "backups")         # S: the game's save is copied here once per run before a time write
+SAVE_FILE = os.path.join("UserData", "savegame.dat")   # next to the game's executable
 FIELD_REBUILDS = 4               # progress field rebuilds per level (between waves)
 STICKY = 0.75                    # explore: keep the previous action with this probability
 CHAIN_P = 0.03                   # explore: per free frame, chance to start a chain of 1-3 library moves
@@ -110,6 +115,43 @@ def other_runners() -> list[str]:
     return [ln.split("|", 1)[0] for ln in out.splitlines()
             if "|" in ln and ln.split("|", 1)[0].strip() != me and pat.search(ln.split("|", 1)[1])
             and "pytest" not in ln]
+
+
+def game_exe() -> str | None:
+    """The running game's executable path (a Win32_Process query, read-only), None when not found."""
+    import subprocess
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              f"Get-CimInstance Win32_Process -Filter \"Name='{GAME_EXE}'\" | "
+                              "ForEach-Object { $_.ExecutablePath }"],
+                             capture_output=True, text=True, timeout=20).stdout
+    except Exception:
+        return None
+    paths = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return paths[0] if paths else None
+
+
+def locate_save(exe: str | None = None) -> tuple[str | None, str | None]:
+    """(the game's save file, None) or (None, why not): UserData/savegame.dat next to the running game's
+    executable (the game keeps its level records there)."""
+    exe = exe or game_exe()
+    if not exe:
+        return None, f"the running {GAME_EXE} was not found"
+    p = os.path.join(os.path.dirname(exe), SAVE_FILE)
+    return (p, None) if os.path.isfile(p) else (None, f"no save file at {p}")
+
+
+def backup_save(save: str, root: str = BACKUPS) -> str:
+    """Copies the save file into root/save_<date-time>/ (a new folder); returns that folder."""
+    import shutil
+    stamp = time.strftime("save_%Y%m%d-%H%M%S")
+    d, k = os.path.join(root, stamp), 1
+    while os.path.exists(d):
+        k += 1
+        d = os.path.join(root, f"{stamp}_{k}")
+    os.makedirs(d)
+    shutil.copy2(save, os.path.join(d, os.path.basename(save)))
+    return d
 
 
 def _sub(pts, step: int) -> list:
@@ -247,6 +289,12 @@ class BestTimes:
     def best(self, level: str, source: str) -> dict | None:
         return (self.data.get(level) or {}).get(source)
 
+    def reload(self):
+        """Read the file again (another run may have written it); a file that cannot be read keeps the data."""
+        d, ok = self._load()
+        if ok:
+            self.data = d
+
     def offer(self, level: str, source: str, rec: dict) -> bool:
         """rec becomes the level's best for source if it is faster; True when it did (and was saved)."""
         if not self.ok:
@@ -336,6 +384,9 @@ class Runner:
         self.f_states = open(os.path.join(self.run_dir, "states.jsonl"), "a", encoding="utf-8")
         self.f_times = open(os.path.join(self.run_dir, "times.jsonl"), "a", encoding="utf-8")
         self.best = BestTimes(args.best_times)
+        self.find_save = locate_save            # S: where the game's save is (tests replace it)
+        self.backup_root = BACKUPS
+        self.save_backup = None                 # the folder the save was copied to (once per run), None not yet
         self.lock = None                        # the time-step lock: True / False once realgame.js said so
         self.dt_ms = 16.667                     # the frame time of the last frame message (ms)
         self.cost = FrameCost()
@@ -431,8 +482,11 @@ class Runner:
         self.lt_changes = 0
         self.wave_no = 0
         kb = lv.kill_box
+        best = self.best.best(lv.name, "planned")
         print(f"[level] {lv.name}: {lv.W}x{lv.H}, {len(lv.goals)} goal(s), {info.get('lethal', '?')} lethal pieces, "
               f"{len(lv.keys)} key(s), {info['agents']} agents (planned {self.n_plan}, explore {self.n_explore}); "
+              + (f"agent best {float(best['seconds']):.2f} s; " if best and best.get("seconds") is not None
+                 else "no agent best yet; ")
               + (f"kill box x {kb[0]:.0f}..{kb[1]:.0f}, y {kb[2]:.0f}..{kb[3]:.0f}" if kb else "no kill box")
               + (" - held-out evaluation level: no world-model data, no death memory" if self.protected else ""),
               flush=True)
@@ -954,8 +1008,7 @@ class Runner:
                 self.cur_plan = {}
                 self.commit.reset()
             elif ev == "save":
-                print(f"[S] finishing {p.get('level')} the game's way", flush=True)
-                self.script.post({"type": "finish"})
+                self.on_save(p.get("level"))
             elif ev == "stopped":
                 self.stopped.set()
             elif ev == "error":
@@ -994,6 +1047,34 @@ class Runner:
             self.cost.go("other")
             self.script.post({"type": "act", "payload": reply})
             self.cost.end()
+
+    def on_save(self, level):
+        """S in the game: realgame.js walks the main character into the goal (the game's own level end) and
+        writes the level time it records (hud+0x384) on every frame of that finish. The time sent is the planned
+        agents' best for the level (best_times.json, lock on only); the game keeps it as the level's record only
+        if it is better than the stored one (FUN_004ba960). Before the first such write of the run the save file
+        is copied to backups/save_<date-time>/; without a best, or when the save cannot be found or copied, the
+        time is 999.99 (realgame.js's default: slower than any real run)."""
+        self.best.reload()
+        b = self.best.best(level, "planned") if level else None
+        secs = float(b["seconds"]) if b and b.get("seconds") is not None else None
+        why = None
+        if secs is not None and self.save_backup is None:
+            save, why = self.find_save()
+            if save is not None:
+                try:
+                    self.save_backup = backup_save(save, self.backup_root)
+                except OSError as e:
+                    why = f"could not back up {save}: {e}"
+        if secs is not None and self.save_backup is not None:
+            print(f"[S] finishing {level} the game's way with the agent's best {secs:.2f} s (save backed up to "
+                  f"{self.save_backup})", flush=True)
+        else:
+            print(f"[S] finishing {level} the game's way, " + (f"no agent best for {level}" if secs is None else
+                  f"the agent's best {secs:.2f} s is not written ({why})") + ": 999.99", flush=True)
+            secs = None
+        self.event("save", None, level=level, seconds=secs, backup=self.save_backup)
+        self.script.post({"type": "finish", "payload": {"time": secs}})
 
     def close(self):
         self.flush()

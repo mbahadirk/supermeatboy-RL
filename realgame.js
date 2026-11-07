@@ -20,7 +20,8 @@
 //          key opens (groups from Python) are opened only while that agent updates (tile words swapped
 //          before its update and put back after every agent), so one agent's key opens nothing for others.
 //   the real character: hidden and frozen, used as the camera (parked on the leading agent) and for the
-//          level reset; S (game focused) saves the best agent and finishes the level the game's way.
+//          level reset; S (game focused) finishes the level the game's way, recording the time Python sends
+//          (agent.py: the planned agents' best; 999.99 without one).
 //   paths: the reward paths from Python are drawn over the picture through Direct3D 9 (see below).
 //   map:   every frame the collision tile layer is compared with the last frame and changed cells are sent
 //          (crumble blocks breaking, locks opening, the level reset putting them back), so Python's map of
@@ -667,7 +668,10 @@ Interceptor.replace(UPD, new NativeCallback(function (self) {
   const st = rd(() => self.add(0x7b0).readU32());
   if (finishing > 0) {                              // S: walk into the goal through the game's own update
     finishing--;
-    if (hud) hud.add(0x384).writeFloat(999.99);     // keep this forced finish out of the player's records
+    // hud+0x384: the level timer (float seconds; the HUD adds each step's dt, 0x4a28ae). The level end copies it
+    // and FUN_004ba960 stores it as the level's record only when lower than the stored one. finishTime: the
+    // agent's best from Python, or 999.99 (slower than any real run: it never replaces a real record)
+    if (hud) hud.add(0x384).writeFloat(finishTime);
     if (goalPieces.length) { self.add(0x84).writeFloat(goalPieces[0][0]); self.add(0x88).writeFloat(goalPieces[0][1]); }
     updateChar(self);
     return;
@@ -865,7 +869,15 @@ if (xinput) Interceptor.attach(xinput.findExportByName('XInputGetState'), {
     r.replace(ptr(0));
   },
 });
-function onFinish() { if (ready && main) { finishRequested = true; finishing = CFG.finish_frames; } recv('finish', onFinish); }
+let finishTime = 999.99;                            // S: the level time this finish records (payload.time)
+function onFinish(m) {
+  if (ready && main) {
+    const t = m && m.payload ? m.payload.time : null;
+    finishTime = typeof t === 'number' && t > 0 && t < 999.99 ? t : 999.99;
+    finishRequested = true; finishing = CFG.finish_frames;
+  }
+  recv('finish', onFinish);
+}
 recv('finish', onFinish);
 
 const user32 = Process.getModuleByName('user32.dll');

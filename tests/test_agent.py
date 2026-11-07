@@ -338,6 +338,29 @@ def test_finish_times_and_best_times(tmp_path, capsys):
     assert "fastest 0.10 s" in out
     sent = [T.decode(d) for d in tel.out]
     assert [m["seconds"] for m in sent if m["t"] == "event" and m["kind"] == "finish"] == [0.167, 0.25, 0.133]
+    assert f"[level] {LEVEL}: " in out and "no agent best yet" in out
+    # the viewer, live: the runner's own datagrams (a fake telemetry stream) reach its info panel
+    from viz import viewer as V
+    src = V.LiveSource(bind=False)
+    shown = []
+    for d in tel.out:
+        src.datagram(d)
+        m = T.decode(d)
+        if m["t"] == "event" and m["kind"] == "finish":
+            shown.append(V.finish_lines(src.scene().stats, LEVEL))
+    assert shown[0][0].startswith(f"last finish: 0.17 s (10 frames) {LEVEL} wave 1 a0, NEW BEST")
+    assert shown[1][0].startswith(f"last finish: 0.25 s (15 frames) {LEVEL} wave 2 a0") and "NEW" not in shown[1][0]
+    assert [s[1] for s in shown] == ["level best: 0.17 s", "level best: 0.17 s", "level best: 0.13 s"]
+    import pygame
+    pygame.init()
+    V.Renderer().render(pygame.Surface((1280, 800)), src.scene())          # the panel draws them
+    # the next level start prints the agents' best
+    r = agent.Runner(args, telemetry=None)
+    r.script = _FakeScript()
+    r.on_message({"type": "send", "payload": dict(meta, name=LEVEL, agents=2, ev="info")},
+                 words.astype("<u4").tobytes())
+    r.close()
+    assert f"agent best {b[LEVEL]['planned']['seconds']:.2f} s;" in capsys.readouterr().out
 
 
 def test_best_times_file(tmp_path, capsys):
@@ -354,6 +377,59 @@ def test_best_times_file(tmp_path, capsys):
     p.write_text("{broken", encoding="utf-8")
     bt = agent.BestTimes(str(p))
     assert not bt.offer("1-1", "planned", dict(rec, seconds=1.0)) and p.read_text(encoding="utf-8") == "{broken"
+
+
+def test_s_writes_the_agents_best_after_one_save_backup(tmp_path, capsys):
+    """S in the game: the finish request carries the planned agents' best for that level (999.99 in
+    realgame.js without one); the save file is copied once per run before the first such write; a save that
+    cannot be found means no time is written."""
+    import agent
+    best = tmp_path / "best_times.json"
+    best.write_text(json.dumps({"1-14": {"planned": {"seconds": 6.55, "frames": 393}},
+                                "1-13": {"explore": {"seconds": 9.0}}}), encoding="utf-8")
+    game = tmp_path / "game"
+    (game / "UserData").mkdir(parents=True)
+    (game / "UserData" / "savegame.dat").write_bytes(b"\x01\x02save")
+    args = agent.build_parser().parse_args(
+        ["--agents", "0", "--explore", "1", "--name", str(tmp_path / "run"), "--telemetry", "off",
+         "--death-memory", str(tmp_path / "deaths.json"), "--best-times", str(best)])
+    r = agent.Runner(args, telemetry=None)
+    r.script = _FakeScript()
+    r.backup_root = str(tmp_path / "backups")
+    r.find_save = lambda: agent.locate_save(str(game / "SuperMeatBoy.exe"))
+    save = lambda lv: r.on_message({"type": "send", "payload": {"ev": "save", "level": lv}}, None)
+    save("1-14")
+    out = capsys.readouterr().out
+    backups = list((tmp_path / "backups").iterdir())
+    assert len(backups) == 1 and (backups[0] / "savegame.dat").read_bytes() == b"\x01\x02save"
+    assert backups[0].name.startswith("save_")
+    assert f"[S] finishing 1-14 the game's way with the agent's best 6.55 s (save backed up to {backups[0]})" in out
+    assert r.script.posts[-1] == {"type": "finish", "payload": {"time": 6.55}}
+    save("1-14")                                         # again: no second backup
+    assert len(list((tmp_path / "backups").iterdir())) == 1 and r.script.posts[-1]["payload"]["time"] == 6.55
+    save("1-13")                                         # only an explore agent's best: not the planned one
+    assert "[S] finishing 1-13 the game's way, no agent best for 1-13: 999.99" in capsys.readouterr().out
+    assert r.script.posts[-1] == {"type": "finish", "payload": {"time": None}}
+    # a new run whose save cannot be found: the best is not written
+    r2 = agent.Runner(args, telemetry=None)
+    r2.script = _FakeScript()
+    r2.backup_root = str(tmp_path / "backups2")
+    r2.find_save = lambda: agent.locate_save(str(tmp_path / "nowhere" / "SuperMeatBoy.exe"))
+    r2.on_message({"type": "send", "payload": {"ev": "save", "level": "1-14"}}, None)
+    out = capsys.readouterr().out
+    assert "the agent's best 6.55 s is not written (no save file at" in out and out.rstrip().endswith(": 999.99")
+    assert r2.script.posts[-1]["payload"]["time"] is None and not (tmp_path / "backups2").exists()
+    r.close()
+    r2.close()
+    ev = [json.loads(l) for l in open(tmp_path / "run" / "events.jsonl", encoding="utf-8")]
+    assert [e["seconds"] for e in ev if e["kind"] == "save"] == [6.55, 6.55, None, None]
+
+
+def test_realgame_js_writes_the_sent_time():
+    """realgame.js: the finish request's time replaces 999.99 as the level time written while finishing."""
+    src = open(os.path.join(HERE, "realgame.js"), encoding="utf-8").read()
+    assert "hud.add(0x384).writeFloat(finishTime)" in src and "writeFloat(999.99)" not in src
+    assert "finishTime = typeof t === 'number' && t > 0 && t < 999.99 ? t : 999.99;" in src
 
 
 def test_telemetry_udp_roundtrip_and_never_blocks():
