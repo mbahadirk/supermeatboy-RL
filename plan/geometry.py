@@ -36,6 +36,7 @@ FOOT_DX = BODY - 0.5
 WALL_PROBE = BODY + 1.0
 
 SHAPE_OPEN, SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE = 0, 1, 2, 3
+_DC, _DR = np.array([0, 1, 0, 1]), np.array([0, 0, 1, 1])     # box_overlap: the 2 x 2 cells a box can touch
 
 
 def solid_now(words0: np.ndarray, words: np.ndarray) -> np.ndarray:
@@ -61,9 +62,13 @@ def half_normal(words: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 class Terrain:
-    """The live tile map as point-solid shapes. Rebuild (or `update`) when tiles change."""
+    """The live tile map as point-solid shapes. Rebuild (or `update`) when tiles change. slopes=False: slope
+    cells are open (the planner's collision guard: real agents are recorded inside some slope cells' modelled
+    triangles, plan/planner.py)."""
 
-    def __init__(self, words0: np.ndarray, ox: float, oy: float, words: np.ndarray | None = None):
+    def __init__(self, words0: np.ndarray, ox: float, oy: float, words: np.ndarray | None = None,
+                 slopes: bool = True):
+        self.slopes = bool(slopes)
         self.words0 = np.asarray(words0, np.uint32)
         self.ox, self.oy = float(ox), float(oy)
         self.H, self.W = self.words0.shape
@@ -75,10 +80,11 @@ class Terrain:
         k = tile_classes(w)
         shape = np.where(solid, SHAPE_FULL, SHAPE_OPEN).astype(np.int8)
         shape[solid & k["half"]] = SHAPE_HALF
-        shape[solid & k["slope"]] = SHAPE_SLOPE
+        shape[solid & k["slope"]] = SHAPE_SLOPE if self.slopes else SHAPE_OPEN
         self.shape = shape
         self.nx, self.ny = half_normal(w)
         self.open_corner = slope_open_corner(w)
+        self._line_form()
 
     def point_solid(self, x, y) -> np.ndarray:
         x = np.asarray(x, np.float64)
@@ -98,6 +104,50 @@ class Terrain:
         slope = np.select([oc == 0, oc == 1, oc == 2, oc == 3], [u + v >= 1, v >= u, u >= v, u + v <= 1], False)
         out[ok] = (sh == SHAPE_FULL) | ((sh == SHAPE_HALF) & half) | ((sh == SHAPE_SLOPE) & slope)
         return out
+
+    def box_overlap(self, x, y, half) -> np.ndarray:
+        """Does a square box (centre x, y, half size `half`, < TILE / 2) overlap a solid shape with positive
+        area? Exact for the shapes point_solid uses: each is its cell cut by one line (a half block: its centre
+        line, a slope: its diagonal, a full block: none; `lin`: solid where a u + b v + c > 0, u, v 0..1 in the
+        cell), so the box's part inside a cell overlaps the solid when its corner furthest into the solid side
+        is strictly inside. Touching is not overlapping. Outside the map: not solid."""
+        x = np.asarray(x, np.float64)
+        y = np.asarray(y, np.float64)
+        h = np.asarray(half, np.float64)
+        x0, x1 = ((x - h - self.ox) / TILE)[..., None], ((x + h - self.ox) / TILE)[..., None]
+        y0, y1 = ((y - h - self.oy) / TILE)[..., None], ((y + h - self.oy) / TILE)[..., None]
+        c = np.floor(x0).astype(np.int64) + _DC                   # the box spans at most 2 x 2 cells
+        r = np.floor(y0).astype(np.int64) + _DR
+        ua, ub = np.maximum(x0 - c, 0.0), np.minimum(x1 - c, 1.0)   # the box inside each cell, 0..1
+        va, vb = np.maximum(y0 - r, 0.0), np.minimum(y1 - r, 1.0)
+        L = self.lin[np.clip(r + 1, 0, self.H + 1), np.clip(c + 1, 0, self.W + 1)]   # border: open
+        A, B = L[..., 0], L[..., 1]
+        val = np.where(A > 0, A * ub, A * ua) + np.where(B > 0, B * vb, B * va) + L[..., 2]
+        return ((val > 0) & (ub > ua) & (vb > va)).any(-1)
+
+    def _line_form(self):
+        """`lin` (H + 2, W + 2, 3): per cell (a, b, c), solid where a u + b v + c > 0; a 1-cell open border."""
+        sh, nx, ny, oc = self.shape, self.nx.astype(np.float64), self.ny.astype(np.float64), self.open_corner
+        lin = np.zeros((self.H + 2, self.W + 2, 3))
+        lin[..., 2] = -1.0
+        L = lin[1:-1, 1:-1]
+        L[sh == SHAPE_FULL] = (0.0, 0.0, 1.0)
+        hm = sh == SHAPE_HALF
+        L[hm] = np.stack([nx[hm], ny[hm], -0.5 * (nx[hm] + ny[hm])], -1)
+        for k, abc in enumerate(((1.0, 1.0, -1.0), (-1.0, 1.0, 0.0), (1.0, -1.0, 0.0), (-1.0, -1.0, 1.0))):
+            L[(sh == SHAPE_SLOPE) & (oc == k)] = abc
+        self.lin = lin
+
+    def opened(self, cells) -> "Terrain":
+        """A copy with these cells [(row, col)] open (lock tiles an agent's keys opened)."""
+        t = Terrain.__new__(Terrain)
+        t.words0, t.ox, t.oy, t.H, t.W, t.slopes = self.words0, self.ox, self.oy, self.H, self.W, self.slopes
+        t.shape, t.nx, t.ny, t.open_corner = self.shape.copy(), self.nx, self.ny, self.open_corner
+        for r, c in cells:
+            if 0 <= r < self.H and 0 <= c < self.W:
+                t.shape[r, c] = SHAPE_OPEN
+        t._line_form()
+        return t
 
     def support(self, x, y, plats=None):
         """(ground bool, wall_side int8: -1 left, +1 right, 0 none) for positions x, y (any shape). plats:
@@ -222,14 +272,81 @@ def measure(d: str, levels=("1-5", "1-13"), shards: int = 4, log=print) -> dict:
     return out
 
 
+def measure_overlap(dirs, tols=(0.5, 1.0, 1.5, 2.0), shards: int = 6, log=print, slopes: bool = True) -> dict:
+    """How often real recorded states overlap solid tiles by more than each tolerance (the planner's
+    collision guard, plan/planner.py, fires on imagined states that do): per level of each wm_data folder, the
+    first `shards` waves, alive rows, tiles as the game had them at that frame, lock tiles open for the keys
+    the agent held. Returns {level: {"rows": n, "fired": {tol: count}}} summed over the folders."""
+    import glob
+    import gzip
+    import json
+    import os
+    from collections import defaultdict
+    from plan.measure_progress import level_from_data
+    out = defaultdict(lambda: {"rows": 0, "fired": defaultdict(int)})
+    for d in dirs:
+        seen = defaultdict(int)
+        for p in sorted(glob.glob(os.path.join(d, "wave_*.npz"))):
+            z = np.load(p)
+            name = json.loads(str(z["meta"])).get("level")
+            if name is None or seen[name] >= shards:
+                continue
+            seen[name] += 1
+            lv = level_from_data(d, name)
+            words0 = lv.words0.astype(np.uint32)
+            ter = Terrain(words0, lv.ox, lv.oy, slopes=slopes)
+            words = words0.copy()
+            H, W = words.shape
+            world = json.load(gzip.open(p[:-4] + "_world.json.gz", "rt", encoding="utf-8"))
+            tc_at = {w["f"]: w["tc"] for w in world if w.get("tc")}
+            alive = z["rows"][z["rows"]["status"] == 0]
+            upto = -1
+            for f in np.unique(alive["frame"]):
+                changed = False
+                for ff in range(upto + 1, int(f) + 1):
+                    for idx, word in tc_at.get(ff, ()):
+                        r, c = divmod(int(idx), W)
+                        if 0 <= r < H:
+                            words[r, c] = word
+                            changed = True
+                upto = int(f)
+                if changed:
+                    ter.update(words)
+                a = alive[alive["frame"] == f]
+                for mask in np.unique(a["keys"]):
+                    m = a["keys"] == mask
+                    t = ter.opened(lv.opened_cells(int(mask))) if mask else ter
+                    o = out[name]
+                    o["rows"] += int(m.sum())
+                    for tol in tols:
+                        o["fired"][tol] += int(t.box_overlap(a["x"][m], a["y"][m], BODY - tol).sum())
+    res = {k: {"rows": v["rows"], "fired": dict(v["fired"])} for k, v in sorted(out.items())}
+    log("level     rows    " + "  ".join(f"tol {t:g}" for t in tols))
+    tot = {"rows": 0, "fired": defaultdict(int)}
+    for k, v in res.items():
+        tot["rows"] += v["rows"]
+        for t in tols:
+            tot["fired"][t] += v["fired"][t]
+        log(f"{k:6s} {v['rows']:8d}  " + "  ".join(f"{v['fired'][t]:7d}" for t in tols))
+    log(f"all    {tot['rows']:8d}  " + "  ".join(f"{tot['fired'][t]:7d}" for t in tols)
+        + "   (" + ", ".join(f"{100 * tot['fired'][t] / max(1, tot['rows']):.3f}%" for t in tols) + ")")
+    return res
+
+
 if __name__ == "__main__":
     import argparse
     import os
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    ap = argparse.ArgumentParser(description="check the support rule on recorded play")
-    ap.add_argument("data")
+    ap = argparse.ArgumentParser(description="check the support rule (or, --overlap, the planner's collision "
+                                             "guard tolerance) on recorded play")
+    ap.add_argument("data", nargs="+")
     ap.add_argument("--levels", nargs="+", default=["1-5", "1-13"])
     ap.add_argument("--shards", type=int, default=4)
+    ap.add_argument("--overlap", action="store_true", help="real states overlapping solid tiles, per tolerance")
+    ap.add_argument("--no-slopes", action="store_true", help="--overlap: slope cells open (as the guard)")
     a = ap.parse_args()
-    measure(a.data, a.levels, a.shards)
+    if a.overlap:
+        measure_overlap(a.data, shards=a.shards, slopes=not a.no_slopes)
+    else:
+        measure(a.data[0], a.levels, a.shards)

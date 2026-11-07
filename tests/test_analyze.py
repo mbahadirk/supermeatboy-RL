@@ -77,6 +77,18 @@ def test_analyze_a_synthetic_run(tmp_path, capsys):
     assert r["triggers"] == {"decisions": 0, "by_kind": {}} and r["switch"]["rate"] is None
     assert r["committed_followed_frames"][3] == 3 and r["success_margin"]["n"] == 0
     assert "none logged (an older run)" in A.report(r)
+    assert r["clipped"] == {"share": None, "n": 0} and "not logged: an older run" in A.report(r)
+
+
+def test_clipped_share(tmp_path):
+    run = tmp_path / "plan_clip"
+    _write(str(run))
+    with open(run / "plans.jsonl", "w", encoding="utf-8") as f:
+        for k, c in enumerate((0, 5, 0, 12)):
+            f.write(json.dumps({**_plan(2 * k, 1), "model_clipped": c}) + "\n")
+    r = A.analyze(str(run))
+    assert r["clipped"] == {"share": 0.5, "n": 4}
+    assert "clipped (the model's path went into solid tiles): 50%" in A.report(r)
 
 
 def test_move_family():

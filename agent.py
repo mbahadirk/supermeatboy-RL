@@ -37,7 +37,8 @@ alternatives (faint red when vetoed, grey otherwise).
 Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
 The wave summary line also says how often the planned agents decided: decisions per 100 alive frames, the
 median frames between an agent's decisions, the triggers by kind, the switch rate (decisions that switched
-plans / all decisions) and the planning ms per game frame (the decisions' own time, plus the trigger checks).
+plans / all decisions), the planning ms per game frame (the decisions' own time, plus the trigger checks) and
+the share of decisions whose chosen plan the planner's collision guard clipped ("chosen plans clipped").
 Per wave, after the summary line, a [cost] line (FrameCost): ms per frame (mean, median, 95%) spent planning,
 observing (surprises, failed moves, deaths), on the explore agents, world-model data, telemetry, file logging, the
 overlay, the level's live state, the rest, and waiting for the game (from the reply to the next frame message),
@@ -273,13 +274,16 @@ class BestTimes:
 def commit_summary(st: dict, frames: int) -> dict:
     """How often the planned agents decided in a wave (Runner.st): decisions per 100 alive agent frames, the
     median frames between an agent's decisions, the switch rate (switched / decisions), the planning ms per
-    game frame (the decisions' own time) and the trigger checks' ms per game frame."""
+    game frame (the decisions' own time), the trigger checks' ms per game frame and the share of decisions
+    whose chosen plan the collision guard clipped (plan/planner.py collide: the world model's imagined body
+    went into solid tiles)."""
     d, af = st["decisions"], st["agent_frames"]
     return {"decisions_per_100": round(100.0 * d / af, 2) if af else None,
             "gap_median": float(np.median(st["gaps"])) if st["gaps"] else None,
             "switch_rate": round(st["switched"] / d, 4) if d else None,
             "plan_ms_per_frame": round(sum(st["ms"]) / frames, 2) if frames else None,
-            "check_ms_per_frame": round(1000.0 * st["check_s"] / frames, 3) if frames else None}
+            "check_ms_per_frame": round(1000.0 * st["check_s"] / frames, 3) if frames else None,
+            "clipped_share": round(st.get("clipped", 0) / d, 4) if d else None}
 
 
 def commit_text(c: dict, triggers: dict | None = None) -> str:
@@ -290,6 +294,7 @@ def commit_text(c: dict, triggers: dict | None = None) -> str:
     return (f"{f(c['decisions_per_100'], '.1f')} decisions/100 frames, every {f(c['gap_median'], '.0f')} f "
             f"(median), switched {f(None if c['switch_rate'] is None else 100 * c['switch_rate'], '.0f')}%, plan "
             f"{f(c['plan_ms_per_frame'], '.1f')} ms/frame (+checks {f(c['check_ms_per_frame'], '.1f')})"
+            + (f", chosen plans clipped {100 * c['clipped_share']:.0f}%" if c.get("clipped_share") is not None else "")
             + (f"; triggers {tr}" if tr else ""))
 
 
@@ -404,7 +409,7 @@ class Runner:
         self.st = {"finished": 0, "died": 0, "explained": 0, "unexplained": 0, "estimated": 0, "memory": 0,
                    "surprise_pos": 0, "surprise_death": 0, "decisions": 0, "ms": [], "cut1": 0, "cut2": 0,
                    "failed": 0, "errors": 0, "ex_finished": 0, "ex_died": 0, "triggers": {}, "gaps": [],
-                   "agent_frames": 0, "check_s": 0.0, "switched": 0, "kept": 0}
+                   "agent_frames": 0, "check_s": 0.0, "switched": 0, "kept": 0, "clipped": 0}
         self.fin = {"planned": [], "explore": []}     # this wave's finish times (s)
         self.new_best = False
 
@@ -675,6 +680,7 @@ class Runner:
             st["gaps"].append(plan.frame - last)
         self.last_decision[plan.agent] = plan.frame
         st["ms"].append(plan.timing.get("total", 0.0))
+        st["clipped"] += int((getattr(plan, "model_clipped", None) or 0) > 0)
         c = plan.counts
         if c.get("stage1", {}).get("steps", MAX_LEN) < MAX_LEN:
             st["cut1"] += 1

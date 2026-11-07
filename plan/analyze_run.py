@@ -20,7 +20,8 @@ switched plans / all decisions) and the gains the kept plans were kept against (
 before these fields report none); the share of decisions whose next 16 actions differ from the previous plan's
 remaining ones (all, airborne); the score margin chosen - best rejected, among plans that do not touch the
 goal (V units; successes, total = SUCCESS_SCORE - touch frame, are compared with the best rejected success by
-their touch frames instead: success_margin, in frames); uncertainty factor shares; plans ending supported; the position error per
+their touch frames instead: success_margin, in frames); uncertainty factor shares; plans ending supported; the share of decisions whose chosen plan the collision guard
+clipped (plans.jsonl "model_clipped"; older runs: none); the position error per
 horizon for followed and not followed predictions (alive agents only); per level: decisions, no-progress
 share (progress <= 0.05), dead-end ends, the most common first-move families, deaths per cause, finishes and
 their times (times.jsonl or finish events; for older runs without them, the wave length of a 'quota' wave a
@@ -146,7 +147,7 @@ def slim(d: dict) -> dict:
             "switch": None if not sw else {"kept": bool(sw.get("kept")), "gain": sw.get("gain"),
                                            "unit": sw.get("unit")},
             "dead_end": d.get("v_end") is None, "family": family(chosen[0]) if chosen else "(none)",
-            "timing": d.get("timing") or {},
+            "timing": d.get("timing") or {}, "clipped": d.get("model_clipped"),
             "s2": c2["steps"] / c2["of_steps"] if c2.get("of_steps") else None}
 
 
@@ -178,6 +179,7 @@ def analyze(run: str, level: str | None = None) -> dict:
     n_switch = n_kept = 0
     kept_gain = defaultdict(list)                   # unit -> gains the kept plans were kept against
     end_sup = 0
+    n_clip_known = n_clip = 0                       # decisions with model_clipped (older runs: none)
     lv = defaultdict(lambda: {"decisions": 0, "no_progress": 0, "dead_end": 0, "families": Counter()})
     for (k, agent), ps in plans.items():
         ps.sort(key=lambda p: p["frame"])
@@ -238,6 +240,9 @@ def analyze(run: str, level: str | None = None) -> dict:
             if p["unc"] is not None:
                 unc.append(p["unc"])
             end_sup += p["end_supported"]
+            if p["clipped"] is not None:
+                n_clip_known += 1
+                n_clip += int(p["clipped"] > 0)
             L = lv[k[0]]
             L["decisions"] += 1
             L["no_progress"] += int(p["progress"] is not None and p["progress"] <= NO_PROGRESS)
@@ -327,6 +332,7 @@ def analyze(run: str, level: str | None = None) -> dict:
         "uncertainty": {"below_0.9": share(sum(u < 0.9 for u in unc), len(unc)),
                         "below_0.5": share(sum(u < 0.5 for u in unc), len(unc))},
         "ends_supported": share(end_sup, n),
+        "clipped": {"share": share(n_clip, n_clip_known), "n": n_clip_known},
         "position_error": err,
         "levels": per_level}
 
@@ -374,6 +380,9 @@ def report(r: dict) -> str:
           f"{NEAR_TIE_FRAMES} frames in {pct(sm['near_tie'])} (n {sm['n']})")
     w(f"uncertainty factor < 0.9: {pct(r['uncertainty']['below_0.9'])}, < 0.5: {pct(r['uncertainty']['below_0.5'])}; "
       f"plans ending supported {pct(r['ends_supported'])}")
+    cl = r.get("clipped") or {}
+    w(f"chosen plans the collision guard clipped (the model's path went into solid tiles): {pct(cl.get('share'))}"
+      + (f" (n {cl['n']})" if cl.get("n") else " (not logged: an older run)"))
     w("position error (units), median / 90% (n): followed | not followed")
     for hz, e in r["position_error"].items():
         a, b = e["followed"], e["not_followed"]

@@ -76,6 +76,88 @@ def test_support_ground_wall_half_and_slope():
     assert g.tolist() == [True, False]
 
 
+# ---- the collision guard ------------------------------------------------------------------------------------
+def test_box_overlap_follows_the_exact_shapes():
+    t = terrain()
+    h = 5.0                                              # BODY - tolerance 1
+    # standing on the floor (bottom at 40) / 1 unit in / 2 units in
+    assert t.box_overlap(np.array([100.0] * 3), np.array([46.0, 45.0, 44.0]), h).tolist() == [False, False, True]
+    # the lower-half block (15, 2): solid 40..50; its upper half is open
+    assert t.box_overlap(np.array([310.0, 310.0]), np.array([56.0, 54.0]), h).tolist() == [False, True]
+    # the slope (20, 2) rises to the right (surface y = 40 + (x - 400)): under the box's right edge x = 408 it
+    # is at 48, so a box bottom at 49 is clear and one at 46 is not
+    assert t.box_overlap(np.array([403.0, 403.0]), np.array([54.0, 51.0]), h).tolist() == [False, True]
+    assert not t.box_overlap(np.array([0.0]), np.array([-30.0]), h)[0]     # outside the map: not solid
+    o = t.opened([(2, 15)])                              # an opened lock: open
+    assert not o.box_overlap(np.array([310.0]), np.array([50.0]), h)[0] and t.box_overlap(np.array([310.0]),
+                                                                                            np.array([50.0]), h)[0]
+    assert not Terrain(t.words0, 0.0, 0.0, slopes=False).box_overlap(np.array([417.0]), np.array([49.0]), h)[0]
+
+
+def _rows(xy, v=(0.0, 0.0)):
+    from wm.buffer import ROW
+    r = np.zeros(len(xy), ROW)
+    r["x"], r["y"] = [p[0] for p in xy], [p[1] for p in xy]
+    r["vx"], r["vy"] = v
+    return r
+
+
+def test_collide_lands_on_the_half_floor_and_keeps_the_free_axis():
+    from plan.planner import collide
+    t = terrain()
+    # falling into the lower-half block (top y = 50) while moving right: x kept, y back to contact, vy 0
+    prev, s = _rows([(305.0, 60.0)]), _rows([(308.0, 47.0)], (180.0, -400.0))
+    s2 = s.copy()
+    assert collide(t, prev, s2).tolist() == [True]
+    assert s2["x"][0] == 308.0 and abs(s2["y"][0] - 56.0) < 0.05 and s2["y"][0] >= 56.0
+    assert s2["vy"][0] == 0.0 and s2["vx"][0] == 180.0
+    # running into the wall column (x 200..220) from the left: y kept, x back to contact (194), vx 0
+    prev, s = _rows([(190.0, 100.0)]), _rows([(197.0, 98.0)], (390.0, -50.0))
+    assert collide(t, prev, s).tolist() == [True]
+    assert abs(s["x"][0] - 194.0) < 0.05 and s["x"][0] <= 194.0 and s["y"][0] == 98.0
+    assert s["vx"][0] == 0.0 and s["vy"][0] == -50.0
+    # into the corner of floor and wall: both axes cut
+    prev, s = _rows([(190.0, 50.0)]), _rows([(197.0, 42.0)], (390.0, -400.0))
+    assert collide(t, prev, s).tolist() == [True]
+    assert abs(s["x"][0] - 194.0) < 0.05 and abs(s["y"][0] - 46.0) < 0.05 and s["vx"][0] == 0 and s["vy"][0] == 0
+    # within the tolerance (0.5 into the floor), clear, or starting already deep inside: left alone
+    prev, s = _rows([(100.0, 47.0), (100.0, 60.0), (100.0, 30.0)]), _rows([(100.0, 45.5), (104.0, 55.0), (100.0, 25.0)])
+    s0 = s.copy()
+    assert collide(t, prev, s).tolist() == [False, False, False] and np.array_equal(s, s0)
+    # through the open cell next to the half block (the hole): nothing to clip
+    prev, s = _rows([(290.0, 70.0)]), _rows([(290.0, 60.0)])
+    assert collide(t, prev, s).tolist() == [False]
+
+
+@pytest.mark.skipif(not os.path.exists(MODEL), reason="no world model")
+def test_imagined_paths_stay_out_of_the_floor(flat):
+    """With the guard, no imagined position of any stage overlaps the floor by more than the tolerance; the
+    chosen plan records how many of its frames were clipped (None with the guard off)."""
+    import torch
+    from plan.planner import COLLIDE_TOL, imagine, state_row
+    from realpath import BODY
+    lv, pl = flat
+    torch.set_num_threads(1)
+    worlds, frames = empty_inputs(pl.H)
+    row = state_row(210.0, 80.0, 0.0, -300.0, 0, 8, 0, 0)               # falling onto the floor
+    acts = pl.lib_actions[:8]
+    off = imagine(pl.model, slice(None), pl.geom, np.repeat(row, 8), acts, 16.667, worlds)
+    on = imagine(pl.model, slice(None), pl.geom, np.repeat(row, 8), acts, 16.667, worlds,
+                 terrain=pl.guard_terrain(0))
+    assert off["clip"] is None and on["clip"].shape == (len(pl.model.members), 8, MAX_LEN + 1)
+    inside = pl.guard.box_overlap(on["x"].ravel(), on["y"].ravel(), BODY - COLLIDE_TOL)
+    assert not inside.any()
+    plan = pl.plan(row, 0, worlds, frames)
+    assert plan.model_clipped is not None and 0 <= plan.model_clipped <= pl.H
+    assert "clipped" in plan.counts["final"]
+    pl.collide_tol = None
+    try:
+        assert pl.plan(row, 0, worlds, frames).model_clipped is None
+    finally:
+        pl.collide_tol = COLLIDE_TOL
+        pl.new_wave()
+
+
 # ---- failure memory and surprises (no model) ----------------------------------------------------------------
 def test_failure_memory_counts_a_move_that_did_not_deliver():
     m = FailureMemory()

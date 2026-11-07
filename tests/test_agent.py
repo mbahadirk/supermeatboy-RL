@@ -150,6 +150,10 @@ def test_runner_plays_a_recorded_wave(tmp_path):
     assert end[0]["frame"] == states[-1]["frame"] + 1
     wave = [e for e in events if e["kind"] == "wave"]
     assert wave and wave[-1]["estimated"] == 0
+    # the share of decisions whose chosen plan the collision guard clipped (plans: model_clipped)
+    n_clip = sum((p.get("model_clipped") or 0) > 0 for p in plans)
+    assert all(p.get("model_clipped") is not None for p in plans)
+    assert wave[-1]["clipped"] == n_clip and wave[-1]["clipped_share"] == pytest.approx(n_clip / len(plans), abs=1e-3)
     # per-frame cost: every category, the python total and the wait for the game, the game speed
     cm = wave[-1]["cost_ms"]
     assert set(cm) == set(agent_mod().FrameCost.CATS) | {"python", "wait"}

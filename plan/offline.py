@@ -48,8 +48,9 @@ def waves_of(d: str, level: str):
             yield z["rows"].copy(), json.load(gzip.open(p[:-4] + "_world.json.gz", "rt", encoding="utf-8"))
 
 
-def build(d: str, level: str, model: str, budget: float):
-    """(Level, ProgressField, Planner, reference wave world, current wave rows, current wave world)."""
+def build(d: str, level: str, model: str, budget: float, collide_tol="default"):
+    """(Level, ProgressField, Planner, reference wave world, current wave rows, current wave world).
+    collide_tol: the planner's collision guard tolerance (default plan.planner.COLLIDE_TOL; None: no guard)."""
     gen = waves_of(d, level)
     ref_rows, ref_world = next(gen)
     rows, world = next(gen, (ref_rows, ref_world))
@@ -57,7 +58,8 @@ def build(d: str, level: str, model: str, budget: float):
     inp = planner_inputs(level_from_data(d, level), ref_world)
     field = ProgressField(lv.words0, lv.ox, lv.oy, lv.spawn, lv.goals, inp["hazards"], inp["sweeps"], inp["keys"],
                           inp["bandages"], inp["portals"], lift=inp["lift"], blocks=inp["blocks"], doors=inp["doors"])
-    planner = Planner(model, lv, field, budget_ms=budget)
+    planner = Planner(model, lv, field, budget_ms=budget,
+                      **({} if collide_tol == "default" else {"collide_tol": collide_tol}))
     return lv, field, planner, ref_world, rows, world
 
 

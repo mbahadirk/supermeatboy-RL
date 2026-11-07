@@ -23,10 +23,11 @@ OLD = os.path.join(HERE, "tests", "data", "runner_old_schedule.json")
 need_data = pytest.mark.skipif(not (os.path.isdir(DATA) and os.path.exists(MODEL)), reason="recorded data not here")
 
 
-def old_mode_run(tmp: str, extra=()) -> dict:
+def old_mode_run(tmp: str, extra=(), tol="default") -> dict:
     """The recorded 1-13 wave of tests/test_agent.py through the runner with --replan 2 (no planner deadline,
     1 thread: the result does not depend on the machine's load). extra: more flags. Returns the decisions
-    [agent, frame, chosen, actions] and the replies per frame."""
+    [agent, frame, chosen, actions] and the replies per frame. tol: the planner's collision guard tolerance
+    (default: the planner's; None: no guard)."""
     import agent
     import test_agent as TA
     from plan.planner import Planner
@@ -34,6 +35,8 @@ def old_mode_run(tmp: str, extra=()) -> dict:
     class NoDeadline(Planner):
         def __init__(self, *a, **kw):
             kw["budget_ms"] = None
+            if tol != "default":
+                kw["collide_tol"] = tol
             super().__init__(*a, **kw)
     args = agent.build_parser().parse_args(
         ["--agents", "2", "--replan", "2", "--budget-ms", "60", "--model", MODEL, "--name", os.path.join(tmp, "run"),
@@ -60,11 +63,35 @@ def test_old_replan_mode_reproduces_the_old_schedule(tmp_path):
     gold = json.load(open(OLD, encoding="utf-8"))
     if gold["model_sha256"] != model_digest():
         pytest.skip("the world model changed since the record was made")
-    now = old_mode_run(str(tmp_path), ["--triggers", "off", "--hysteresis", "0"])
+    now = old_mode_run(str(tmp_path), ["--triggers", "off", "--hysteresis", "0"], tol=None)   # no collision guard
     assert [d[:2] for d in now["decisions"]] == [d[:2] for d in gold["decisions"]]       # the schedule
     assert now["decisions"] == gold["decisions"]                                          # and the decisions
     assert now["replies"] == gold["replies"]
     assert all(p["trigger"] in (["start"], ["interval"]) for p in now["plans"])
+
+
+def _clipped(p) -> int:
+    return sum(int((p["counts"].get(s) or {}).get("clipped") or 0) for s in ("stage1", "stage2", "final"))
+
+
+@need_data
+@pytest.mark.skipif(not os.path.exists(OLD), reason="no record of the old runner")
+def test_collision_guard_changes_only_clipped_decisions(tmp_path):
+    """With the collision guard (plan/planner.py collide) the old mode's decisions are the old record except
+    where it clipped a candidate of that decision, or a decision of the same agent before it changed (the
+    previous plan is a candidate). The guarded run is recorded too ("guarded")."""
+    from test_planner_golden import model_digest
+    gold = json.load(open(OLD, encoding="utf-8"))
+    if gold["model_sha256"] != model_digest() or "guarded" not in gold:
+        pytest.skip("the world model changed since the record was made, or no guarded record")
+    now = old_mode_run(str(tmp_path), ["--triggers", "off", "--hysteresis", "0"])
+    assert now["decisions"] == gold["guarded"]["decisions"]
+    assert now["replies"] == gold["guarded"]["replies"]
+    changed_before = set()
+    for d, old, p in zip(now["decisions"], gold["decisions"], now["plans"]):
+        if d != old:
+            assert _clipped(p) > 0 or d[0] in changed_before, d[:3]
+            changed_before.add(d[0])
 
 
 # ---- the triggers (plan/commit.py) on stub plans ---------------------------------------------------------------
@@ -332,8 +359,12 @@ if __name__ == "__main__" and "--write" in sys.argv:
     from test_planner_golden import model_digest
     import torch
     with tempfile.TemporaryDirectory() as tmp:
-        out = old_mode_run(tmp)
+        out = old_mode_run(tmp, tol=None)
+    with tempfile.TemporaryDirectory() as tmp:
+        on = old_mode_run(tmp)
     out.pop("plans")
+    on.pop("plans")
+    out["guarded"] = on
     torch.set_num_threads(2)
     os.makedirs(os.path.dirname(OLD), exist_ok=True)
     with open(OLD, "w", encoding="utf-8") as f:

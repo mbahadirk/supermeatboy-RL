@@ -71,6 +71,8 @@ class Plan:
     previous plan (shifted) was kept, gain: the best other candidate's advantage over it (V units, or frames
     earlier at the goal: unit), margin: the margin it had to beat, unit: "V" | "frames", reason: e.g.
     "kept: best other +0.31 < 0.5", "switched: +1.80", "switched: previous plan vetoed (h3 f9)"}.
+    model_clipped: frames 1..H of the chosen plan on which the collision guard (plan/planner.py collide) moved
+    at least one member's imagined body out of solid tiles; None when the guard was off.
     """
     frame: int
     agent: int
@@ -104,6 +106,7 @@ class Plan:
     key_touches: list = field(default_factory=list)
     finish_model: float | None = None
     switch: dict | None = None
+    model_clipped: int | None = None
 
     @property
     def name(self) -> str:

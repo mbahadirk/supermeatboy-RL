@@ -60,6 +60,19 @@ key_boxes, reach measured by contact_reach.py), on the candidate's judged frames
 - The world model's finish head along the chosen path is logged (Plan.finish_model), never scored.
 Plans that touch no goal and no key score exactly as without contact.
 
+Collision guard (every stage, every imagined step: imagine(..., terrain=Planner.guard_terrain(keys)), collide):
+the world model's tile input marks a half block without saying which half is solid, so its imagined bodies
+went through floors of half blocks (1-14 row 19: 62% of the chosen plans of two runs had the centre in solid).
+After each step a body box (half size BODY) overlapping solid tiles by more than COLLIDE_TOL = 1 unit is put back
+per axis to contact (collide's docstring). The tolerance from recorded real states (`python -m plan.geometry
+--overlap --no-slopes <wm_data>...`, 5 runs, 19 levels, 2.09 M alive rows): rows the guard would move at 0.5 /
+1 / 1.5 / 2 units: 342 / 182 / 114 / 63 (0.019 / 0.010 / 0.006 / 0.004%) on every level but 1-7, whose
+2,305 rows (at 1 unit, as many at any tolerance) are deep inside full blocks, nearly all from one wave recorded
+without the time-step lock (real_20261102-035612, dt up to 64 ms).
+Slope cells are left out: real agents are recorded inside the modelled triangles of some (1-13: 5,900 rows,
+1-7, 1-6). Moving platforms are not tiles: not in the guard. Plan.model_clipped: the chosen plan's clipped
+frames; counts[stage]["clipped"]: candidates clipped. Planner(collide_tol=None): no guard (as before).
+
 Supported rule (plan/geometry.py, checked by `python -m plan.geometry runs/real_20261102-165351/wm_data --shards 3`
 on 3 waves each of 1-5 and 1-13, 331,000 rows): of the frames at rest (vy == 0 now and the next frame) the rule
 says ground on 99.7% (1-5) and 98.6% (1-13); flag 0x2 is set on 74% / 92% of all rows, so it is not "airborne".
@@ -79,6 +92,7 @@ from mpc.candidates import ACTIONS
 from plan import safety as S
 from plan.explain import Plan, SurpriseTracker, HORIZONS
 from plan.geometry import Terrain
+from realpath import BODY
 from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MAX_LEN, padded
 from plan.progress import ProgressField
 from wm.buffer import ROW
@@ -104,18 +118,24 @@ BOX_MARGIN = 70.0                            # units around the candidates' path
 N_ALTERNATIVES = 5
 HAZ_FAR = 300.0                              # wm.features.hazard_features clips offsets and distances here
 FINAL_MS0 = 60.0                             # first guess of the final stage's cost (then measured, averaged)
+COLLIDE_TOL = 1.0                            # units: the collision guard moves imagined bodies overlapping more
+CONTACT_EPS = 0.01                           # units: a body put back to contact is this clear of the solid
+CONTACT_SAMPLES = 16                         # per pass of the contact search (2 passes: 1/256 of the move)
 
 
 # ---- world model rollouts with per-row time offsets -------------------------------------------------------
 @torch.no_grad()
 def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.ndarray, dt_ms: float,
-            worlds: list, offsets=None, deadline: float | None = None, keep_rows: bool = False) -> dict:
+            worlds: list, offsets=None, deadline: float | None = None, keep_rows: bool = False,
+            terrain: Terrain | None = None, tol: float = None) -> dict:
     """wm.rollout.rollout_batched for a subset of ensemble members (`members`, a slice) whose rows may start at
     different future frames: row i at step k sees the level's moving parts worlds[offsets[i] + k] (clamped to
     the last). s0 (n,) ROW, actions (n, K). Returns x, y (E, n, K+1) float64, alive (E, n, K+1) (the learned
     death head: a second opinion only), finish (E, n, K+1) (the learned finish head's probability per step:
     a cross-check only), rows (E, n, K+1) when keep_rows, and steps (how many steps ran before the deadline;
-    positions after that are held at the last one)."""
+    positions after that are held at the last one). terrain: the collision guard (collide) after every step
+    against these tiles with tolerance tol (default COLLIDE_TOL); clip (E, n, K+1) says which steps it moved
+    (None without a terrain)."""
     Wl, Bl = _stacked(model)
     Wl, Bl = [w[members] for w in Wl], [b[members] for b in Bl]
     E = Wl[0].shape[0]
@@ -130,6 +150,8 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     alive = np.ones((E, n, K + 1), np.float32)
     fin = np.zeros((E, n, K + 1), np.float32)
     rows = np.zeros((E, n, K + 1), s0.dtype) if keep_rows else None
+    clip = np.zeros((E, n, K + 1), bool) if terrain is not None else None
+    tol = COLLIDE_TOL if tol is None else tol
     xs[:, :, 0], ys[:, :, 0] = s["x"].reshape(E, n), s["y"].reshape(E, n)
     if rows is not None:
         rows[:, :, 0] = s.reshape(E, n)
@@ -146,7 +168,10 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
         h = model.split(torch.baddbmm(Bl[-1], z, Wl[-1]).reshape(E * n, -1))
         move = (h["mean"] * rs).numpy() + prior(s, dt_ms)
         pb = torch.sigmoid(h["bin"]).numpy()
-        s = advance(s, a_all[:, k], move, pb, h["state"].argmax(-1).numpy())
+        s2 = advance(s, a_all[:, k], move, pb, h["state"].argmax(-1).numpy())
+        if clip is not None:
+            clip[:, :, k + 1] = collide(terrain, s, s2, tol).reshape(E, n)
+        s = s2
         al = al * (1.0 - pb[:, EVENTS["death"]])
         xs[:, :, k + 1], ys[:, :, k + 1] = s["x"].reshape(E, n), s["y"].reshape(E, n)
         alive[:, :, k + 1] = al.reshape(E, n)
@@ -160,7 +185,64 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
         xs[:, :, done + 1:] = xs[:, :, done:done + 1]
         ys[:, :, done + 1:] = ys[:, :, done:done + 1]
         alive[:, :, done + 1:] = alive[:, :, done:done + 1]
-    return {"x": xs, "y": ys, "alive": alive, "finish": fin, "rows": rows, "steps": done}
+    return {"x": xs, "y": ys, "alive": alive, "finish": fin, "rows": rows, "steps": done, "clip": clip}
+
+
+def collide(ter: Terrain, prev: np.ndarray, s: np.ndarray, tol: float = COLLIDE_TOL) -> np.ndarray:
+    """The collision guard: imagined rows s (just stepped from prev) whose body box (half size BODY) overlaps
+    solid tiles by more than `tol` are put back to contact, per axis as a platformer resolves it. If moving
+    only along x (from the previous position) is free, x is kept and y goes back to where the box touches
+    (vy = 0); else if moving only along y is free, y is kept and x goes back to contact (vx = 0); else x then
+    y, each to contact (a cut axis' velocity 0). Contact: the box shrunk by CONTACT_EPS just clear (by `tol`
+    when the start already overlapped that much). Rows whose previous position already overlapped by more
+    than `tol` are left as the model said (no free position to go back to). Flags, movement state and the
+    jump key stay what the model predicted (the next step sees the corrected position and velocity). In
+    place; returns which rows were clipped."""
+    h = BODY - tol
+    hit = ter.box_overlap(s["x"], s["y"], h)
+    if not hit.any():
+        return hit
+    i = np.nonzero(hit)[0]
+    x0, y0 = prev["x"][i].astype(np.float64), prev["y"][i].astype(np.float64)
+    x1, y1 = s["x"][i].astype(np.float64), s["y"][i].astype(np.float64)
+    free = ~ter.box_overlap(np.concatenate([x0, x1, x0]), np.concatenate([y0, y0, y1]), h).reshape(3, -1)
+    ok = free[0]
+    a, b = free[1] & ok, free[2] & ok & ~free[1]
+    c = ok & ~free[1] & ~free[2]
+    # first axis: y for a (from (x1, y0)), x for b (from (x0, y1)) and c (from (x0, y0))
+    px, py = np.where(a, x1, x0), np.where(b, y1, y0)
+    dx, dy = np.where(a, 0.0, x1 - x0), np.where(a, y1 - y0, 0.0)
+    t = _contact(ter, px, py, dx, dy, tol)
+    nx, ny = px + t * dx, py + t * dy
+    cut_x, cut_y = (b | c) & (t < 1), a & (t < 1)
+    if c.any():                                      # then y, from where x stopped
+        k = np.nonzero(c)[0]
+        t2 = _contact(ter, nx[k], y0[k], np.zeros(len(k)), (y1 - y0)[k], tol)
+        ny[k] = y0[k] + t2 * (y1 - y0)[k]
+        cut_y[k] = t2 < 1
+    j = i[ok]
+    s["x"][j], s["y"][j] = nx[ok], ny[ok]
+    s["vx"][i[cut_x]] = 0.0
+    s["vy"][i[cut_y]] = 0.0
+    out = np.zeros(len(s), bool)
+    out[j] = True
+    return out
+
+
+def _contact(ter: Terrain, px, py, dx, dy, tol: float, n: int = CONTACT_SAMPLES) -> np.ndarray:
+    """How far along (dx, dy) from (px, py) the body can move (0..1) before overlapping solid: the box shrunk by
+    CONTACT_EPS (by `tol` where the start overlaps more than that) at n samples of the move, then n samples
+    between the last free and the first blocked one (resolution 1 / n^2 of the move)."""
+    hs = np.where(ter.box_overlap(px, py, BODY - CONTACT_EPS), BODY - tol, BODY - CONTACT_EPS)
+    lo, w = np.zeros(len(px)), np.ones(len(px))
+    for _ in range(2):
+        f = lo[:, None] + w[:, None] * np.arange(1, n + 1) / n                       # (rows, n)
+        blocked = ter.box_overlap(px[:, None] + f * dx[:, None], py[:, None] + f * dy[:, None], hs[:, None])
+        first = np.where(blocked.any(1), blocked.argmax(1), n)                     # first blocked sample
+        done = first == n
+        lo = np.where(done, lo + w, lo + w * first / n)
+        w = np.where(done, 0.0, w / n)
+    return np.minimum(lo, 1.0)
 
 
 HAZ_COLS = slice(FEAT_DIM - 6 - 5 * N_HAZ, FEAT_DIM - 6)     # wm.features.featurize: [..., hazards, platform]
@@ -374,10 +456,12 @@ class Planner:
 
     def __init__(self, model, level, field: ProgressField, H: int = H_DEFAULT, B1: int = B1_DEFAULT,
                  branch: int = BRANCH_DEFAULT, S_final: int = S_DEFAULT, budget_ms: float | None = BUDGET_MS,
-                 member: int = 0, memory: FailureMemory | None = None, hysteresis: float = 0.0):
+                 member: int = 0, memory: FailureMemory | None = None, hysteresis: float = 0.0,
+                 collide_tol: float | None = COLLIDE_TOL):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms
         self.hysteresis = float(hysteresis)          # V units (switch rule); 0: the best total is chosen
+        self.collide_tol = collide_tol               # the collision guard's tolerance; None: no guard
         self.member = member
         self.final_ms = FINAL_MS0
         self.lib = list(LIBRARY)
@@ -395,6 +479,8 @@ class Planner:
         self.geom = LevelGeom(level.words0, {"ox": level.ox, "oy": level.oy})
         self.words = np.asarray(level.words0, np.uint32).copy()
         self.terrain = Terrain(level.words0, level.ox, level.oy)
+        self.guard = Terrain(level.words0, level.ox, level.oy, slopes=False)    # the collision guard's tiles
+        self._guard_keys = {}
         self.bounds = S.level_bounds(level)
         # what the agent touches to finish / pick a key (contact boxes; empty without contact_reach.json)
         self.goal_boxes = np.asarray(getattr(level, "goal_boxes", list)(), np.float64).reshape(-1, 5)
@@ -412,6 +498,24 @@ class Planner:
             if 0 <= r < self.terrain.H:
                 self.words[r, c] = word
         self.terrain.update(self.words)
+        self.guard.update(self.words)
+        self._guard_keys = {}
+
+    def guard_terrain(self, keys: int) -> Terrain | None:
+        """The collision guard's tiles for an agent holding `keys`: the live tiles (plan.geometry.solid_now's
+        rule: crumble / lock / switch blocks solid while their word is the start one), slope cells open (real
+        agents are recorded inside some slopes' modelled triangles), the lock tiles of the held keys open (the
+        game opens them for that agent only; keys picked up during an imagined path do not open their locks
+        there). Moving platforms are not tiles: not in the guard. None when the guard is off."""
+        if self.collide_tol is None:
+            return None
+        keys = int(keys)
+        if not keys or not getattr(self.lv, "lock_groups", None):
+            return self.guard
+        t = self._guard_keys.get(keys)
+        if t is None:
+            t = self._guard_keys[keys] = self.guard.opened(self.lv.opened_cells(keys))
+        return t
 
     def new_wave(self):
         self.prev = {}
@@ -487,6 +591,11 @@ class Planner:
         cell0 = self.cell(x0, y0)
         mem = slice(self.member, self.member + 1)
         timing, counts = {}, {}
+        gt = self.guard_terrain(keys)
+        ck = {"terrain": gt, "tol": self.collide_tol}
+        n_clip = lambda c, upto=None: 0 if c is None else int(
+            (c if upto is None else c & (np.arange(c.shape[2])[None, None, :] <= np.asarray(upto)[None, :, None]))
+            .any(axis=(0, 2)).sum())
 
         def progress_of(vend):
             vend = np.asarray(vend, np.float64)
@@ -508,7 +617,7 @@ class Planner:
         K1 = MAX_LEN
         out1 = imagine(self.model, mem, self.geom, np.repeat(row, n1), self.lib_actions, dt_ms, worlds,
                        deadline=None if self.budget is None else t0 + STAGE1_SHARE * self.budget / 1000.0,
-                       keep_rows=True)
+                       keep_rows=True, **ck)
         steps1 = out1["steps"]
         up1 = np.minimum(self.lib_len, steps1)
         fr1 = _near_frames(frames[:steps1 + 1], out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1])
@@ -530,7 +639,7 @@ class Planner:
         t1 = time.perf_counter()
         timing["stage1"] = 1000 * (t1 - t0)
         counts["stage1"] = {"candidates": n1, "steps": int(steps1), "complete": int((self.lib_len <= steps1).sum()),
-                            "vetoed": int(veto1.sum()), "goal": int(succ1.sum())}
+                            "vetoed": int(veto1.sum()), "goal": int(succ1.sum()), "clipped": n_clip(out1["clip"], up1)}
 
         # ---- stage 2: second moves from the kept end states, one member ------------------------------------
         seconds = [BY_NAME[nm] for nm in CORE_SECOND]
@@ -560,7 +669,8 @@ class Planner:
             s0 = np.array(s0, ROW)
             dl2 = (None if self.budget is None else
                    t0 + max(STAGE2_SHARE * self.budget, self.budget - self.final_ms) / 1000.0)
-            out2 = imagine(self.model, mem, self.geom, s0, np.stack(acts2), dt_ms, worlds, offsets=offs, deadline=dl2)
+            out2 = imagine(self.model, mem, self.geom, s0, np.stack(acts2), dt_ms, worlds, offsets=offs, deadline=dl2,
+                           **ck)
             steps2 = out2["steps"]
             n2 = len(cands)
             xs2, ys2 = np.zeros((1, n2, H + 1)), np.zeros((1, n2, H + 1))
@@ -588,7 +698,8 @@ class Planner:
             final = [cands[c] for c in pick]
             counts["stage2"] = {"candidates": n2, "steps": int(steps2), "of_steps": int(K2),
                                 "complete": int((up2 >= H).sum()), "vetoed": int(veto2.sum()),
-                                "second_moves": [sm.name for sm in seconds], "goal": int(succ2.sum())}
+                                "second_moves": [sm.name for sm in seconds], "goal": int(succ2.sum()),
+                                "clipped": n_clip(out2["clip"])}
         else:
             final = []
             for i in order1[:self.S]:
@@ -617,7 +728,7 @@ class Planner:
                 prev_idx = len(final) - 1
         n3 = len(final)
         acts3 = np.stack([a for _, a in final])
-        out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds)
+        out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds, **ck)
         E = out3["x"].shape[0]
         fr3 = _near_frames(frames[:H + 1], out3["x"], out3["y"])
         saf = S.check(out3["x"], out3["y"], fr3, self.bounds)
@@ -653,7 +764,8 @@ class Planner:
         timing["final"] = 1000 * (t3 - t2)
         self.final_ms = 0.7 * self.final_ms + 0.3 * timing["final"]
         counts["final"] = {"candidates": n3, "members": E, "steps": H, "vetoed": int(saf.veto.sum()),
-                           "prev_included": prev_idx >= 0, "goal": int(succ3.sum()), "start_in_goal": start_in_goal}
+                           "prev_included": prev_idx >= 0, "goal": int(succ3.sum()), "start_in_goal": start_in_goal,
+                           "clipped": n_clip(out3["clip"])}
 
         # ---- explanation -----------------------------------------------------------------------------------
         segs, acts = final[best]
@@ -704,7 +816,8 @@ class Planner:
             goal_touch=goal_touch, key_touches=key_touches,
             finish_model=float(out3["finish"][:, best].max()),
             timing={**{k: round(v, 2) for k, v in timing.items()}, "total": round(1000 * (time.perf_counter() - t0), 2)},
-            counts=counts, segments=[[nm, int(a), int(b)] for nm, a, b in segs], switch=switch)
+            counts=counts, segments=[[nm, int(a), int(b)] for nm, a, b in segs], switch=switch,
+            model_clipped=None if out3["clip"] is None else int(out3["clip"][:, best].any(0).sum()))
         plan.first_move_frames = int(first_frames)
         self.prev[agent] = plan
         if not plan.from_prev:                       # a kept plan keeps the predictions of its adoption
