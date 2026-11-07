@@ -353,7 +353,7 @@ def test_closed_loop_harness(tmp_path):
     assert old["frames"] == 12 and old["decisions"] == 6 and [p["frame"] for p in old["plans"]] == list(range(0, 12, 2))
     assert old["triggers"] == {"start": 1, "interval": 5}
     assert 1 <= new["decisions"] < old["decisions"] and new["plans"][0]["trigger"] == ["start"]
-    assert new["mode"]["hysteresis"] == 160.0 and new["plan_ms_per_frame"] > 0
+    assert new["mode"]["hysteresis"] == 16.0 and new["plan_ms_per_frame"] > 0
     assert "the model plays itself, not the game" in closed_loop_text(new)
 
 

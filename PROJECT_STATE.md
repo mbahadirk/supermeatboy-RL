@@ -455,7 +455,7 @@ python smbrl/agent.py --agents 1 --explore 40 --wm-collect
 - `--replan 2` (frames between a planned agent's decisions; in between it plays its plan), `--budget-ms 120`,
   `--model runs/wm_locked/wm_model.pt`, `--wave-seconds 20`, `--end-after 1`, `--name` (default `plan_<time>`),
   `--no-overlay`, `--telemetry 127.0.0.1:47800` (or `off`), `--death-memory smbrl/death_memory.json`,
-  `--move-memory smbrl/move_memory.json` (or `none`), `--hysteresis 160` (frames: the measured re-score noise, since step 4), `--threads 2`,
+  `--move-memory smbrl/move_memory.json` (or `none`), `--hysteresis 16` (frames, chosen from closed loops, since step 4), `--threads 2`,
   `--seed 0`.
 - Stop: Ctrl+C or a file `runs/<name>/STOP`.
 
