@@ -594,6 +594,17 @@ These come from `runs/*/levels/*/best.json`.
     - the policy has become nearly deterministic (low entropy);
     - SPEED-phase rewards change once one agent finishes.
 11. **The S key saves `unknown_model.pt`** when the game reports the level name late.
+12. **Some slope tiles are modelled wrong (measured 2026-11-07, not fixed).** Real recorded agents are inside
+    the solid triangle `plan/geometry.py` gives some 45-degree slope cells:
+    - 1-13: about 5,900 alive rows overlap by more than 1 unit, nearly all in cells (27,22) word 0x424c301d,
+      (14,17) and (12,15) word 0x414ce00c, (12,20) 0x414c001d; agent centres at 30-40% into the cell;
+    - 1-7 (27,38) 0x428c2003 and 1-6 (28,8) 0x428c200d: about 180 rows each.
+    - Measured with `python -m plan.geometry --overlap` (slopes on) against `--no-slopes`: 9,817 vs 2,487
+      rows at 1 unit over 2.09 M rows of 5 runs.
+    - Suspected cause: the open-corner decode (`realpath.slope_open_corner`, rotation / flip bits) is wrong
+      for these words (second byte 0x4c / 0x8c), or these cells are not solid triangles in the game (e.g.
+      corner pieces the player passes). Until it is resolved the planner's collision guard leaves slope cells
+      open; support, safety and the progress field still use the slope shapes.
 
 ---
 
