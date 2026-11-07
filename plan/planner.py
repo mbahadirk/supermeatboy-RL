@@ -527,7 +527,16 @@ class Planner:
 
     def value(self, x, y, keys=0, leg=None):
         """V at positions (arrays) for an agent holding `keys`, or on leg `leg` (an int or one per position):
-        (V, supported, ground, wall side, leg)."""
+        (V, supported, ground, wall side, leg).
+
+        Points inside solid: ProgressField.values gives a point in a wall cell its best open 3 x 3 neighbour,
+        which can be across a floor. With the collision guard the score's points (every stage's end points, per
+        member) are practically never inside solid geometry: measured on recorded states (no deadlines; 1-14 on
+        the half-block floor 40 decisions, 1-13 and 1-12 30 each): 0 / 11,280, 0 / 8,460 and 1 / 8,452 (a slope)
+        points, against 1,888 / 599 / 111 without the guard; so the rule is unchanged. Not the same thing: a
+        body standing on a lower half block has its centre in the cell's open upper half, a wall cell of the
+        field, so it still takes the best neighbour, which there is the cell below the floor (1-14: V 13.1 on the
+        floor at x 110 from the cell below, 22.4 just above it)."""
         x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
         g, side = self.terrain.support(x, y, self.lv.plats or None)
         sup = g | (side != 0)

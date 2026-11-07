@@ -371,6 +371,39 @@ def test_plan_on_a_recorded_state():
     assert any(e["kind"] == "position" and e["horizon"] == 1 for e in ev)
 
 
+DATA_114 = os.path.join(HERE, "runs", "plan_20261107-174219", "wm_data")
+
+
+@pytest.mark.skipif(not (os.path.exists(MODEL) and os.path.isdir(DATA_114)), reason="no model or 1-14 recording")
+def test_lookups_on_the_1_14_half_floor_stay_out_of_solid():
+    """Item b of the guard round: with the collision guard, no point the planner's score looks up in the
+    progress field (Planner.value: every stage's end points, per member) is inside solid geometry on a recorded
+    1-14 state standing on the half-block floor (so the field's "best open neighbour" rule for points inside
+    walls is not reached through a floor); without the guard many are (the model goes through that floor)."""
+    import torch
+    from plan.offline import build, waves_of
+    from plan.planner import state_row
+    torch.set_num_threads(1)
+    inside = {}
+    for tol in (None, "default"):
+        lv, field, pl, _, _, _ = build(DATA_114, "1-14", MODEL, None, tol)
+        r = next(r for rows, _ in waves_of(DATA_114, "1-14") for r in rows
+                 if r["status"] == 0 and 60 <= r["x"] <= 120 and abs(r["y"] - 36.0) < 0.5)
+        got = []
+        orig = pl.value
+
+        def logged(x, y, keys=0, leg=None):
+            got.append((np.ravel(x).astype(float), np.ravel(y).astype(float)))
+            return orig(x, y, keys, leg)
+        pl.value = logged
+        worlds, frames = empty_inputs(pl.H)
+        pl.plan(state_row(r["x"], r["y"], r["vx"], r["vy"], r["flags"], r["state"], r["keys"], r["held"]), 10,
+                worlds, frames)
+        xs, ys = np.concatenate([g[0] for g in got[1:]]), np.concatenate([g[1] for g in got[1:]])   # [0]: start
+        inside[tol] = int(pl.terrain.point_solid(xs, ys).sum())
+    assert inside["default"] == 0 and inside[None] > 10, inside
+
+
 # ---- goal and key contact -----------------------------------------------------------------------------------
 def test_touches_needs_a_majority_of_members():
     from plan.planner import Planner
