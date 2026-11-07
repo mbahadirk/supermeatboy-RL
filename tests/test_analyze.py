@@ -133,15 +133,16 @@ def test_triggers_switches_committed_plans_and_success_margins(tmp_path):
 
 
 def test_frame_scored_runs_no_progress_and_completion(tmp_path):
-    """Runs scored in frames (score.estimate): no progress = T(start) - estimate <= 0 (the plan does not get
-    closer faster than time passes), margins in frames, completed / landing shares."""
+    """Runs scored in frames (score.estimate): no progress = T(end) >= T(start) (the time-to-go did not shrink),
+    margins in frames, completed / landing shares."""
     run = tmp_path / "plan_f"
     os.makedirs(run)
     ps = []
-    for k, (t0, est, comp) in enumerate([(300.0, 290.0, None), (300.0, 300.0, 6), (300.0, 340.0, None),
-                                         (None, 1e4, None)]):
+    for k, (t0, t1, comp) in enumerate([(300.0, 250.0, None), (300.0, 300.0, 6), (300.0, 310.0, None),
+                                        (None, 9e3, None)]):
+        est = 48 + (comp or 0) + t1                                       # waiting / slow plans still shrink T
         p = _plan(2 * k, 1, total=-est, alt=-est - 2.0)
-        p["score"] = {"total": -est, "estimate": est, "t_start": t0, "frames_used": 48 + (comp or 0),
+        p["score"] = {"total": -est, "estimate": est, "t_start": t0, "t_end": t1, "frames_used": 48 + (comp or 0),
                       "landing": comp is not None or k == 0}
         p["completion"] = None if comp is None else {"frames": comp, "on": "ground", "continuation": "keep"}
         ps.append(p)
@@ -153,7 +154,7 @@ def test_frame_scored_runs_no_progress_and_completion(tmp_path):
             f.write(json.dumps({"frame": fr, "wave": 1, "level": "1-1", "agents": [[0, float(fr), 0.0, 0.0, 0.0, 0]]})
                     + "\n")
     r = A.analyze(str(run))
-    assert r["levels"]["1-1"]["no_progress"] == pytest.approx(2 / 4)       # 300 -> 300 and 300 -> 340; no T: unknown
+    assert r["levels"]["1-1"]["no_progress"] == pytest.approx(2 / 4)       # 300 -> 300 and 300 -> 310; no T: unknown
     assert r["margin"]["unit"] == "frames" and r["margin"]["n"] == 4 and r["margin"]["near_tie"] == 1.0
     assert r["completed"] == 0.25 and r["landing"] == 0.5
     assert "frames" in A.report(r)

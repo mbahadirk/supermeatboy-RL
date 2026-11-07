@@ -25,8 +25,7 @@ success_margin, in frames); uncertainty factor shares (older runs only); plans e
 completed in the air (Plan.completion) and landing (score.landing); the share of decisions whose chosen plan
 the collision guard clipped (plans.jsonl "model_clipped"; older runs: none); the position error per
 horizon for followed and not followed predictions (alive agents only); per level: decisions, no-progress
-share (frames: T(start) - estimate <= 0, the plan does not get closer faster than time passes; older runs:
-progress <= 0.05 V units), dead-end ends, the most common first-move families, deaths per cause, finishes and
+share (frames: T(end) >= T(start), the time-to-go did not shrink; older runs: progress <= 0.05 V units), dead-end ends, the most common first-move families, deaths per cause, finishes and
 their times (times.jsonl or finish events; for older runs without them, the wave length of a 'quota' wave a
 planned agent finished, labelled as an estimate).
 """
@@ -51,7 +50,7 @@ from plan.commit import kind_of                    # noqa: E402
 RUNS = os.path.join(HERE, "runs")
 HORIZONS = (1, 4, 8, 16, 24, 32, 48)
 CHANGE_WINDOW = 16                 # actions compared for "plan changed"
-NO_PROGRESS = 0.0                  # frames: plan.planner.NO_PROGRESS (T(start) - estimate not above it)
+NO_PROGRESS = 0.0                  # frames: no progress when T(start) - T(end) is not above it
 NO_PROGRESS_V = 0.05               # older runs (V units)
 NEAR_TIE = 0.1                     # V units (older runs); frames: NEAR_TIE_FRAMES
 SUCCESS_SCORE = 1e5                # plan.planner.SUCCESS_SCORE: a success's total is SUCCESS_SCORE - touch frame
@@ -143,9 +142,9 @@ def slim(d: dict) -> dict:
     c2 = (d.get("counts") or {}).get("stage2") or {}
     chosen = d.get("chosen") or []
     frames = "estimate" in sc                                          # scored in frames (else older V units)
-    if frames:
-        t0, est = sc.get("t_start"), sc.get("estimate")
-        progress = None if t0 is None or est is None else t0 - est
+    if frames:                                     # T at the start minus T at the end (frames): <= 0, no progress
+        t0, t1 = sc.get("t_start"), sc.get("t_end")
+        progress = None if t0 is None or t1 is None else t0 - t1
     else:
         progress = sc.get("progress")
     return {"frame": int(d["frame"]), "actions": [int(a) for a in d.get("actions") or []],
