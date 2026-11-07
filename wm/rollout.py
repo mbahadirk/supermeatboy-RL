@@ -42,6 +42,10 @@ def next_held(held, action, flags):
     return np.where(~jump | repress, 0, held + 1).astype(np.int16)
 
 
+_BITS = np.array(FLAG_BITS, np.uint64)
+_KEEP = ~np.uint64(int(sum(FLAG_BITS)))
+
+
 def advance(s: np.ndarray, a, move: np.ndarray, pb: np.ndarray, state_cls: np.ndarray) -> np.ndarray:
     """The next agent rows from one predicted step: move [dx, dy, vx', vy'] (game units), probabilities of
     the binary heads (the flag bits are set where > 0.5, other bits kept), the next movement state."""
@@ -49,10 +53,9 @@ def advance(s: np.ndarray, a, move: np.ndarray, pb: np.ndarray, state_cls: np.nd
     s2["x"] = s["x"] + move[:, 0]
     s2["y"] = s["y"] + move[:, 1]
     s2["vx"], s2["vy"] = move[:, 2], move[:, 3]
-    flags = s["flags"].astype(np.uint64)
-    for j, bit in enumerate(FLAG_BITS):
-        flags = np.where(pb[:, j] > 0.5, flags | np.uint64(bit), flags & ~np.uint64(bit))
-    s2["flags"] = flags.astype(np.uint32)
+    nb = len(FLAG_BITS)                        # each predicted bit set where > 0.5, cleared otherwise (one pass)
+    on = (pb[:, :nb] > 0.5) @ _BITS                     # the bits to set (distinct powers of two: OR = sum)
+    s2["flags"] = ((s["flags"].astype(np.uint64) & _KEEP) | on).astype(np.uint32)
     s2["state"] = state_cls
     s2["held"] = next_held(s["held"], a, s["flags"])
     return s2

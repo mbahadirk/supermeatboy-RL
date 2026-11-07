@@ -124,8 +124,9 @@ from realpath import BODY
 from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MAX_LEN, padded
 from plan.progress import FX_GROUND, ProgressField
 from wm.buffer import ROW
-from wm.features import (FEAT_DIM, N_HAZ, RES_SCALE, EVENTS, LevelGeom, box_distances, featurize,
-                         hazard_features, platform_features, prior)
+from wm.features import (BIN_NAMES, FEAT_DIM, N_HAZ, N_STATES, RES_SCALE, EVENTS, LevelGeom, box_distances,
+                         featurize, hazard_features, platform_features, prior)
+from wm.model import N_CONT
 from wm.model import WorldModel
 from wm.rollout import World, advance, _stacked
 
@@ -165,7 +166,7 @@ CONTACT_EPS = 0.01                           # units: a body put back to contact
 
 
 # ---- world model rollouts with per-row time offsets -------------------------------------------------------
-@torch.no_grad()
+@torch.inference_mode()
 def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.ndarray, dt_ms: float,
             worlds: list, offsets=None, deadline: float | None = None, keep_rows: bool = False,
             terrain: Terrain | None = None, tol: float = None) -> dict:
@@ -199,19 +200,24 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     if rows is not None:
         rows[:, :, 0] = s.reshape(E, n)
     rs = torch.as_tensor(RES_SCALE)
+    # per-step buffers, allocated once (the same arithmetic as (X - mu) / sd and silu(baddbmm(...)) per step)
     X = np.empty((E * n, FEAT_DIM), np.float32)
+    Xt = torch.from_numpy(X)
+    Z0 = torch.empty((E * n, FEAT_DIM))
+    hid = [torch.empty((E, n, w.shape[2])) for w in Wl]
     al = np.ones(E * n, np.float32)
     done = K
     last = len(worlds) - 1
     for k in range(K):
         features_into(X, groups, s, a_all[:, k], dt_ms, geom, [worlds[min(o + k, last)] for o, _ in groups])
-        z = ((torch.as_tensor(X) - model.mu) / model.sd).view(E, n, -1)
+        torch.sub(Xt, model.mu, out=Z0)
+        z = Z0.div_(model.sd).view(E, n, -1)
         for i in range(len(Wl) - 1):
-            z = torch.nn.functional.silu(torch.baddbmm(Bl[i], z, Wl[i]))
-        h = model.split(torch.baddbmm(Bl[-1], z, Wl[-1]).reshape(E * n, -1))
-        move = (h["mean"] * rs).numpy() + prior(s, dt_ms)
-        pb = torch.sigmoid(h["bin"]).numpy()
-        s2 = advance(s, a_all[:, k], move, pb, h["state"].argmax(-1).numpy())
+            z = torch.nn.functional.silu(torch.baddbmm(Bl[i], z, Wl[i], out=hid[i]), inplace=True)
+        o = torch.baddbmm(Bl[-1], z, Wl[-1], out=hid[-1]).view(E * n, -1)     # model.split's heads, sliced
+        move = (o[:, :N_CONT] * rs).numpy() + prior(s, dt_ms)
+        pb = torch.sigmoid(o[:, _BIN]).numpy()
+        s2 = advance(s, a_all[:, k], move, pb, o[:, _STATE].argmax(-1).numpy())
         if clip is not None:
             clip[:, :, k + 1] = collide(terrain, s, s2, tol).reshape(E, n)
         s = s2
@@ -288,6 +294,8 @@ def _AXES4(n: int) -> np.ndarray:
     return a
 
 
+_BIN = slice(2 * N_CONT, 2 * N_CONT + len(BIN_NAMES))      # wm.model.WorldModel.split's output layout
+_STATE = slice(_BIN.stop, _BIN.stop + N_STATES)
 HAZ_COLS = slice(FEAT_DIM - 6 - 5 * N_HAZ, FEAT_DIM - 6)     # wm.features.featurize: [..., hazards, platform]
 PLAT_COLS = slice(FEAT_DIM - 6, FEAT_DIM)
 
@@ -299,10 +307,14 @@ def features_into(X, groups, s, a, dt_ms, geom, worlds):
     w0 = worlds[0]
     if len(groups) == 1:
         idx = groups[0][1]
-        X[idx] = featurize(s[idx], a[idx], dt_ms, geom, _model_boxes(w0.boxes, s["x"][idx], s["y"][idx]), w0.pf,
-                           w0.pf_prev, w0.dt_prev_s, w0.fans)
+        if len(idx) == len(X):                       # every row (idx is arange): straight into the buffer
+            featurize(s, a, dt_ms, geom, _model_boxes(w0.boxes, s["x"], s["y"]), w0.pf, w0.pf_prev, w0.dt_prev_s,
+                      w0.fans, out=X)
+        else:
+            X[idx] = featurize(s[idx], a[idx], dt_ms, geom, _model_boxes(w0.boxes, s["x"][idx], s["y"][idx]), w0.pf,
+                               w0.pf_prev, w0.dt_prev_s, w0.fans)
         return
-    X[:] = featurize(s, a, dt_ms, geom, np.zeros((0, 5)), w0.pf, w0.pf_prev, w0.dt_prev_s, w0.fans)
+    featurize(s, a, dt_ms, geom, np.zeros((0, 5)), w0.pf, w0.pf_prev, w0.dt_prev_s, w0.fans, out=X)
     for (o, idx), w in zip(groups, worlds):
         x, y = s["x"][idx].astype(np.float64), s["y"][idx].astype(np.float64)
         if w.fans != w0.fans:

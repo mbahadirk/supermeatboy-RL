@@ -184,7 +184,7 @@ def test_runner_plays_a_recorded_wave(tmp_path):
         assert isinstance(pay, list)
         assert sum(len(e["pts"]) for e in pay) <= 120
         for e in pay:
-            assert set(e) == {"pts", "col", "w"} and 0 <= e["col"] < 2 ** 32 and e["w"] > 0
+            assert set(e) - {"dash"} == {"pts", "col", "w"} and e.get("dash", True) is True and 0 <= e["col"] < 2 ** 32 and e["w"] > 0
             assert all(len(pt) == 2 and all(isinstance(v, float) for v in pt) for pt in e["pts"])
     assert any(e["col"] == 0xE020E040 and len(e["pts"]) > 2 for pay in over for e in pay)   # the chosen path
     # telemetry: every type, each datagram under 60 KB, decodable; the remembered death reaches the future boxes

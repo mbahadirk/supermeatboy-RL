@@ -667,3 +667,27 @@ def test_completion_over_the_1_14_pit_sees_every_continuation_die():
     row = state_row(r["x"], r["y"], r["vx"], r["vy"], r["flags"], r["state"], r["keys"], r["held"])
     (est, risk, rec, path), = pl.complete(row, np.array([act(1)]), np.array([0]), worlds, frames, 16.667, 0, 0)[0]
     assert sorted(rec["died"]) == ["keep", "neutral", "reverse"] and risk == 1
+
+
+def test_patch_table_equals_the_direct_gather_after_tile_changes():
+    """wm.features.LevelGeom.patches reads a table of every padded cell's patch: the same values as gathering
+    them from the padded channels, also after set_tile and reset."""
+    from wm.features import LevelGeom, P
+    w = np.zeros((12, 15), np.uint32)
+    w[0:2, :] = 1
+    w[5, 3:9] = 1 | (1 << 8) | 100                                 # special (crumble) blocks
+    w[7, 10] = 1 | (1 << 18)                                       # a half block
+    g = LevelGeom(w, {"ox": -40.0, "oy": 10.0})
+    rng = np.random.default_rng(0)
+    x, y = rng.uniform(-140, 400, 3000), rng.uniform(-90, 350, 3000)
+
+    def direct():
+        c = np.clip(np.floor((x - g.ox) / T).astype(int), -P, g.W + P - 1) + P
+        r = np.clip(np.floor((y - g.oy) / T).astype(int), -P, g.H + P - 1) + P
+        return g._gather(r, c)
+    assert np.array_equal(g.patches(x, y), direct())
+    g.set_tile(5 * 15 + 4, 0)                                      # a crumble block gone
+    g.set_tile(9 * 15 + 14, 1)                                     # a block at the map's edge
+    assert np.array_equal(g.patches(x, y), direct())
+    g.reset()
+    assert np.array_equal(g.patches(x, y), direct())

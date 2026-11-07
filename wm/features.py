@@ -61,6 +61,7 @@ class LevelGeom:
         self.pad = np.pad(self.ch, ((0, 0), (P, P), (P, P)))
         self.pad[0, :, :P] = self.pad[0, :, -P:] = 1.0     # outside the map: solid
         self.pad[0, :P, :] = self.pad[0, -P:, :] = 1.0
+        self._table = None                                 # every padded cell's patch, built on first use
 
     @staticmethod
     def _channels(words):
@@ -76,6 +77,7 @@ class LevelGeom:
     def reset(self):
         self.words[:] = self.words0
         self.pad[:, P:-P, P:-P] = self.ch
+        self._table = None
 
     def set_tile(self, idx: int, word: int):
         r, c = divmod(int(idx), self.W)
@@ -87,14 +89,26 @@ class LevelGeom:
         else:
             v = self._channels(np.array([[word]], np.uint32))[:, 0, 0]
         self.pad[:, r + P, c + P] = v
+        if self._table is not None:                        # the patches that contain this cell
+            rr, cc = np.mgrid[r:r + 2 * P + 1, c:c + 2 * P + 1]
+            self._table[rr, cc] = self._gather(rr.ravel(), cc.ravel()).reshape(rr.shape + (-1,))
 
     def patches(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """The 4 x (2P+1) x (2P+1) tile patch around each point (channel, then row, then column), flattened: one
+        lookup in a table of every padded cell's patch (built once, kept up to date by set_tile / reset)."""
         c = np.clip(np.floor((x - self.ox) / TILE).astype(int), -P, self.W + P - 1) + P
         r = np.clip(np.floor((y - self.oy) / TILE).astype(int), -P, self.H + P - 1) + P
+        if self._table is None:
+            rr, cc = np.mgrid[0:self.H + 2 * P, 0:self.W + 2 * P]
+            self._table = self._gather(rr.ravel(), cc.ravel()).reshape(rr.shape + (-1,))
+        return self._table[r, c]
+
+    def _gather(self, r: np.ndarray, c: np.ndarray) -> np.ndarray:
+        """Patches of padded cells (r, c) from the padded channels (edge cells repeat the outermost padding)."""
         d = np.arange(-P, P + 1)
         rr = np.clip(r[:, None, None] + d[None, :, None], 0, self.H + 2 * P - 1)
         cc = np.clip(c[:, None, None] + d[None, None, :], 0, self.W + 2 * P - 1)
-        return self.pad[:, rr, cc].transpose(1, 0, 2, 3).reshape(len(x), -1)
+        return self.pad[:, rr, cc].transpose(1, 0, 2, 3).reshape(len(r), -1)
 
     def in_tile(self, x, y):
         return ((x - self.ox) / TILE) % 1.0 - 0.5, ((y - self.oy) / TILE) % 1.0 - 0.5
@@ -176,21 +190,35 @@ def wind(x, y, fans) -> tuple[np.ndarray, np.ndarray]:
     return fx, fy
 
 
-def featurize(s, a, dt_ms, geom: LevelGeom, boxes, pf, pf_prev, dt_prev_s, fans) -> np.ndarray:
-    """Inputs for agent rows s (wm.buffer.ROW) taking actions a with this frame's step and level state."""
+_SHIFTS = np.arange(32, dtype=np.uint64)
+_C_FLAGS = len(CONT_NAMES)
+_C_ST = _C_FLAGS + 32
+_C_ACT = _C_ST + N_STATES
+_C_PATCH = _C_ACT + N_ACTIONS
+_C_HAZ = _C_PATCH + 4 * (2 * P + 1) ** 2
+_C_PLAT = _C_HAZ + 5 * N_HAZ
+
+
+def featurize(s, a, dt_ms, geom: LevelGeom, boxes, pf, pf_prev, dt_prev_s, fans, out=None) -> np.ndarray:
+    """Inputs for agent rows s (wm.buffer.ROW) taking actions a with this frame's step and level state. out: an
+    (n, FEAT_DIM) float32 array to write them into (the planner's per-step buffer; the same values as a new
+    array), returned."""
     n = len(s)
+    X = np.empty((n, FEAT_DIM), np.float32) if out is None else out
     x, y = s["x"].astype(np.float64), s["y"].astype(np.float64)
     tx, ty = geom.in_tile(x, y)
     wx, wy = wind(x, y, fans)
-    cont = np.stack([s["vx"] / 400.0, s["vy"] / 600.0, np.full(n, dt_ms / DT_DEFAULT), s["held"] / 20.0, tx, ty,
-                     np.clip(wx / 2000, -3, 3), np.clip(wy / 2000, -3, 3)], 1)
-    flags = ((s["flags"][:, None].astype(np.uint64) >> np.arange(32, dtype=np.uint64)) & 1).astype(np.float32)
-    st = np.zeros((n, N_STATES), np.float32)
-    st[np.arange(n), np.clip(s["state"], 0, N_STATES - 1)] = 1.0
-    act = np.zeros((n, N_ACTIONS), np.float32)
-    act[np.arange(n), np.clip(a, 0, N_ACTIONS - 1)] = 1.0
-    return np.concatenate([cont.astype(np.float32), flags, st, act, geom.patches(x, y),
-                           hazard_features(x, y, boxes), platform_features(x, y, pf, pf_prev, dt_prev_s)], 1)
+    X[:, :_C_FLAGS] = np.stack([s["vx"] / 400.0, s["vy"] / 600.0, np.full(n, dt_ms / DT_DEFAULT), s["held"] / 20.0,
+                                tx, ty, np.clip(wx / 2000, -3, 3), np.clip(wy / 2000, -3, 3)], 1)
+    X[:, _C_FLAGS:_C_ST] = (s["flags"][:, None].astype(np.uint64) >> _SHIFTS) & 1
+    X[:, _C_ST:_C_PATCH] = 0.0
+    r = np.arange(n)
+    X[r, _C_ST + np.clip(s["state"], 0, N_STATES - 1)] = 1.0
+    X[r, _C_ACT + np.clip(a, 0, N_ACTIONS - 1)] = 1.0
+    X[:, _C_PATCH:_C_HAZ] = geom.patches(x, y)
+    X[:, _C_HAZ:_C_PLAT] = hazard_features(x, y, boxes)
+    X[:, _C_PLAT:] = platform_features(x, y, pf, pf_prev, dt_prev_s)
+    return X
 
 
 def prior(s, dt_ms) -> np.ndarray:
