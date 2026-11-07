@@ -628,15 +628,12 @@ DATA_PIT = os.path.join(HERE, "runs", "plan_20261107-200300", "wm_data")
 
 
 @pytest.mark.skipif(not (os.path.exists(MODEL) and os.path.isdir(DATA_PIT)), reason="no model or the 1-14 pit run")
-@pytest.mark.xfail(strict=True, reason="the world model stops falling at the map's bottom edge (wm.features.LevelGeom "
-                                        "pads outside the map with solid): imagined bodies hover at y ~ -353 over the "
-                                        "pit instead of leaving the kill box at -368.6, so no continuation dies there")
 def test_completion_over_the_1_14_pit_sees_every_continuation_die():
     """Wave 46 of the 1-14 pit run: the agent took off from the start floor at frame 404 and died out of the level
     at frame 481. From its recorded state at frame 444 (over the pit, falling), every continuation of the
-    completion should leave the level (risk charged). Measured instead: keep and neutral hover at y ~ -353 for
-    all 90 frames, reverse reaches the pit's left wall at x ~ 6 (a wall recorded agents did wall-jump off: 30 of
-    2,691 bodies that reached the map's bottom edge came back)."""
+    completion leaves the level: the world model's bodies stop on its false floor below the map (its tile input
+    pads outside the map with solid) and the sweep's map-bottom rule (plan.geometry.Terrain.on_padding) calls that
+    out of the level. Before the rule, keep and neutral hovered at y ~ -353 for all 90 frames."""
     import gzip
     import torch
     from mpc.future import FutureWorld
@@ -667,6 +664,25 @@ def test_completion_over_the_1_14_pit_sees_every_continuation_die():
     row = state_row(r["x"], r["y"], r["vx"], r["vy"], r["flags"], r["state"], r["keys"], r["held"])
     (est, risk, rec, path), = pl.complete(row, np.array([act(1)]), np.array([0]), worlds, frames, 16.667, 0, 0)[0]
     assert sorted(rec["died"]) == ["keep", "neutral", "reverse"] and risk == 1
+    assert set(rec["hits"].values()) <= {"map bottom", "out"} and "map bottom" in rec["hits"].values()
+
+
+def test_map_bottom_rule_spares_wall_clings_and_rising_bodies():
+    """plan.geometry.Terrain.on_padding on a map whose bottom row has a wall on the left (cols 0-1) and open
+    cells right of it: a body at the map's bottom edge in the open part stands on the padding (fallen out);
+    against the wall (also with its centre below the map: the wall probes look at the bottom row), rising, or
+    higher up it does not."""
+    from plan.geometry import Terrain
+    w = np.zeros((10, 10), np.uint32)
+    w[0:3, 0:2] = 1                                                # a wall: x 0..40, y 0..60
+    ter = Terrain(w, 0.0, 0.0)
+    x = np.array([100.0, 46.0, 46.0, 100.0, 100.0])
+    y = np.array([6.5, 6.5, -3.0, 6.5, 30.0])
+    dy = np.array([-2.0, -2.0, -2.0, 3.0, -2.0])
+    assert ter.on_padding(x, y, dy=dy).tolist() == [True, False, False, False, False]
+    sw = S.sweep(np.array([[[100.0, 100.0, 100.0]]]), np.array([[[30.0, 10.0, 6.5]]]), [None] * 3, None, ter)
+    assert sw.contact_frame[0, 0] == 2 and sw.contact_kind[0, 0] == S.KIND_FLOOR
+    assert S.contact_id(S.KIND_FLOOR, [], -1) == "map bottom"
 
 
 def test_patch_table_equals_the_direct_gather_after_tile_changes():

@@ -37,6 +37,7 @@ WALL_PROBE = BODY + 1.0
 
 SHAPE_OPEN, SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE = 0, 1, 2, 3
 _DC, _DR = np.array([0, 1, 0, 1]), np.array([0, 0, 1, 1])     # box_overlap: the 2 x 2 cells a box can touch
+PAD_TOL = 1.0                                                  # units: the collision guard's tolerance (planner COLLIDE_TOL)
 SUB = TILE / 2                                                 # travel: half blocks are 2 of 4 such squares
 
 
@@ -226,6 +227,25 @@ class Terrain:
             right |= _in_plats(plats, x + WALL_PROBE, y)
         side = np.where(left, -1, np.where(right, 1, 0)).astype(np.int8)
         return ground, side
+
+    def on_padding(self, x, y, plats=None, tol: float = PAD_TOL, dy=None) -> np.ndarray:
+        """A body "standing on the padding": its centre at most BODY + tol above the map's bottom edge (oy), no
+        ground under it (the tile map's border is open here) and no wall contact (side 0). The world model's tile
+        input pads outside the map with solid (wm.features.LevelGeom), so its imagined bodies stop on that false
+        floor instead of falling out; such a body has fallen out of the level (plan.safety.sweep, floor=...).
+        Bodies clinging to a wall at the map's bottom are not: recorded agents wall-jump back from there, also with
+        the centre up to 6 units below the map's edge (1-14's pit wall). The game extends the border tiles below the
+        map there, so the wall probes of a centre below the map look at the map's bottom row (y = oy + 0.5).
+        dy: the body's vertical motion into this position (units / frame, y up; None unknown): a rising body (dy > 0,
+        e.g. the frame after such a wall jump) is not standing on anything."""
+        x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+        g, side = self.support(x, y, plats)
+        yw = np.maximum(y, self.oy + 0.5)                   # wall probes clamped into the bottom row
+        wall = (side != 0) | self.point_solid(x - WALL_PROBE, yw) | self.point_solid(x + WALL_PROBE, yw)
+        if plats:
+            wall |= _in_plats(plats, x - WALL_PROBE, yw) | _in_plats(plats, x + WALL_PROBE, yw)
+        out = (y <= self.oy + BODY + tol) & ~g & ~wall
+        return out if dy is None else out & ~(np.asarray(dy, np.float64) > 0)
 
     def supported(self, x, y, plats=None) -> np.ndarray:
         """On the ground or on a wall."""

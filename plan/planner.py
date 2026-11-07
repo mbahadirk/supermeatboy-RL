@@ -405,8 +405,7 @@ def _verdict(sw: S.Sweep, upto: np.ndarray):
     m = vf.argmin(0)
     veto_frame = np.where(veto, vf[m, np.arange(n)], -1)
     veto_kind = np.where(veto, sw.contact_kind[m, np.arange(n)], S.KIND_NONE)
-    veto_id = [None if not veto[c] else (S.OUT_ID if veto_kind[c] == S.KIND_OUT else sw.ids[sw.contact_box[m[c], c]])
-               for c in range(n)]
+    veto_id = [None if not veto[c] else S.contact_id(veto_kind[c], sw.ids, sw.contact_box[m[c], c]) for c in range(n)]
     soft = np.zeros(n)
     soft_frame = np.full(n, -1, np.int64)
     if K > S.VETO_FRAMES:
@@ -425,6 +424,8 @@ def _verdict(sw: S.Sweep, upto: np.ndarray):
 def hit_reason(kind, hid, frame) -> str:
     if kind == S.KIND_OUT:
         return f"out of level at frame {frame}"
+    if kind == S.KIND_FLOOR:
+        return f"out of level (map bottom) at frame {frame}"
     if kind == S.KIND_MEMORY:
         return f"hits remembered {hid} at frame {frame}"
     return f"hits {hid} at frame {frame}"
@@ -636,6 +637,17 @@ def continuations(a_last: int) -> list[tuple[str, int]]:
     return [("keep", act(d, run=bool(run))), ("neutral", act(0)), ("reverse", act(-d, run=bool(run)))]
 
 
+class _Floor:
+    """The safety sweep's map-bottom rule (plan.geometry.Terrain.on_padding) on the planner's live tiles and
+    moving platforms (a body on a platform at the map's bottom has ground)."""
+
+    def __init__(self, planner):
+        self.pl = planner
+
+    def on_padding(self, x, y, dy=None):
+        return self.pl.terrain.on_padding(x, y, self.pl.lv.plats or None, dy=dy)
+
+
 class Planner:
     """One planner per level (several agents may share it; the previous plan is kept per agent)."""
 
@@ -655,6 +667,7 @@ class Planner:
         self.lib_len = np.array([len(m) for m in self.lib])
         self.lib_actions = np.stack([padded(m.actions, MAX_LEN) for m in self.lib])
         self.moves = MoveMemory() if isinstance(moves, str) and moves == "new" else moves
+        self.floor = _Floor(self)                     # the sweep's map-bottom rule (plan.geometry.Terrain.on_padding)
         self.last_stage1 = None                      # the last decision's stage-1 estimates (tests, offline checks)
         self._dead_t = DEAD_FAR                      # T charged for a dead end (set per decision from T(start))
         self.last_final = self.last_completion = None    # the last decision's final stage / completion (checks)
@@ -867,7 +880,7 @@ class Planner:
             x, y, vy = out["x"][0], out["y"][0], out["vy"][0]               # (a, K+1)
             fr = [frames[min(H + done + k, len(frames) - 1)] if k else None for k in range(K + 1)]
             fr = _near_frames(fr, x[None], y[None])
-            sw = S.sweep(x[None], y[None], fr, self.bounds)
+            sw = S.sweep(x[None], y[None], fr, self.bounds, self.floor)
             cf = sw.contact_frame[0]
             tg = S.first_contact(x[None], y[None], self.goal_boxes)[0][0] if len(self.goal_boxes) else \
                 np.full(len(act_i), -1)
@@ -885,7 +898,7 @@ class Planner:
                     on[r] = "goal"
                 else:
                     kind = int(sw.contact_kind[0, j])
-                    hit[r] = S.OUT_ID if kind == S.KIND_OUT else sw.ids[sw.contact_box[0, j]]
+                    hit[r] = S.contact_id(kind, sw.ids, sw.contact_box[0, j])
                 xs[r, done + 1:done + t + 1], ys[r, done + 1:done + t + 1] = x[j, 1:t + 1], y[j, 1:t + 1]
                 xs[r, done + t + 1:], ys[r, done + t + 1:] = x[j, t], y[j, t]
             fly = state[act_i] == 0
@@ -991,7 +1004,7 @@ class Planner:
         steps1 = out1["steps"]
         up1 = np.minimum(self.lib_len, steps1)
         fr1 = _near_frames(frames[:steps1 + 1], out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1])
-        sw1 = S.sweep(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], fr1, self.bounds)
+        sw1 = S.sweep(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], fr1, self.bounds, self.floor)
         tg1, legs1, _ = self._contacts(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], up1,
                                        sw1.contact_frame, leg)
         tg1, legs1 = tg1[0], legs1[0]
@@ -1059,7 +1072,7 @@ class Planner:
                 vye2[c] = out2["vy"][0, c, m] if m > 0 else out1["vy"][0, i, L]
             K = int(up2.max())
             fr2 = _near_frames(frames[:K + 1], xs2[:, :, :K + 1], ys2[:, :, :K + 1])
-            sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds)
+            sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds, self.floor)
             tg2, legs2, _ = self._contacts(xs2[:, :, :K + 1], ys2[:, :, :K + 1], up2, sw2.contact_frame, leg)
             tg2, legs2 = tg2[0], legs2[0]
             succ2 = tg2 > 0
@@ -1106,7 +1119,7 @@ class Planner:
         out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds, **ck)
         E = out3["x"].shape[0]
         fr3 = _near_frames(frames[:H + 1], out3["x"], out3["y"])
-        saf = S.check(out3["x"], out3["y"], fr3, self.bounds)
+        saf = S.check(out3["x"], out3["y"], fr3, self.bounds, self.floor)
         tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], None, saf.sweep.contact_frame, leg)
         n_goal = (tg_e > 0).sum(0)                                   # members touching the goal safely
         succ3 = 2 * n_goal > E
@@ -1160,7 +1173,9 @@ class Planner:
         safe_alts = int(sum(1 for c in range(n3) if c != best and not saf.veto[c] and saf.soft_risk[c] < SAFE_RISK
                             and landing3[c]))
         self.last_final = {"estimate": est3, "veto": saf.veto, "soft": soft3, "landing": landing3, "completion": comp_rec,
-                           "prev": prev_idx, "first": first_name, "best": best}     # offline checks (not logged)
+                           "prev": prev_idx, "first": first_name, "best": best, "t_end": t_end3,
+                           "frames_used": frames_used, "risk": risk3, "fail": fail3, "death": death3, "lands": lands,
+                           "sup_e": sup_e, "tend_e": tend_e, "end_xy": (xe, ye), "end_vy": vye}  # offline checks
         t3 = time.perf_counter()
         timing["final"] = 1000 * (t3 - t2)
         self.final_ms = 0.7 * self.final_ms + 0.3 * timing["final"]

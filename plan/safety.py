@@ -37,10 +37,20 @@ NEAREST = 3                 # boxes per candidate in the clearance summary
 WINDOW = 30                 # frames: a remembered death is a hazard this long before and after its wave frame
 DEATH_HALF = 8.0            # half size of a remembered death's box (contact adds BODY)
 
-KIND_NONE, KIND_HAZARD, KIND_SHOT, KIND_OUT, KIND_MEMORY = -1, 0, 1, 2, 3
+KIND_NONE, KIND_HAZARD, KIND_SHOT, KIND_OUT, KIND_MEMORY, KIND_FLOOR = -1, 0, 1, 2, 3, 4
 KIND_NAMES = {KIND_NONE: "none", KIND_HAZARD: "hazard", KIND_SHOT: "shot", KIND_OUT: "out of level",
-              KIND_MEMORY: "remembered death"}
+              KIND_MEMORY: "remembered death", KIND_FLOOR: "out of level (map bottom)"}
 OUT_ID = "out"
+FLOOR_ID = "map bottom"
+
+
+def contact_id(kind, ids, box):
+    """The id of what a contact hit: OUT_ID / FLOOR_ID for leaving the level, else the box's id."""
+    if kind == KIND_OUT:
+        return OUT_ID
+    if kind == KIND_FLOOR:
+        return FLOOR_ID
+    return ids[box]
 
 
 # ---- hazards of one frame -------------------------------------------------------------------------------
@@ -171,10 +181,12 @@ class Sweep:
     step_clear: np.ndarray
 
 
-def sweep(xs, ys, frames, bounds=None) -> Sweep:
+def sweep(xs, ys, frames, bounds=None, floor=None) -> Sweep:
     """xs, ys: (E, n, K+1) positions, frame 0 = now. frames: K+1 FrameBoxes (or None for none), frames[k] =
     the hazards at trajectory frame k (frames[0] is not used: the start is a fact). bounds: level_bounds(lv)
-    for the out-of-level rule, or None."""
+    for the out-of-level rule, or None. floor: a plan.geometry.Terrain (or None): a step ending on the padding
+    below the map (Terrain.on_padding: the world model's false floor) has left the level too, a contact of kind
+    KIND_FLOOR (clearance -1 at that step: the same verdict and risk as the kill box)."""
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
     E, n, K1 = xs.shape
     K = K1 - 1
@@ -212,6 +224,9 @@ def sweep(xs, ys, frames, bounds=None) -> Sweep:
         else:
             j = np.zeros(P, np.int64)
             cbest = np.full(P, np.inf)
+        pad = floor.on_padding(X[:, k], Y[:, k], dy=Y[:, k] - Y[:, k - 1]) if floor is not None else None
+        if pad is not None and pad.any():
+            oc = np.where(pad, np.minimum(oc, -1.0), oc)
         better = oc < out_min
         out_min[better], out_frame[better] = oc[better], k
         step_clear[:, k - 1] = np.minimum(cbest, oc)
@@ -223,6 +238,8 @@ def sweep(xs, ys, frames, bounds=None) -> Sweep:
             contact_box[hit_box] = idx[j[hit_box]]
             contact_kind[hit_box] = fb.kind[j[hit_box]]
         contact_kind[hit_out] = KIND_OUT
+        if pad is not None:
+            contact_kind[hit_out & pad] = KIND_FLOOR
     sh2, sh3 = (E, n), (E, n, -1)
     return Sweep(contact_frame.reshape(sh2), contact_kind.reshape(sh2), contact_box.reshape(sh2), ids,
                  np.asarray(kinds, np.int8), clear_min.reshape(sh3), clear_frame.reshape(sh3),
@@ -321,7 +338,7 @@ def assess(sw: Sweep) -> Safety:
     veto_id = []
     for c in range(n):
         b = sw.contact_box[first_m[c], c]
-        veto_id.append(None if not veto[c] else (OUT_ID if veto_kind[c] == KIND_OUT else sw.ids[b]))
+        veto_id.append(None if not veto[c] else contact_id(veto_kind[c], sw.ids, b))
     soft_risk = np.zeros(n)
     soft_frame = np.full(n, -1, np.int64)
     if K > VETO_FRAMES:
@@ -350,9 +367,9 @@ def assess(sw: Sweep) -> Safety:
     return Safety(veto, veto_frame, veto_kind, veto_id, soft_risk, soft_frame, nearest, sw)
 
 
-def check(xs, ys, frames, bounds=None) -> Safety:
+def check(xs, ys, frames, bounds=None, floor=None) -> Safety:
     """sweep + assess: the planner's safety verdict for (E, n, K+1) trajectories."""
-    return assess(sweep(xs, ys, frames, bounds))
+    return assess(sweep(xs, ys, frames, bounds, floor))
 
 
 # ---- deaths the geometry did not predict ----------------------------------------------------------------
