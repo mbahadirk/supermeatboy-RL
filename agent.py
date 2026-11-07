@@ -15,7 +15,11 @@ sealed pockets, the progress field V (plan/progress.py, cells outside the kill b
 (where the moving parts will be) and the beam planner. V is rebuilt between waves when moving hazards are seen
 in new places, the kill box changes or a platform reaches new cells (at most FIELD_REBUILDS times per level).
 Every frame: the level's live state is updated (tile changes, fans, platforms, lethal list, kill box), each
-planned agent replans every --replan frames (otherwise it plays the next action of its current plan), the real
+planned agent plays its committed plan and gets a new decision only when a trigger fires (plan/commit.py: start,
+--replan frames since the last decision, the plan's first move ended, the real state left the prediction's
+error tube (--tube) or its support, new danger on the remaining path, fewer than 16 frames left, a predicted
+goal or key touch that did not happen; --triggers off: every --replan frames only, the old behaviour with
+--replan 2); each decision's triggers go into its plans.jsonl line ("trigger"). The real
 states are checked against earlier predictions (surprises) and against the moves' expected progress (failed
 moves). A death of a planned agent the geometry does not explain (plan.safety.explain_death) is remembered
 (plan.safety.DeathMemory, saved to --death-memory): the planner avoids that place at that wave frame from then on.
@@ -58,6 +62,7 @@ from game.level import Level, hazard_boxes, identify_level, HZ          # noqa: 
 from mpc.candidates import ACTIONS                                       # noqa: E402
 from mpc.future import FutureWorld                                       # noqa: E402
 from plan import safety as S                                             # noqa: E402
+from plan.commit import Committer, REPLAN_DEFAULT, TUBE_DEFAULT, kind_of  # noqa: E402
 from plan.moves import LIBRARY, MAX_LEN                                  # noqa: E402
 from plan.planner import Planner, future_inputs, state_row              # noqa: E402
 from plan.progress import ProgressField                                  # noqa: E402
@@ -76,6 +81,7 @@ STICKY = 0.75                    # explore: keep the previous action with this p
 CHAIN_P = 0.03                   # explore: per free frame, chance to start a chain of 1-3 library moves
 FLUSH_LINES = 200                # log lines between flushes (and at every wave end)
 LEVEL_EVERY_S = 2.0              # telemetry: the level message again after this long
+TUBE_REFRESH = 600               # frames: the error tube also takes the current wave's followed errors this often
 NOOP = [0, 0, 0, 0]
 
 # overlay colours (0xAARRGGBB) and widths (pixels, realgame.js drawPaths)
@@ -283,6 +289,7 @@ class Runner:
             raise SystemExit(f"{self.n_total} agents: at most {MAX_AGENTS} (--agents + --explore)")
         self.pool = max(GAME_POOL, self.n_total)
         self.replan = max(1, int(args.replan))
+        self.commit = Committer(self.replan, args.tube, args.triggers == "on")
         self.model = None
         if self.n_plan:
             import torch
@@ -362,13 +369,16 @@ class Runner:
         self.prev_xy = [None] * n
         self.last_state = [None] * n
         self.cur_plan = {}
+        self.commit.reset()
+        self.last_decision = {}
         self.ex_queue = [[] for _ in range(n)]
         self.ex_prev = [-1] * n
         self.last_msg = None
-        self.overlay_frame = None
+        self.overlay_frame = ()                # the (frame, id) of agent 0's plan last drawn; () nothing yet
         self.st = {"finished": 0, "died": 0, "explained": 0, "unexplained": 0, "estimated": 0, "memory": 0,
                    "surprise_pos": 0, "surprise_death": 0, "decisions": 0, "ms": [], "cut1": 0, "cut2": 0,
-                   "failed": 0, "errors": 0, "ex_finished": 0, "ex_died": 0}
+                   "failed": 0, "errors": 0, "ex_finished": 0, "ex_died": 0, "triggers": {}, "gaps": [],
+                   "agent_frames": 0, "check_s": 0.0}
         self.fin = {"planned": [], "explore": []}     # this wave's finish times (s)
         self.new_best = False
 
@@ -547,10 +557,31 @@ class Runner:
         acts, act_idx = [NOOP] * n, [-1] * n
         fboxes = None
         live_plan = [i for i in range(min(self.n_plan, n)) if self.alive[i]] if pl is not None else []
-        need = [i for i in live_plan if self.need_plan(i, frame)]
+        need = {}
+        fut = {}
+
+        def fboxes_now():                           # this frame's model inputs and deadly boxes, once
+            if "fb" not in fut:
+                fut["w"], fut["fb"], _ = future_inputs(self.fw, frame, pl.H, dt, lv.name, self.deaths)
+            return fut["fb"]
+        if live_plan:
+            t_chk = time.perf_counter()
+            if self.commit.on and frame % TUBE_REFRESH == 0:
+                self.commit.tube.refresh(pl.surprise.err)
+            tiles = bool(m.get("tc"))
+            for i in live_plan:
+                s = states[i]
+                tr = self.commit.triggers(i, frame, float(s[0]), float(s[1]), int(s[7]) if len(s) > 7 else 0, tiles,
+                                          pl, fboxes_now)
+                if tr:
+                    need[i] = tr
+            self.st["agent_frames"] += len(live_plan)
+            self.st["check_s"] += time.perf_counter() - t_chk
+        fboxes = fut.get("fb")                      # computed for a check or a decision: telemetry reuses it
         if need:
-            worlds, fboxes, _ = future_inputs(self.fw, frame, pl.H, dt, lv.name, self.deaths)
-            for i in need:
+            fboxes_now()
+            worlds, fboxes = fut["w"], fut["fb"]
+            for i, trig in need.items():
                 s = states[i]
                 row = state_row(s[0], s[1], s[2], s[3], s[4], s[5], s[7] if len(s) > 7 else 0, held_before[i])
                 try:
@@ -563,7 +594,8 @@ class Runner:
                     self.event("plan error", frame, agent=i, error=f"{type(e).__name__}: {e}")
                     continue
                 self.cur_plan[i] = plan
-                self.on_plan(plan, s)
+                self.commit.decided(i, plan, frame, fboxes, pl)
+                self.on_plan(plan, s, trig)
         for i in live_plan:
             p = self.cur_plan.get(i)
             k = frame - p.frame if p is not None else -1
@@ -602,16 +634,16 @@ class Runner:
         C.go("other")
         return {"a": acts, "leader": int(leader)}
 
-    def need_plan(self, i: int, frame: int) -> bool:
-        p = self.cur_plan.get(i)
-        if p is None:
-            return True
-        k = frame - p.frame
-        return k < 0 or k >= self.replan or k >= len(p.actions)
-
-    def on_plan(self, plan, s):
+    def on_plan(self, plan, s, trigger=()):
         st = self.st
         st["decisions"] += 1
+        for t in trigger:
+            kd = kind_of(t)
+            st["triggers"][kd] = st["triggers"].get(kd, 0) + 1
+        last = self.last_decision.get(plan.agent)
+        if last is not None and plan.frame > last:
+            st["gaps"].append(plan.frame - last)
+        self.last_decision[plan.agent] = plan.frame
         st["ms"].append(plan.timing.get("total", 0.0))
         c = plan.counts
         if c.get("stage1", {}).get("steps", MAX_LEN) < MAX_LEN:
@@ -621,7 +653,7 @@ class Runner:
             st["cut2"] += 1
         prev = self.cost.go("logging")
         d = plan.to_dict()
-        d.update({"level": self.level.name, "wave": self.wave_no,
+        d.update({"level": self.level.name, "wave": self.wave_no, "trigger": list(trigger),
                   "real": {"x": s[0], "y": s[1], "vx": s[2], "vy": s[3], "flags": int(s[4]), "state": int(s[5]),
                            "status": int(s[6]), "keys": int(s[7]) if len(s) > 7 else 0}})
         self._write(self.f_plans, d)
@@ -726,10 +758,11 @@ class Runner:
     def post_overlay(self, frame: int, force: bool = False):
         if self.args.no_overlay or self.script is None or not self.n_plan:
             return
-        if not force and self.overlay_frame is not None and 0 <= frame - self.overlay_frame < self.replan:
-            return
-        self.overlay_frame = frame
         p = self.cur_plan.get(0) if self.alive and self.alive[0] else None
+        key = None if p is None else (p.frame, id(p))
+        if not force and key == self.overlay_frame:
+            return                                  # agent 0's plan did not change since the last post
+        self.overlay_frame = key
         try:
             self.script.post({"type": "path", "payload": overlay_payload(p)})
         except Exception:
@@ -841,13 +874,15 @@ class Runner:
         if cost is not None:
             print(self.cost.text(cost), flush=True)
         self.event("wave", frame, **(cost or {}), why=m.get("why"), frames=frame,
-                   **{k: v for k, v in st.items() if k != "ms"},
+                   **{k: v for k, v in st.items() if k not in ("ms", "gaps", "check_s")},
                    ms_median=float(np.median(ms)) if ms is not None else None,
                    ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f,
                    finish_s=fin_p, explore_finish_s=fin_x, best_s=float(best_p["seconds"]) if best_p else None,
                    new_best=self.new_best, lock=self.lock)
         self.fw.new_wave()
         if self.planner is not None:
+            if self.commit.on:
+                self.commit.tube.add(self.planner.surprise.err)     # the run's followed errors, for the tube
             self.planner.new_wave()                 # also clears the surprise check's predictions and errors
         if lv is not None and self.field_dirty and self.rebuilds < FIELD_REBUILDS:
             self.rebuilds += 1
@@ -878,6 +913,7 @@ class Runner:
                 print(f"[game] level {p['name']}", flush=True)
                 self.level = None
                 self.cur_plan = {}
+                self.commit.reset()
             elif ev == "save":
                 print(f"[S] finishing {p.get('level')} the game's way", flush=True)
                 self.script.post({"type": "finish"})
@@ -954,7 +990,8 @@ class Runner:
         self.script.on("message", self.on_message)
         self.script.load()
         print(f"attached: {self.n_plan} planned + {self.n_explore} explore agents, waves of {self.args.wave_seconds:g}s, "
-              f"replan every {self.replan} frames, budget {self.args.budget_ms:g} ms"
+              f"replan every {self.replan} frames" + (f" or on a trigger (tube x{self.args.tube:g})" if self.commit.on
+                                                       else " (triggers off)") + ", budget {self.args.budget_ms:g} ms"
               + (f", model {self.model_path}" if self.model is not None else "")
               + f", death memory {self.deaths_path} ({len(self.deaths)} entries); logs in {self.run_dir}; "
                 f"Ctrl+C to stop", flush=True)
@@ -1001,7 +1038,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--wave-seconds", type=float, default=20.0, help="wave time limit (default 20)")
     ap.add_argument("--end-after", type=int, default=1,
                     help="end the wave once this many agents finished (default 1; 0 = wait for all)")
-    ap.add_argument("--replan", type=int, default=2, help="frames between a planned agent's decisions (default 2)")
+    ap.add_argument("--replan", type=int, default=REPLAN_DEFAULT,
+                    help=f"frames between a planned agent's decisions at most (default {REPLAN_DEFAULT}); with "
+                         "--triggers off exactly (--replan 2 --triggers off: the old behaviour)")
+    ap.add_argument("--tube", type=float, default=TUBE_DEFAULT,
+                    help=f"replan when the real position is off the committed plan's prediction by more than this x "
+                         f"the 90%% error of followed predictions at that horizon (default {TUBE_DEFAULT:g})")
+    ap.add_argument("--triggers", choices=("on", "off"), default="on",
+                    help="replan on triggers (start, interval, move end, surprise, support, danger, short, missed: "
+                         "plan/commit.py) or only every --replan frames (off) (default on)")
     ap.add_argument("--budget-ms", type=float, default=120.0, help="planner time budget per decision (default 120)")
     ap.add_argument("--model", default=DEFAULT_MODEL, help="world model (default runs/wm_locked/wm_model.pt)")
     ap.add_argument("--name", default=None, help="run folder under runs/ (default plan_<time>)")
