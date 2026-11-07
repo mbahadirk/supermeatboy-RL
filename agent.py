@@ -454,7 +454,8 @@ class Runner:
         self.field_summary = field.summary()
         if self.model is not None:
             if self.planner is None:
-                self.planner = Planner(self.model, lv, field, budget_ms=self.args.budget_ms)
+                self.planner = Planner(self.model, lv, field, budget_ms=self.args.budget_ms,
+                                       hysteresis=self.args.hysteresis)
             elif self.planner_level is not lv:
                 self.planner.set_level(lv, field)
             else:
@@ -1044,6 +1045,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--tube", type=float, default=TUBE_DEFAULT,
                     help=f"replan when the real position is off the committed plan's prediction by more than this x "
                          f"the 90%% error of followed predictions at that horizon (default {TUBE_DEFAULT:g})")
+    ap.add_argument("--hysteresis", type=float, default=0.5,
+                    help="keep the committed plan unless another beats it by more than this (V units, about tiles; "
+                         "successes: 3 frames earlier at the goal); 0 = always the best score (default 0.5)")
     ap.add_argument("--triggers", choices=("on", "off"), default="on",
                     help="replan on triggers (start, interval, move end, surprise, support, danger, short, missed: "
                          "plan/commit.py) or only every --replan frames (off) (default on)")

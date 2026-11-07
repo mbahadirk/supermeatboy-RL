@@ -67,6 +67,10 @@ class Plan:
     cross-check of goal_touch only, never used for the decision.
     timing: ms per stage; counts: candidates and rolled-out steps actually evaluated per stage, and whether the
     stage ran to the end (never pretended). segments: [[move, from frame, to frame]] of the H frames.
+    switch: None without a previous plan to keep, else the switch rule's outcome (plan/planner.py) {kept: the
+    previous plan (shifted) was kept, gain: the best other candidate's advantage over it (V units, or frames
+    earlier at the goal: unit), margin: the margin it had to beat, unit: "V" | "frames", reason: e.g.
+    "kept: best other +0.31 < 0.5", "switched: +1.80", "switched: previous plan vetoed (h3 f9)"}.
     """
     frame: int
     agent: int
@@ -99,6 +103,7 @@ class Plan:
     goal_touch: dict | None = None
     key_touches: list = field(default_factory=list)
     finish_model: float | None = None
+    switch: dict | None = None
 
     @property
     def name(self) -> str:
@@ -123,7 +128,8 @@ class Plan:
         gt = self.goal_touch
         touch = (f"touches the princess at f{gt['frame']} ({gt['members']} members); " if gt else "") + "".join(
             f"takes key {k['key']} at f{k['frame']}; " for k in self.key_touches or [])
-        return (f"{'[prev] ' if self.from_prev else ''}{self.name}: {touch}progress {sc['progress']:+.2f} (V {v0} -> {v1}, "
+        sw = f" [{self.switch['reason']}]" if self.switch else ""
+        return (f"{'[prev] ' if self.from_prev else ''}{self.name}{sw}: {touch}progress {sc['progress']:+.2f} (V {v0} -> {v1}, "
                 f"leg {self.leg}), risk {sc['risk']:.2f}, unc x{sc['uncertainty']:.2f}, total {sc['total']:+.2f}; "
                 f"{near_s}; {land_s}{wj}{veto}{alt_s}")
 

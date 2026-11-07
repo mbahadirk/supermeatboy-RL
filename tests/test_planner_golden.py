@@ -53,7 +53,7 @@ def _flat(keys=()):
             "lethalTypes": []}
     lv = Level(info, w.astype("<u4").tobytes())
     field = ProgressField(w, 0.0, 0.0, lv.spawn, lv.goals, [], [], lv.keys, [], [])
-    return lv, Planner(MODEL, lv, field, budget_ms=NO_DEADLINE)
+    return lv, Planner(MODEL, lv, field, budget_ms=NO_DEADLINE, hysteresis=0.0)     # no switch rule: as before
 
 
 def _inputs(H, boxes=()):

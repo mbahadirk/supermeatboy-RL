@@ -60,7 +60,7 @@ def test_old_replan_mode_reproduces_the_old_schedule(tmp_path):
     gold = json.load(open(OLD, encoding="utf-8"))
     if gold["model_sha256"] != model_digest():
         pytest.skip("the world model changed since the record was made")
-    now = old_mode_run(str(tmp_path), ["--triggers", "off"])
+    now = old_mode_run(str(tmp_path), ["--triggers", "off", "--hysteresis", "0"])
     assert [d[:2] for d in now["decisions"]] == [d[:2] for d in gold["decisions"]]       # the schedule
     assert now["decisions"] == gold["decisions"]                                          # and the decisions
     assert now["replies"] == gold["replies"]
@@ -211,6 +211,82 @@ def test_runner_with_triggers_decides_less(tmp_path):
     events = [json.loads(l) for l in open(tmp_path / "run" / "events.jsonl", encoding="utf-8")]
     wave = [e for e in events if e["kind"] == "wave"][-1]
     assert sum(wave["triggers"].values()) >= wave["decisions"] and wave["agent_frames"] > 0
+
+
+# ---- the planner's switch rule ------------------------------------------------------------------------------
+def _rule(h, total, succ=None, tg=None, veto=None, risk=None, best=None, p=0):
+    from plan.planner import Planner
+    n = len(total)
+    total = np.asarray(total, float)
+    saf = SimpleNamespace(veto=np.asarray(veto if veto is not None else [False] * n),
+                          veto_id=["h3"] * n, veto_frame=np.full(n, 9),
+                          soft_risk=np.asarray(risk if risk is not None else [0.0] * n, float))
+    succ = np.asarray(succ if succ is not None else [False] * n)
+    tg = np.asarray(tg if tg is not None else [-1] * n)
+    best = int(np.argmax(total)) if best is None else best
+    return Planner.switch_rule(SimpleNamespace(hysteresis=h), best, p, total, succ, tg, saf)
+
+
+def test_switch_rule():
+    # previous plan (index 0) against a slightly better one: kept within the margin, switched over it
+    c, r = _rule(0.5, [1.0, 1.31, 0.2])
+    assert c == 0 and r["kept"] and r["reason"] == "kept: best other +0.31 < 0.5" and r["unit"] == "V"
+    c, r = _rule(0.5, [1.0, 2.8])
+    assert c == 1 and not r["kept"] and r["reason"] == "switched: +1.80" and r["gain"] == pytest.approx(1.8)
+    c, r = _rule(0.5, [2.0, 1.5])
+    assert c == 0 and r["kept"] and r["reason"] == "kept: best other -0.50"
+    # hysteresis 0: always the best total (only described)
+    assert _rule(0.0, [1.0, 1.01])[0] == 1 and _rule(0.0, [1.0, 1.0])[0] == 0
+    # a vetoed previous plan never blocks a switch; a riskier one is dropped
+    c, r = _rule(0.5, [-1e6 + 9, -1e6 + 12], veto=[True, True])
+    assert c == 1 and r["reason"] == "switched: previous plan vetoed (h3 f9)"
+    c, r = _rule(0.5, [1.0, 1.1], risk=[0.5, 0.2])
+    assert c == 1 and r["reason"].startswith("switched: previous plan's risk 0.50")
+    # successes: by the touch frame, 3 frames margin; a success always beats a non-success
+    S5 = 1e5
+    c, r = _rule(0.5, [S5 - 20, S5 - 18], succ=[True, True], tg=[20, 18])
+    assert c == 0 and r["unit"] == "frames" and r["reason"] == "kept: best other +2 frames < 3"
+    c, r = _rule(0.5, [S5 - 20, S5 - 16], succ=[True, True], tg=[20, 16])
+    assert c == 1 and r["reason"] == "switched: +4 frames"
+    c, r = _rule(5.0, [3.0, S5 - 40], succ=[False, True], tg=[-1, 40])
+    assert c == 1 and r["reason"] == "switched: reaches the princess, the previous plan does not"
+    assert _rule(0.5, [1.0], p=0) == (0, {"kept": True, "gain": None, "margin": None, "unit": None,
+                                          "reason": "kept: no other candidate"})
+    assert _rule(0.5, [1.0, 2.0], p=-1) == (1, None)
+
+
+@pytest.mark.skipif(not os.path.exists(MODEL), reason="no world model")
+def test_kept_plan_is_registered_once():
+    import torch
+    from test_planner_golden import _flat, _inputs
+    from plan.planner import state_row
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        lv, pl = _flat()
+        worlds, frames = _inputs(pl.H)
+        st = state_row(210.0, 46.0, 0.0, 0.0, 0, 5, 0, 0)
+        p0 = pl.plan(st, 100, worlds, frames)
+        assert p0.switch is None and len(pl.surprise.plans[0]) == 1
+        pend = pl.memory.pending.get(0)
+        pl.hysteresis = 1e9                                          # nothing beats the committed plan
+        for k, a in enumerate(p0.actions[:2]):
+            pl.played(0, 100 + k, a)
+        p1 = pl.plan(st, 102, worlds, frames)
+        assert p1.from_prev and p1.switch["kept"] and p1.switch["reason"].startswith("kept: best other")
+        assert p1.actions[:46] == p0.actions[2:]                     # the same committed actions
+        assert [e[0] for e in pl.surprise.plans[0]] == [100]          # still only its adoption's predictions
+        if pend is not None:                                         # the move's expectation is the original one
+            assert pl.memory.pending[0] is pend
+        assert all("within the switch margin" in a["reason"] for a in p1.alternatives
+                   if a.get("total") is not None and a["total"] > p1.score["total"])
+        pl.hysteresis = 0.0
+        p2 = pl.plan(st, 104, worlds, frames)                        # the best total again
+        assert (p2.switch["kept"]) == p2.from_prev
+        if not p2.from_prev:
+            assert [e[0] for e in pl.surprise.plans[0]] == [100, 104]
+    finally:
+        torch.set_num_threads(threads)
 
 
 if __name__ == "__main__" and "--write" in sys.argv:

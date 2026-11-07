@@ -13,7 +13,17 @@ Search, per decision (Planner.plan):
    prefix is shared); hazards for the model inputs at each candidate's own time (offset rows).
 3. Final: the top S = 16 full sequences and the previous plan shifted by the frames played (always included)
    are re-scored from the start with ALL ensemble members and the full safety check (plan.safety.check); the
-   best is chosen.
+   best is chosen, unless the switch rule below keeps the previous plan.
+
+Switch rule (hysteresis, Planner(hysteresis=...), agent.py --hysteresis): the shifted previous plan is kept
+unless the best other candidate beats it by more than a margin: `hysteresis` V units when not both are
+successes; SUCCESS_MARGIN frames of the goal touch when both are; a success always beats a non-success; a
+vetoed previous plan never blocks a switch; a previous plan whose soft risk is over the best's by more than
+RISK_SWITCH is dropped. hysteresis 0 (the default here): no rule, the best total is chosen (as before).
+Plan.switch records the outcome {kept, gain (best other minus previous: V units, or frames earlier), margin,
+unit, reason}. A kept plan is registered once: SurpriseTracker.add only for a plan not taken from the previous
+one (its predictions stay those of its adoption); FailureMemory.expect keeps the expectation of a move while
+the same move goes on (a kept plan's next move is expected when it becomes the first move).
 A time budget (120 ms) gives stage 1 a deadline at 30% of it and stage 2 one at the budget minus the final
 stage's measured cost (a running average; at least 45% of the budget); a cut stage is recorded as cut
 (candidates and steps actually evaluated in Plan.counts), never passed off as complete, and its candidates are
@@ -88,6 +98,8 @@ MIN_EXPECT = 0.5                             # FailureMemory: an expected V drop
 VETO_SCORE = -1e6
 SUCCESS_SCORE = 1e5                          # a plan touching the goal at frame t: SUCCESS_SCORE - t
 TIE = 1e-3                                   # successes at the same frame: tie-break by risk and failure penalty
+SUCCESS_MARGIN = 3                           # frames: a success replaces a successful previous plan only if earlier
+RISK_SWITCH = 0.2                            # soft risk: a previous plan riskier than the best by more is dropped
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
 N_ALTERNATIVES = 5
 HAZ_FAR = 300.0                              # wm.features.hazard_features clips offsets and distances here
@@ -362,9 +374,10 @@ class Planner:
 
     def __init__(self, model, level, field: ProgressField, H: int = H_DEFAULT, B1: int = B1_DEFAULT,
                  branch: int = BRANCH_DEFAULT, S_final: int = S_DEFAULT, budget_ms: float | None = BUDGET_MS,
-                 member: int = 0, memory: FailureMemory | None = None):
+                 member: int = 0, memory: FailureMemory | None = None, hysteresis: float = 0.0):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms
+        self.hysteresis = float(hysteresis)          # V units (switch rule); 0: the best total is chosen
         self.member = member
         self.final_ms = FINAL_MS0
         self.lib = list(LIBRARY)
@@ -635,7 +648,7 @@ class Planner:
         raw3 = credit - risk3 - fail3
         total3 = np.where(saf.veto, VETO_SCORE + saf.veto_frame + 1e-3 * raw3, raw3)
         total3 = np.where(succ3, success_total(tg3, saf.soft_risk, fail3), total3)
-        best = int(np.argmax(total3))
+        best, switch = self.switch_rule(int(np.argmax(total3)), prev_idx, total3, succ3, tg3, saf)
         t3 = time.perf_counter()
         timing["final"] = 1000 * (t3 - t2)
         self.final_ms = 0.7 * self.final_ms + 0.3 * timing["final"]
@@ -662,7 +675,7 @@ class Planner:
         alts = self._alternatives(final, best, saf, prog3, credit, risk3, fail3, unc, spread_end, total3, vend_e,
                                   v0, cell0, first_name, veto1, vf1, vk1, vid1, prog1, vend1, keep1,
                                   paths=(out3["x"].mean(0), out3["y"].mean(0), out1["x"][0], out1["y"][0], up1),
-                                  goal=(succ3, tg3, n_goal, E))
+                                  goal=(succ3, tg3, n_goal, E), switch=switch)
         veto = None
         if saf.veto[best]:
             veto = {"frame": int(saf.veto_frame[best]), "id": saf.veto_id[best],
@@ -691,14 +704,46 @@ class Planner:
             goal_touch=goal_touch, key_touches=key_touches,
             finish_model=float(out3["finish"][:, best].max()),
             timing={**{k: round(v, 2) for k, v in timing.items()}, "total": round(1000 * (time.perf_counter() - t0), 2)},
-            counts=counts, segments=[[nm, int(a), int(b)] for nm, a, b in segs])
+            counts=counts, segments=[[nm, int(a), int(b)] for nm, a, b in segs], switch=switch)
         plan.first_move_frames = int(first_frames)
         self.prev[agent] = plan
-        self.surprise.add(plan)
+        if not plan.from_prev:                       # a kept plan keeps the predictions of its adoption
+            self.surprise.add(plan)
         if first_frames > 0 and v0_ok:
             vm = self.value(np.array([mx[first_frames]]), np.array([my[first_frames]]), keys)[0][0]
             self.memory.expect(agent, frame, plan.chosen[0], first_frames, acts, cell0, v0, float(vm))
         return plan
+
+    def switch_rule(self, best: int, p: int, total3, succ3, tg3, saf):
+        """The switch rule (module docstring) between the shifted previous plan (final index p, -1 none) and
+        the best other candidate. best: the best total. Returns (chosen index, Plan.switch record or None)."""
+        if p < 0:
+            return best, None
+        others = np.array([c for c in range(len(total3)) if c != p], np.int64)
+        if not len(others):
+            return p, {"kept": True, "gain": None, "margin": None, "unit": None, "reason": "kept: no other candidate"}
+        b = int(others[np.argmax(total3[others])])
+        h = self.hysteresis
+        frames = bool(succ3[p] and succ3[b])
+        gain = float(tg3[p] - tg3[b]) if frames else float(total3[b] - total3[p])
+        unit, margin = ("frames", float(SUCCESS_MARGIN)) if frames else ("V", h)
+        g = f"{gain:+.0f} frames" if frames else f"{gain:+.2f}"
+
+        def rec(kept, why):
+            return {"kept": kept, "gain": round(gain, 3), "margin": margin, "unit": unit, "reason": why}
+        if h <= 0:                                   # no rule: the best total (only described)
+            return best, rec(best == p, f"kept: best other {g}" if best == p else f"switched: {g}")
+        if best == p:
+            return p, rec(True, f"kept: best other {g}")
+        if saf.veto[p]:
+            return b, rec(False, f"switched: previous plan vetoed ({saf.veto_id[p]} f{int(saf.veto_frame[p])})")
+        if succ3[b] and not succ3[p]:
+            return b, rec(False, "switched: reaches the princess, the previous plan does not")
+        if not frames and saf.soft_risk[p] - saf.soft_risk[b] > RISK_SWITCH:
+            return b, rec(False, f"switched: previous plan's risk {saf.soft_risk[p]:.2f} vs {saf.soft_risk[b]:.2f}")
+        if gain > margin:
+            return b, rec(False, f"switched: {g}")
+        return p, rec(True, f"kept: best other {g} < {margin:g}")
 
     @staticmethod
     def _touches(xs, ys, tg, keys, E):
@@ -725,7 +770,7 @@ class Planner:
 
     def _alternatives(self, final, best, saf, prog3, credit, risk3, fail3, unc, spread_end, total3, vend_e, v0,
                       cell0, first_name, veto1, vf1, vk1, vid1, prog1, vend1, keep1, paths=None,
-                      goal=None) -> list[dict]:
+                      goal=None, switch=None) -> list[dict]:
         """The top N_ALTERNATIVES rejected plans, each with the one reason that separates it from the chosen one:
         the final stage's next best by score (up to N_ALTERNATIVES - 2 of them first), then the stage-1 moves the
         safety check vetoed with the most progress (up to 2), then more of the final stage.
@@ -745,9 +790,17 @@ class Planner:
 
         succ, tg, n_goal, E = goal if goal is not None else (np.zeros(len(final), bool), None, None, None)
 
+        kept_over = switch is not None and switch["kept"]
+
         def final_alt(c):
             vend = float(vend_e[:, c].mean())
-            if succ[best] and succ[c]:
+            if kept_over and total3[c] > total3[best]:          # better, but within the switch margin
+                if succ[best] and succ[c]:
+                    reason = f"reaches the princess {int(tg[best] - tg[c])} frames earlier"
+                else:
+                    reason = f"scores {total3[c] - total3[best]:+.2f} more"
+                reason += f", within the switch margin: the committed plan is kept ({switch['reason']})"
+            elif succ[best] and succ[c]:
                 if tg[c] > tg[best]:
                     reason = f"reaches the princess later (f{tg[c]} vs f{tg[best]})"
                 elif total3[c] == total3[best]:
