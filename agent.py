@@ -22,7 +22,7 @@ goal or key touch that did not happen; --triggers off: every --replan frames onl
 --replan 2); each decision's triggers go into its plans.jsonl line ("trigger"). The real
 states are checked against earlier predictions (surprises) and against the moves' expected progress (failed
 moves). Plans are scored in estimated frames to the goal (plan/planner.py); --hysteresis is in frames (default 160, the measured re-score noise);
-each decision's inputs reach H + the airborne completion's 90 frames. A death of a planned agent the geometry does
+each decision's inputs reach H + the airborne completion's 45 frames. A death of a planned agent the geometry does
 not explain (plan.safety.explain_death) is remembered (plan.safety.DeathMemory, saved to --death-memory): the
 planner avoids that place at that wave frame from then on. Every death of a planned agent (explained or not)
 charges the move taken at its point of no return (the latest decision of the wave with a safe alternative;

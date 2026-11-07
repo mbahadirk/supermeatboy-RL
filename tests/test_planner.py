@@ -552,7 +552,7 @@ def test_completion_lands_on_the_floor_and_waiting_costs_frames(flat):
     lv, pl = flat
     pl.new_wave()
     worlds, frames = empty_inputs(pl.future_frames)
-    rows = np.concatenate([state_row(300.0, 120.0, 0.0, 0.0, 0, 7, 0, 0), state_row(300.0, 200.0, 0.0, 0.0, 0, 7, 0, 0)])
+    rows = np.concatenate([state_row(300.0, 120.0, 0.0, 0.0, 0, 7, 0, 0), state_row(300.0, 150.0, 0.0, 0.0, 0, 7, 0, 0)])
     res, rolled = pl.complete(rows, np.array([act(1), act(1)]), np.array([0, 0]), worlds, frames, 16.667, 0, 0)
     (e1, r1, c1, p1), (e2, r2, c2, p2) = res
     assert r1 == r2 == 0 and c1["on"] == c2["on"] == "ground" and c1["died"] == [] and 0 < c1["frames"] < c2["frames"]

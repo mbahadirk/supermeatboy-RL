@@ -57,12 +57,12 @@ Airborne completion (final stage only, Planner.complete): a candidate lands when
 supported at H (each member's own end vy): estimate = H + mean T(end). Otherwise it is completed from the main
 member's (Planner.member) end row at H with three continuations, no jump: keep (the plan's last horizontal input
 held, with its run flag), neutral, reverse (after a plan ending without a horizontal input: neutral, left,
-right), up to COMPLETE_MAX = 90 frames in batches of COMPLETE_CHUNK, stopping when every row has landed or died.
+right), up to COMPLETE_MAX = 45 frames in batches of COMPLETE_CHUNK, stopping when every row has landed or died.
 Landed: the first supported frame (the cling rule) or a goal touch (T = 0); died: a deadly contact by the same
 safety sweep (hazard boxes, remembered deaths, the level's edge) against the deadly boxes of those frames (the
 decision's inputs reach H + COMPLETE_MAX: Planner.future_frames; beyond what is given, the last frame's boxes).
 Score: the best continuation that lands before dying: H + k + T_support(landing); none lands: all died, a death
-(soft risk 1, i.e. DEATH_FRAMES; with the window's soft risk at most one death) and H + T_air(end); some still airborne after 90: H + 90 + their best T_air there. Deaths in completion are
+(soft risk 1, i.e. DEATH_FRAMES; with the window's soft risk at most one death) and H + T_air(end); some still airborne after COMPLETE_MAX: H + COMPLETE_MAX + their best T_air there. Deaths in completion are
 risk, never veto. Plan.completion records the chosen plan's (continuation, frames, x, y, on, died, path);
 counts["final"]["completions"] every candidate's, counts["final"]["safe_alternatives"] the other candidates not
 vetoed, with soft risk < SAFE_RISK, that land (majority supported, completion landed, or a success).
@@ -141,7 +141,10 @@ DEAD_FAR = 1e4                               # frames: T of a dead end when the 
 # M2: 13,385 wall jump presses, runs/plan_2026110*): a press on a wall gives a wall jump in 93-100% of the cases in
 # every downward-speed bucket up to 10 u/f (8+ u/f: 16 presses only), so no bucket drops below 80%: inf (no cut)
 CLING_SPEED = math.inf
-COMPLETE_MAX = 90                            # frames: airborne final plans are completed this far at most
+# frames: airborne final plans are completed this far at most. 45 (was 90): measured on 30 recorded decisions per
+# level (1-14, 1-13, 1-11; no deadlines), the chosen first move was the same with 45 as with 90 in all of them, and
+# the completion's cost at the 90th percentile fell 71 -> 41 ms (1-14), 42 -> 39 (1-13), 63 -> 50 (1-11)
+COMPLETE_MAX = 45
 COMPLETE_CHUNK = 10                          # frames rolled out per completion batch (early stop between them)
 NO_PROGRESS = 0.0                            # frames: "no progress" when T(start) - T(end) is not above this
 SAFE_RISK = 0.5                              # soft risk under which a landing alternative counts as safe

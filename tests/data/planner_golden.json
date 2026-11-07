@@ -206,7 +206,7 @@
       "completed": 3,
       "completion_rows_frames": 60,
       "completion_clipped": 0,
-      "completion_inputs": 138,
+      "completion_inputs": 93,
       "safe_alternatives": 15,
       "completions": [
        null,
@@ -453,7 +453,7 @@
       "completed": 4,
       "completion_rows_frames": 60,
       "completion_clipped": 0,
-      "completion_inputs": 138,
+      "completion_inputs": 93,
       "safe_alternatives": 16,
       "completions": [
        null,
@@ -704,7 +704,7 @@
       "completed": 15,
       "completion_rows_frames": 100,
       "completion_clipped": 0,
-      "completion_inputs": 138,
+      "completion_inputs": 93,
       "safe_alternatives": 8,
       "completions": [
        {
@@ -1009,7 +1009,7 @@
       "completed": 0,
       "completion_rows_frames": 0,
       "completion_clipped": 0,
-      "completion_inputs": 138,
+      "completion_inputs": 93,
       "safe_alternatives": 15,
       "completions": [
        null,
@@ -1241,7 +1241,7 @@
       "completed": 3,
       "completion_rows_frames": 60,
       "completion_clipped": 0,
-      "completion_inputs": 138,
+      "completion_inputs": 93,
       "safe_alternatives": 15,
       "completions": [
        null,
@@ -1488,7 +1488,7 @@
       "completed": 8,
       "completion_rows_frames": 470,
       "completion_clipped": 0,
-      "completion_inputs": 138,
+      "completion_inputs": 93,
       "safe_alternatives": 15,
       "completions": [
        {
@@ -1758,9 +1758,9 @@
       "clipped": 0,
       "landing": 10,
       "completed": 6,
-      "completion_rows_frames": 210,
+      "completion_rows_frames": 205,
       "completion_clipped": 0,
-      "completion_inputs": 138,
+      "completion_inputs": 93,
       "safe_alternatives": 15,
       "completions": [
        null,
@@ -2024,7 +2024,7 @@
       "completed": 8,
       "completion_rows_frames": 470,
       "completion_clipped": 6,
-      "completion_inputs": 138,
+      "completion_inputs": 93,
       "safe_alternatives": 15,
       "completions": [
        {
@@ -2294,9 +2294,9 @@
       "clipped": 8,
       "landing": 10,
       "completed": 6,
-      "completion_rows_frames": 210,
+      "completion_rows_frames": 205,
       "completion_clipped": 0,
-      "completion_inputs": 138,
+      "completion_inputs": 93,
       "safe_alternatives": 15,
       "completions": [
        null,
