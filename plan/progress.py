@@ -32,6 +32,21 @@ Outputs per leg (n_legs x H x W, float64, +inf where the goal cannot be reached,
 - V_air: the best cost-to-go over the airborne states of the cell that can occur (reachable from some supported
   cell under the same rules). Optimistic: it assumes the cheapest such jump state. In cells with support it
   is the fresh state's value, in closed cells (never entered by a route) the V_support value.
+
+The time field T (frames to the goal; the planner's score, plan/planner.py): the same graph (states, moves,
+mode and jump limits, closed cells, key legs) with a second weight per edge, the frames of the step:
+max(|dc| x fx, |dr| x fy), fx = FX_GROUND from a supported source state else FX_AIR, fy = FY_UP for a step up
+and FY_DOWN for a step down (measured: plan/measure_time.py); a portal crossing PORTAL_FRAMES. None of V's extras
+(hazard margins, near, risk, sweep, crumble, switch, half, lock costs). A second Dijkstra on these weights, key
+legs like V (T_leg[j] = T to key j + T_leg[j+1] at key j). Outputs per leg, like V's:
+- T_support: the start rule (as V_support), in frames;
+- T_rise / T_fall: the best reachable airborne state of the cell that is rising (falling bit 0: not yet moving
+  down since the last support) / falling (bit 1). Where the graph reaches only one of the two in a cell, both
+  take that one; without jump limits (no falling bit) both are the cell's value; cells with support and closed
+  cells as V_air.
+Lookups (values() for V, times() for T, which takes the body's vertical velocity: rising iff vy > 0) share one
+code path (_lookup: points in walls and in the open half of half blocks).
+V stays for display, comparisons and the failure memory's expectations.
 """
 from __future__ import annotations
 
@@ -50,6 +65,11 @@ except ImportError:                         # pragma: no cover - scipy is in the
     csr_matrix = _sp_dijkstra = None
 
 DIRS = tuple((dc, dr) for dc in (-1, 0, 1) for dr in (-1, 0, 1) if dc or dr)
+# frames per tile, measured on recorded play (python -m plan.measure_time runs/plan_2026110*/wm_data: 548 shards,
+# 2.07 M locked steps): TILE / the 90th percentile of |dx| per frame on the ground / in the air (both 4.0 u/f),
+# TILE / the mean rise speed, TILE / the mean speed of falls of more than 2 tiles
+FX_GROUND, FX_AIR, FY_UP, FY_DOWN = 5.00, 5.00, 5.41, 7.74
+PORTAL_FRAMES = 1.0                         # a portal crossing (from one end to the other)
 DIR_INDEX = {d: k for k, d in enumerate(DIRS)}
 
 
@@ -158,10 +178,13 @@ class ProgressField:
             self.route_cells += cells[1:]
         self.n_legs = len(legs)
         H, W = self.H, self.W
-        self.V_support = np.full((self.n_legs, H, W), np.inf)
-        self.V_air = np.full((self.n_legs, H, W), np.inf)
+        self._V = np.full((2, self.n_legs, H, W), np.inf)        # the lookup's tables (views below)
+        self._T = np.full((3, self.n_legs, H, W), np.inf)
+        self.V_support, self.V_air = self._V
+        self.T_support, self.T_rise, self.T_fall = self._T
         self.n_states, self.n_edges, self.leg_route_cost = [], [], []
-        seed = 0.0
+        seed = seed_t = 0.0
+        self._t_time = 0.0                     # the time field's own Dijkstra (seconds, all legs)
         for j in range(self.n_legs - 1, -1, -1):      # backward: the goal leg first
             tgt, locks, cells = legs[j]
             targets = np.zeros((H, W), bool)
@@ -170,16 +193,18 @@ class ProgressField:
                     targets[r, c] = True
             leg_start = start if j == 0 else legs[j - 1][0]
             lay = self._layer(locks)
-            vs, va, ns, ne = self._leg_field(lay, targets, seed, leg_start)
+            vs, va, ts, trise, tfall, ns, ne = self._leg_field(lay, targets, seed, leg_start, seed_t)
             self.V_support[j], self.V_air[j] = vs, va
+            self.T_support[j], self.T_rise[j], self.T_fall[j] = ts, trise, tfall
             self.n_states.insert(0, ns)
             self.n_edges.insert(0, ne)
             self.leg_route_cost.insert(0, path_cost(cells, lay["cost"], lay["support"]) if cells else math.inf)
             if j > 0:
                 kc, kr = legs[j - 1][0]
-                seed = float(vs[kr, kc])
+                seed, seed_t = float(vs[kr, kc]), float(ts[kr, kc])
         self.route_cost = float(sum(self.leg_route_cost))
         self.t_build = time.time() - t0
+        self.t_time = self._t_time
         self.t_field = self.t_build - self.t_route
 
     def _layer(self, locks: str) -> dict:
@@ -198,7 +223,7 @@ class ProgressField:
         return {"closed": closed, "cost": cost, "cost64": cost.astype(np.float64), "support": support,
                 "wall": wall, "allowed": pl._cache[key]}
 
-    def _leg_field(self, lay, targets, seed, leg_start):
+    def _leg_field(self, lay, targets, seed, leg_start, seed_t=0.0):
         H, W = self.H, self.W
         wall, closed, support = lay["wall"], lay["closed"], lay["support"]
         jumps = self.jumps
@@ -237,7 +262,7 @@ class ProgressField:
             tile = lambda a: np.tile(a, len(r2))
             parts.append(_step(ctx, rep(r2), rep(c2), tile(ju), tile(js), tile(jf), np.zeros(len(r2) * K, bool),
                                rep(cid[r2, c2] * K) + tile(np.arange(K))))
-        src_l, dst_l, w_l = [p[0] for p in parts], [p[1] for p in parts], [p[2] for p in parts]
+        src_l, dst_l, w_l, t_l = ([p[i] for p in parts] for i in range(4))
         for (qc, qr), (lc, lr) in links:                        # walked into a portal: out of the other end
             if not src_cells[qr, qc]:
                 continue
@@ -245,33 +270,42 @@ class ProgressField:
             src_l.append(ids)
             dst_l.append(np.full(len(ids), warp_id[(lc, lr)], np.int64))
             w_l.append(np.ones(len(ids)))
+            t_l.append(np.full(len(ids), PORTAL_FRAMES))
         for (qc, qr), _ in links:                               # arrived through it: moves on as a fresh state
             if targets[qr, qc]:
                 continue
             one = np.array([qr]), np.array([qc])
             z = np.zeros(1, np.int64)
-            s_, d_, w_ = _step(ctx, one[0], one[1], z, z, z, np.array([bool(support[qr, qc])]),
-                               np.array([warp_id[(qc, qr)]], np.int64))
+            s_, d_, w_, t_ = _step(ctx, one[0], one[1], z, z, z, np.array([bool(support[qr, qc])]),
+                                   np.array([warp_id[(qc, qr)]], np.int64))
             src_l.append(s_)
             dst_l.append(d_)
             w_l.append(w_)
-        src = np.concatenate(src_l) if src_l else np.zeros(0, np.int64)
-        dst = np.concatenate(dst_l) if dst_l else np.zeros(0, np.int64)
-        w = np.concatenate(w_l) if w_l else np.zeros(0)
+            t_l.append(t_)
+        cat = lambda xs, dt: np.concatenate(xs) if xs else np.zeros(0, dt)
+        src, dst, w, wt = cat(src_l, np.int64), cat(dst_l, np.int64), cat(w_l, np.float64), cat(t_l, np.float64)
         # target states: the fresh state of a target cell (arrivals there are collapsed to it), its portal node
         tr, tc = np.nonzero(targets & open_)
-        seeds = list(cid[tr, tc] * K) + [warp_id[q] for q in warp_id if targets[q[1], q[0]]]
-        V = _cost_to_go(n, src, dst, w, np.array(seeds, np.int64)) + seed
-        # V_support: the Planner's start rule from every cell (grounded, fresh jump state)
-        vs = np.full((H, W), np.inf)
+        seeds = np.array(list(cid[tr, tc] * K) + [warp_id[q] for q in warp_id if targets[q[1], q[0]]], np.int64)
+        V = _cost_to_go(n, src, dst, w, seeds) + seed
+        t_t = time.time()
+        T = _cost_to_go(n, src, dst, wt, seeds) + seed_t
+        self._t_time += time.time() - t_t
+        # the support values: the Planner's start rule from every cell (grounded, fresh jump state)
         ro, co = np.nonzero(open_ & ~targets)
         z = np.zeros(len(ro), np.int64)
-        s_, d_, w_ = _step(ctx, ro, co, z, z, z, np.ones(len(ro), bool), np.arange(len(ro)))
-        best = np.full(len(ro), np.inf)
-        np.minimum.at(best, s_, w_ + V[d_])
-        vs[ro, co] = best
-        vs[tr, tc] = seed
-        # V_air: the best reachable airborne state; the fresh state where there is support; closed: start rule
+        s_, d_, w_, t_ = _step(ctx, ro, co, z, z, z, np.ones(len(ro), bool), np.arange(len(ro)))
+
+        def start_rule(val, wts, at_target):
+            out = np.full((H, W), np.inf)
+            best = np.full(len(ro), np.inf)
+            np.minimum.at(best, s_, wts + val[d_])
+            out[ro, co] = best
+            out[tr, tc] = at_target
+            return out
+        vs, ts = start_rule(V, w_, seed), start_rule(T, t_, seed_t)
+        # airborne: the best reachable airborne state (V: any; T: rising = falling bit 0, falling = bit 1); the
+        # fresh state where there is support; closed cells: the start rule
         seeds_up = cid[np.nonzero(enter & support)] * K
         sc, sr = leg_start
         if 0 <= sc < W and 0 <= sr < H and open_[sr, sc] and not targets[sr, sc]:
@@ -279,20 +313,32 @@ class ProgressField:
             if len(k):
                 seeds_up = np.concatenate([seeds_up, d_[s_ == k[0]]])
         reach = _reach(n, src, dst, seeds_up)
-        va = np.full((H, W), np.inf)
-        Vr = np.where(reach, V, np.inf)
-        per_cell = Vr[:N * K].reshape(N, K).min(1)
-        for q, i in warp_id.items():
-            per_cell[cid[q[1], q[0]]] = min(per_cell[cid[q[1], q[0]]], Vr[i])
         air_cells = enter & ~support
         ra, ca = np.nonzero(air_cells)
-        va[ra, ca] = per_cell[cid[ra, ca]]
         rs, cs_ = np.nonzero(enter & support)
-        va[rs, cs_] = V[cid[rs, cs_] * K]
         shut = open_ & ~enter
-        va[shut] = vs[shut]
-        va[tr, tc] = seed
-        return vs, va, n, len(src)
+
+        def air(val, states, sup_val, at_target):
+            vr = np.where(reach, val, np.inf)
+            cells = vr[:N * K].reshape(N, K)[:, states].min(1)
+            for q, i in warp_id.items():
+                cells[cid[q[1], q[0]]] = min(cells[cid[q[1], q[0]]], vr[i])
+            out = np.full((H, W), np.inf)
+            out[ra, ca] = cells[cid[ra, ca]]
+            out[rs, cs_] = val[cid[rs, cs_] * K]
+            out[shut] = sup_val[shut]
+            out[tr, tc] = at_target
+            return out
+        every = np.arange(K)
+        va = air(V, every, vs, seed)
+        if K == 1:                                    # no jump limits: no falling bit
+            t_rise = t_fall = air(T, every, ts, seed_t)
+        else:
+            t_rise, t_fall = air(T, every[every % 2 == 0], ts, seed_t), air(T, every[every % 2 == 1], ts, seed_t)
+            # a cell where the graph reaches only one of the two (e.g. rising in a shaft it only falls through):
+            # the other one's value (the body is there, so the graph's rule is the one that is short)
+            t_rise, t_fall = np.where(np.isfinite(t_rise), t_rise, t_fall), np.where(np.isfinite(t_fall), t_fall, t_rise)
+        return vs, va, ts, t_rise, t_fall, n, len(src)
 
     # ---- lookup -----------------------------------------------------------------------------------------
     def leg_of(self, keys_mask) -> np.ndarray:
@@ -311,18 +357,36 @@ class ProgressField:
 
     def values(self, xs, ys, leg=0, supported=True) -> np.ndarray:
         """V at points (game units): V_support where `supported` is True, else V_air, on leg `leg` (an int or
-        one per point; clamped to the last leg). A point inside a wall takes its best open neighbour of the
-        3 x 3 around it (not diagonally through a wall corner) plus the distance to that cell's centre, in
-        tiles. A point in the OPEN half of a half-block cell (a wall cell of the field; orientation as
-        plan.geometry.half_normal decodes it) takes only the neighbours on its open side: the cell that side
-        faces and the two diagonal ones beside it (not through a wall corner), plus the distance; never a
-        neighbour across the solid half (a body standing on a floor of half blocks is not valued by the cell
-        below the floor). +inf outside the map and where the goal cannot be reached."""
+        one per point; clamped to the last leg). Points inside walls and in the open half of half blocks: as
+        _lookup. +inf outside the map and where the goal cannot be reached."""
+        return self._lookup(self._V, np.where(np.asarray(supported, bool), 0, 1), xs, ys, leg, 1.0)
+
+    def times(self, xs, ys, leg=0, supported=True, vy=None) -> np.ndarray:
+        """T at points (frames to the goal): T_support where `supported`, else T_rise for a rising body (vy > 0,
+        any unit: only the sign is used, y up) and T_fall otherwise; vy None: the smaller of the two (as V_air).
+        Leg, points inside walls and in the open half of half blocks: as values() (the same _lookup; the
+        distance to the neighbour taken costs FX_GROUND frames per tile)."""
+        sup = np.asarray(supported, bool)
+        if vy is None:
+            return np.minimum(self._lookup(self._T, np.where(sup, 0, 1), xs, ys, leg, FX_GROUND),
+                              self._lookup(self._T, np.where(sup, 0, 2), xs, ys, leg, FX_GROUND))
+        which = np.where(sup, 0, np.where(np.asarray(vy, np.float64) > 0, 1, 2))
+        return self._lookup(self._T, which, xs, ys, leg, FX_GROUND)
+
+    def _lookup(self, stack, which, xs, ys, leg, per_tile) -> np.ndarray:
+        """stack[which] (stack: tables x n_legs x H x W) at points (game units), on leg `leg` (an int or one per point;
+        clamped to the last leg). A point inside a wall takes its best open neighbour of the 3 x 3 around it (not
+        diagonally through a wall corner) plus the distance to that cell's centre (tiles x per_tile). A point in
+        the OPEN half of a half-block cell (a wall cell of the field; orientation as plan.geometry.half_normal
+        decodes it) takes only the neighbours on its open side: the cell that side faces and the two diagonal
+        ones beside it (not through a wall corner), plus the distance; never a neighbour across the solid half (a
+        body standing on a floor of half blocks is not valued by the cell below the floor). +inf outside the
+        map."""
         xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
-        shape = np.broadcast(xs, ys).shape
+        shape = np.broadcast(xs, ys, which).shape
         xs, ys = np.broadcast_to(xs, shape).ravel(), np.broadcast_to(ys, shape).ravel()
         leg = np.clip(np.broadcast_to(np.asarray(leg, np.int64), shape).ravel(), 0, self.n_legs - 1)
-        sup = np.broadcast_to(np.asarray(supported, bool), shape).ravel()
+        tab = np.broadcast_to(np.asarray(which, np.int64), shape).ravel()
         wall = self.pl.cls["full"] if self.mode[3] else self.pl.wall      # the cells the field covers
         H, W = self.H, self.W
         c0 = np.floor((xs - self.ox) / TILE).astype(np.int64)
@@ -334,10 +398,11 @@ class ProgressField:
             out[ok] = ~wall[r[ok], c[ok]]
             return out
 
-        def field(c, r, ok):
+        def field(c, r, ok, k=None):
             v = np.full(c.shape, np.inf)
-            k = np.nonzero(ok)[0]
-            v[k] = np.where(sup[k], self.V_support[leg[k], r[k], c[k]], self.V_air[leg[k], r[k], c[k]])
+            g = np.nonzero(ok)[0]
+            p = g if k is None else k[g]
+            v[g] = stack[tab[p], leg[p], r[g], c[g]]
             return v
         inside = (c0 >= 0) & (c0 < W) & (r0 >= 0) & (r0 < H)
         own = free(c0, r0)
@@ -357,13 +422,13 @@ class ProgressField:
                 ok = free(c, r) & (~open_half | (dc * nx + dr * ny < 0))     # open half: its open side only
                 if dc and dr:                                  # not diagonally through a wall corner
                     ok &= free(c, rk) | free(ck, r)
-                v = np.full(len(k), np.inf)
-                g = np.nonzero(ok)[0]
-                v[g] = np.where(sup[k[g]], self.V_support[leg[k[g]], r[g], c[g]], self.V_air[leg[k[g]], r[g], c[g]])
                 cx, cy = self.ox + (c + 0.5) * TILE, self.oy + (r + 0.5) * TILE
-                best = np.minimum(best, v + np.hypot(xk - cx, yk - cy) / TILE)
+                best = np.minimum(best, field(c, r, ok, k) + per_tile * np.hypot(xk - cx, yk - cy) / TILE)
             out[k] = best
         return out.reshape(shape)
+
+    def _in(self, cell) -> bool:
+        return 0 <= cell[0] < self.W and 0 <= cell[1] < self.H
 
     @property
     def _half_n(self):
@@ -374,7 +439,8 @@ class ProgressField:
         return self._half_n_cache
 
     def summary(self) -> str:
-        return (f"{self.label}, {self.n_legs} leg(s); route cost {self.route_cost:.1f}; "
+        return (f"{self.label}, {self.n_legs} leg(s); route cost {self.route_cost:.1f}, "
+                f"T at the spawn {self.T_support[0][self.start[1], self.start[0]] if self._in(self.start) else math.inf:.0f} f; "
                 f"{max(self.n_states)} states, {max(self.n_edges)} edges per leg; build {self.t_build:.2f} s "
                 f"(route search {self.t_route:.2f} s, field {self.t_field:.2f} s)")
 
@@ -393,10 +459,12 @@ def measure_build(pl: Planner):
 # ---- graph helpers ----------------------------------------------------------------------------------------
 def _step(ctx, r, c, u, s, f, grounded, src):
     """The Planner's moves (realpath.Planner._dijkstra) from source states (cell r, c; rise used u, sideways
-    used s, falling f; standing `grounded`), ids `src`: (source ids, target state ids, step costs)."""
+    used s, falling f; standing `grounded`), ids `src`: (source ids, target state ids, step costs, step frames).
+    Step frames: max(|dc| x fx, |dr| x fy), fx = FX_GROUND from a supported (standing) source state else FX_AIR,
+    fy = FY_UP for a step up, FY_DOWN for a step down; none of the cost extras."""
     cid, K, U, S = ctx["cid"], ctx["K"], ctx["U"], ctx["S"]
     enter, support, targets, allowed, cost = ctx["enter"], ctx["support"], ctx["targets"], ctx["allowed"], ctx["cost64"]
-    out_s, out_d, out_w = [], [], []
+    out_s, out_d, out_w, out_t = [], [], [], []
     for d, (dc, dr) in enumerate(DIRS):
         k = np.nonzero(allowed[d, r, c])[0]
         if not len(k):
@@ -407,6 +475,7 @@ def _step(ctx, r, c, u, s, f, grounded, src):
         sup = support[nr, nc]
         if K == 1:                                             # no jump limits: every state is the cell
             j = np.zeros(len(k), np.int64)
+            g = grounded[k]
         else:
             g = grounded[k]
             up0, side0 = np.where(g, 0, u[k]), np.where(g, 0, s[k])
@@ -416,16 +485,18 @@ def _step(ctx, r, c, u, s, f, grounded, src):
             if dr >= 0:
                 air_ok &= ~((f[k] == 1) & ~g)                  # falling: only down
             keep = sup | air_ok                                # onto (or against) something: always
-            k, nr, nc, sup, u1, s1 = k[keep], nr[keep], nc[keep], sup[keep], u1[keep], s1[keep]
+            k, nr, nc, sup, u1, s1, g = k[keep], nr[keep], nc[keep], sup[keep], u1[keep], s1[keep], g[keep]
             j = np.where(sup, 0, (u1 * (S + 1) + s1) * 2 + (1 if dr < 0 else 0))
         j = np.where(targets[nr, nc], 0, j)                    # any arrival at a target ends the leg
         ln = SQRT2 if dc and dr else 1.0
         out_s.append(src[k])
         out_d.append(cid[nr, nc] * K + j)
         out_w.append(ln * ((1.0 + np.where(sup, 0.0, AIR_COST)) + cost[nr, nc]))
+        fy = 0.0 if dr == 0 else (FY_UP if dr > 0 else FY_DOWN)          # rows go up (y up)
+        out_t.append(np.maximum(abs(dc) * np.where(g, FX_GROUND, FX_AIR), fy))
     if not out_s:
-        return np.zeros(0, np.int64), np.zeros(0, np.int64), np.zeros(0)
-    return np.concatenate(out_s), np.concatenate(out_d), np.concatenate(out_w)
+        return np.zeros(0, np.int64), np.zeros(0, np.int64), np.zeros(0), np.zeros(0)
+    return np.concatenate(out_s), np.concatenate(out_d), np.concatenate(out_w), np.concatenate(out_t)
 
 
 def _cost_to_go(n, src, dst, w, seeds) -> np.ndarray:

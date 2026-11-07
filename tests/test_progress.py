@@ -154,3 +154,56 @@ def test_a_point_on_a_half_block_floor_takes_its_open_side():
     nb = min(pf.V_support[0, r, c] + np.hypot(31.5 - c - 0.5, 3.5 - r - 0.5) for r in (2, 3, 4) for c in (30, 32)
              if np.isfinite(pf.V_support[0, r, c]))
     assert v == pytest.approx(nb)
+
+
+# ---- the time field T (frames) on the same graph ---------------------------------------------------------
+from plan.progress import FX_GROUND, FY_UP, FY_DOWN          # noqa: E402
+
+
+def test_time_on_a_flat_corridor_is_distance_times_frames_per_tile():
+    pf = field()
+    t = pf.T_support[0, 9]
+    for c in range(26, 36):                       # the plateau right of the low wall: a straight walk to the goal
+        assert t[c] == pytest.approx((35 - c) * FX_GROUND)
+    # the lookup at a cell centre gives the table's value; a point in the plateau's top row is valued from the
+    # open cell above plus the way there, in frames (FX_GROUND per tile)
+    assert pf.times([at(30, 9)[0]], [at(30, 9)[1]], 0, True)[0] == pytest.approx(5 * FX_GROUND)
+    inside = pf.times([at(30, 8)[0]], [at(30, 8)[1] + 5.0], 0, True)[0]
+    assert inside == pytest.approx(t[31] + FX_GROUND * 25.0 / T)
+    # crossing the low wall (2 tiles up and down again) costs its rise and fall frames, more than walking
+    assert t[24] - t[26] >= 2 * FX_GROUND
+    assert np.isinf(pf.T_support[0][pf.pl.wall]).all()
+
+
+def test_rising_and_falling_airborne_times_differ_below_a_ledge():
+    # below the plateau's face (col 10, rows 2-8, a wall to climb): a body rising at (6, 6) can still reach the
+    # face beside it and climb; a falling one only goes down to the floor (row 2) and walks back to the face
+    pf = field()
+    c, r = 6, 6
+    rise, fall = pf.T_rise[0, r, c], pf.T_fall[0, r, c]
+    assert np.isfinite(rise) and np.isfinite(fall) and rise < fall
+    x, y = at(c, r)
+    up = pf.times([x], [y], 0, False, vy=[2.0])[0]
+    down = pf.times([x], [y], 0, False, vy=[-2.0])[0]
+    assert up == pytest.approx(rise) and down == pytest.approx(fall)
+    assert pf.times([x], [y], 0, False)[0] == pytest.approx(min(rise, fall))          # vy unknown: the better one
+    # standing in a cell is never slower than being airborne there
+    ok = np.isfinite(pf.T_support[0]) & np.isfinite(pf.T_fall[0])
+    assert (pf.T_fall[0][ok] >= pf.T_support[0][ok] - 1e-9).all()
+    # a step up costs FY_UP, a step down FY_DOWN: the face's wall cells (col 9) get slower further down
+    face = pf.T_support[0, 2:9, 9]
+    assert all(a > b for a, b in zip(face, face[1:]))
+    assert face[0] - face[1] == pytest.approx(FY_UP)
+    assert FY_DOWN > FY_UP
+
+
+def test_time_key_legs_add_up_like_v():
+    k_left, k_right = at(12, 9), at(28, 12)
+    pf = field(keys=[k_right, k_left], spawn=(20, 9), goal=(35, 9))
+    s = (9, 20)
+    t0, t1, t2 = (pf.T_support[j][s] for j in range(3))
+    assert t0 > t1 > t2 > 0
+    assert pf.T_support[0, 9, 12] == pytest.approx(pf.T_support[1, 9, 12])    # at a key: the next leg's value
+    assert pf.T_support[1, 12, 28] == pytest.approx(pf.T_support[2, 12, 28])
+    # leg 0 is the way to the left key (8 tiles of floor) plus leg 1 from there
+    assert t0 == pytest.approx(8 * FX_GROUND + pf.T_support[1, 9, 12])
