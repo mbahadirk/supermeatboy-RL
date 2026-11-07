@@ -455,7 +455,7 @@ python smbrl/agent.py --agents 1 --explore 40 --wm-collect
 - `--replan 2` (frames between a planned agent's decisions; in between it plays its plan), `--budget-ms 120`,
   `--model runs/wm_locked/wm_model.pt`, `--wave-seconds 20`, `--end-after 1`, `--name` (default `plan_<time>`),
   `--no-overlay`, `--telemetry 127.0.0.1:47800` (or `off`), `--death-memory smbrl/death_memory.json`,
-  `--move-memory smbrl/move_memory.json` (or `none`), `--hysteresis 3` (frames, since step 4), `--threads 2`,
+  `--move-memory smbrl/move_memory.json` (or `none`), `--hysteresis 160` (frames: the measured re-score noise, since step 4), `--threads 2`,
   `--seed 0`.
 - Stop: Ctrl+C or a file `runs/<name>/STOP`.
 
@@ -527,16 +527,20 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
   key legs as V), step frames from measured speeds (**measured**: 5.00 frames per tile on the ground and in the
   air, 5.41 per tile up, 7.74 down; `plan/measure_time.py`). T_support, and airborne T_rise / T_fall by the
   body's vertical velocity. V stays for display and the failure memory.
-- **Score** (`plan/planner.py`): estimated frames to the goal = frames used + T(end) + penalty frames (risk 50 per
-  unit, failure 5, the point-of-no-return charge); lower is better; no uncertainty factor. Wall contact is support
+- **Score** (`plan/planner.py`): estimated frames to the goal = frames used + T(end) + penalty frames; every
+  expected death (soft risk, a completion where all continuations die, the point-of-no-return rate) costs
+  DEATH_FRAMES = max(T_support(spawn) - T(start), 500); failures 5 each; lower is better; no uncertainty factor.
+  `--hysteresis` defaults to 160 frames, the measured 90% re-score noise of a kept plan (closed loops: switch rate
+  0.62 -> 0.09, but 2 deaths in the 1-14 pit kept longer; PLAN_PLANNER_ROUND2.md 7.6). Wall contact is support
   at any speed (**measured**: wall jumps work at every recorded falling speed).
 - **Airborne completion** (final stage): a plan not landing by a majority of members is continued with keep /
-  neutral / reverse for up to 90 frames and scored at its best landing; all die: risk.
+  neutral / reverse for up to 90 frames and scored at its best landing; all die: one death (DEATH_FRAMES).
 - **MoveMemory** (`--move-memory smbrl/move_memory.json`): each death charges the move taken at the latest
   decision of the wave that had a safe alternative; `point of no return` events.
 - **Known limits (measured)**: the world model stops falling about 6 units above the map's bottom edge (its tile
-  input pads outside the map with solid), so falls out of the 1-14 pit are not predicted; completion costs
-  19-102 ms median per decision at the 120 ms budget, over its 20 ms target. **Unverified**: everything in the game.
+  input pads outside the map with solid; open padding with the model unchanged fails, see 9.13: retrain), so
+  falls out of the 1-14 pit are not predicted; after the speed work (7.6) a decision takes 142-175 ms median at
+  the 120 ms budget, the completion 24-63 ms of it (over 30 ms on 1-14 and 1-11; options in 7.6, not chosen). **Unverified**: everything in the game.
 
 ---
 
@@ -624,6 +628,15 @@ These come from `runs/*/levels/*/best.json`.
       for these words (second byte 0x4c / 0x8c), or these cells are not solid triangles in the game (e.g.
       corner pieces the player passes). Until it is resolved the planner's collision guard leaves slope cells
       open; support, safety and the progress field still use the slope shapes.
+13. **The world model cannot fall out of the map (measured 2026-11-08, not fixed).** `wm/features.LevelGeom`
+    pads outside the map with solid, so imagined bodies stop about 6 units above the map's bottom edge; a fall out
+    of a level whose kill box is below the map (the 1-14 pit) is never predicted. Opening the padding below the
+    map with the model unchanged was measured and **fails**: on 1-14 rows within 3 tiles of the bottom, 1-step
+    error 0.87 -> 1.05 units (median; 90% 2.03 -> 2.29) and 16-step 11.6 -> 12.3 (28.6 -> 31.7); the pit's no-jump
+    bodies now die (106 of 120 continuations, before 9), but none of the 30 recorded wall-jump-backs off the pit's
+    left wall is predicted any more (before 12 of 30): the model never saw open cells there.
+    **Follow-up: retrain the world model with open padding below the map**, then repeat that measurement and
+    remove the strict xfail `test_completion_over_the_1_14_pit_sees_every_continuation_die`.
 
 ---
 

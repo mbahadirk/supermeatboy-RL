@@ -360,11 +360,11 @@ here (the brief: report, do not cut).
 
 ### 7.4 Concerns found while building
 
-- **A predicted contact after the veto frames costs only RISK_FRAMES = 50 frames**, about what 48 frames of
+- (Resolved in 7.6 item 2.) **A predicted contact after the veto frames costs only RISK_FRAMES = 50 frames**, about what 48 frames of
   waiting cost. On a flat test level behind a hazard strip (no way on), the chosen plan now runs into the strip
   after frame 16 (soft risk 1); before, the uncertainty tax kept it back. The test now checks only the veto window
   and says why.
-- "No progress" (T(start) - estimate <= 0) is borderline for the best possible plan: running at full speed gains
+- (Resolved in 7.6 item 4.) "No progress" (T(start) - estimate <= 0) is borderline for the best possible plan: running at full speed gains
   exactly the frames it takes (fx is the p90 speed), so the share will be high even for good plans.
 - The world model's solid padding outside the map (7.3 a) hides falls out of any level whose kill box is below the
   map. Fixing it means retraining with open padding, or a planner rule for the map bottom (which the wall-jump
@@ -375,3 +375,81 @@ here (the brief: report, do not cut).
 Nothing was run in the game. Not checked: the overlay and viewer drawing (only their payloads and text), the live
 cost per frame with completion, MoveMemory over real waves (only unit tests and the offline closed loop), whether
 the new 1-14 choices find the way across the pit.
+
+### 7.6 Follow-up round (2026-11-08; offline only; old = a403092 unless said)
+
+**1. Pit hover: open padding below the map, model unchanged, measured and rejected.** `wm/features.LevelGeom`
+pads outside the map with solid on all four sides. Experiment: the padding below the map opened (top and sides
+unchanged), on recorded real rows within 3 tiles of the map's bottom (400 sampled on 1-14,
+runs/plan_20261107-200300; 1-11, runs/plan_20261103-152013, has no such rows):
+
+| | solid (as trained) | open below |
+|---|---|---|
+| 1-step error, median / 90% (units) | 0.87 / 2.03 | 1.05 / 2.29 |
+| 16-step error, median / 90% | 11.6 / 28.6 | 12.3 / 31.7 |
+| no-jump completion rows 40 frames before 40 pit deaths: died / landed / still airborne (of 120) | 9 / 40 / 71 | 106 / 14 / 0 |
+| the 30 recorded wall-jump-backs off the pit's left wall, replayed: predicted to come back | 12 | 0 (all die) |
+
+Open-below is worse on error and loses every recorded recovery (most of them cling to the wall at x ~ 6 between
+y -354 and -367, above the kill box at -368.6; the model never saw open cells there). Not adopted; no map-bottom
+rule added; the strict xfail stays. Follow-up in PROJECT_STATE (9.13): retrain the world model with open padding
+below the map, then repeat this measurement.
+
+**2. One death cost** (`8671609`). DEATH_FRAMES = max(T_support(spawn) - T(start), DEAD_END_FRAMES) for every
+expected death: soft risk x DEATH_FRAMES, a completion where every continuation dies 1 x DEATH_FRAMES (with the
+window's soft risk at most one death), MoveMemory rate x DEATH_FRAMES. RISK_FRAMES is gone; the hazard-strip test
+asserts again that the chosen plan never passes the strip (it does not). Planner golden re-recorded (the strip
+case's first move and the scores of cases with soft risk changed); the old-schedule record did not change.
+- 1-14 pit (a), new code: chosen plans ending over the pit 0 / 277 (old 0214707: 201 / 277); the planner's own
+  death prediction for the old plans is still 8 / 277 (3%): the model cannot fall out of the map (item 1). No
+  chosen plan has a predicted death (completion all-die 0, soft risk >= 0.5 0).
+- 1-11 h12 (c), 269 decisions: chosen plans whose completion predicts death 15 / 269 (6%); soft risk >= 0.5 18 /
+  269. Of the 102 chosen plans that end over the fall, the completion lands above h12 (y > -400) for 55, every
+  continuation dies for 15, 32 land by a majority of members (no completion), 0 land at or below h12's level.
+  The tiles alone do not show where "across" is (the hop-off at about (150, -158) is not on a tile; likely a
+  moving platform), so "lands across" here means "lands above h12's level".
+
+**3. Hysteresis from measured noise** (`5e5d489`). How much a kept plan's re-scored estimate moves between
+consecutive decisions whose only trigger was the interval, beyond the frames played: 206 pairs (147 from new-code
+closed loops, 59 recorded 1-14 decision pairs re-planned; run 174219 logged no interval-only triggers). |noise|
+median 16, 75% 60, **90% 160 frames**; signed median +16 (a kept plan usually looks worse when re-scored; the tail
+is soft risk and completion deaths changing, each worth up to DEATH_FRAMES). `--hysteresis` defaults to 160.
+Closed loops (9 starts, 300 frames, no deadlines), same code:
+
+| hysteresis | switch rate | finished | died |
+|---|---|---|---|
+| 3 | 0.62 | 2 | 0 |
+| 60 (the 75%) | 0.12 | 2 | 2 (1-14, out of level) |
+| 160 (the 90%, the default) | 0.09 | 1 | 2 (1-14, out of level) |
+
+Large margins keep committed plans the model cannot see die (the 1-14 pit). Reported, not tuned.
+
+**4. "No progress"** (`ff5fa40`): T(end) >= T(start), the time-to-go did not shrink (analyze_run and the
+planner's alternative reasons).
+
+**5. Speed** (`8518616`, identical results: goldens compared exactly). Per imagined step: stage 1 1.20 -> 0.89 ms,
+stage 2 1.54 -> 1.22, final 1.29 -> 1.05, completion 1.08 -> 0.82 (patch table, featurization into the step
+buffer, vectorised flag update, preallocated forward buffers, inference_mode). The forward pass (about 0.4-0.65 ms
+a step, 4 batched layers of width 256: per-op overhead, not size) is now the largest part.
+
+Per decision at --budget 120 (30 recorded decisions per level, 2 threads; median / 90% ms):
+
+| | total 1-14 / 1-13 / 1-11 | stage 1 | stage 2 | final | completion 1-14 / 1-13 / 1-11 |
+|---|---|---|---|---|---|
+| 0214707 | 142 / 151 / 153 | 39-41 | 19-20 | 85-97 | - |
+| a403092 | 239 / 193 / 220 | 40-41 | 18-19 | 132-188 | 102 / 42 / 72 |
+| now | 175 / 142 / 168 | 26-28 | 32-34 | 79-115 | 63 / 24 / 47 |
+
+90%: now 195 / 164 / 183 total. Without deadlines now: total 156 / 177 / 213, completion 16 / 28 / 46 (a403092:
+254 / 268 / 319; 20 / 36 / 67). Item 1 changed nothing (not adopted), so falls do not end earlier.
+The completion is still over 30 ms median on 1-14 (63) and 1-11 (47) at the 120 budget. Options re-measured
+(no deadlines, completion ms median / 90%, 30 states per level; first move unchanged in 30 / 30 for every option):
+
+| COMPLETE_MAX / continuations | 1-14 | 1-13 | 1-11 |
+|---|---|---|---|
+| 90 / 3 (built) | 15 / 71 | 27 / 42 | 48 / 63 |
+| 45 / 3 | 15 / 41 | 29 / 39 | 42 / 50 |
+| 30 / 3 | 16 / 28 | 24 / 26 | 31 / 36 |
+| 90 / 2 | 15 / 69 | 26 / 37 | 39 / 67 |
+
+Not chosen here: left to the planner's decision.

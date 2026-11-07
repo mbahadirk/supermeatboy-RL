@@ -53,7 +53,7 @@ class Plan:
     edge); veto: None or {frame, id, kind} (contact within 16 frames, any member); soft_risk / soft_frame.
     score (frames, plan/planner.py): {frames_used (H, or H + the completion's frames), t_start (T at the start,
     None for a dead end), t_end (T at the end or at the completion's landing), estimate (frames_used + t_end +
-    the penalties: the score, lower is better), risk_frames, failure_frames, death_frames (the point-of-no-return
+    the penalties: the score, lower is better), risk_frames (soft risk x DEATH_FRAMES), failure_frames, death_frames (the point-of-no-return
     charge), total (-estimate; successes SUCCESS_SCORE - touch frame; vetoed below every other), completion
     (its frames, None when not completed), landing (lands: a majority of members supported at H, the completion
     landed, or a success), spread_end (the members' position std at H, units: logged only)}; v_start, v_end (V,
