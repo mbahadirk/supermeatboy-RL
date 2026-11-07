@@ -32,7 +32,10 @@ deadlines, every stage runs complete (tests and offline checks whose result must
 load).
 
 Score of a candidate: the estimated frames to reach the goal (lower is better; total = -estimate):
-  estimate = frames used + T(end) + RISK_FRAMES x soft risk + failure frames + point-of-no-return frames.
+  estimate = frames used + T(end) + DEATH_FRAMES x (soft risk, or the point-of-no-return rate) + failure frames.
+  DEATH_FRAMES = max(T_support(spawn) - T(start), DEAD_END_FRAMES): one death costs the progress it throws away
+  (at least a dead end's charge), the same everywhere: soft risk, a completion where every continuation dies, and
+  the point-of-no-return memory.
 - frames used: stage 1 its move's frames, stage 2 H (or the frames rolled before its deadline), final H, or
   H + k with the airborne completion (below).
 - T(end): plan/progress.py's time field (frames to the goal on realpath's graph, measured frames per tile) at the
@@ -41,12 +44,13 @@ Score of a candidate: the estimated frames to reach the goal (lower is better; t
   end's vertical velocity (imagine's per-step vy). T = +inf (a dead end): T(start) + DEAD_END_FRAMES (DEAD_FAR
   when the start is a dead end too). Final stage: the mean over members (each member's own end and leg).
 - death: contact within the first 16 frames (plan.safety.VETO_FRAMES) in any member is a hard veto; contact or near
-  contact later is a soft risk in [0, 1] (safety's margin from the measured position error), RISK_FRAMES each.
+  contact later is a soft risk in [0, 1] (safety's margin from the measured position error), DEATH_FRAMES each.
 - failure memory: FAIL_FRAMES x the times this first move failed from this start cell (FailureMemory).
-- point-of-no-return memory: deaths / (tries + 1) x max(T_support(spawn) - T(start), DEAD_END_FRAMES) for this
-  first move from this start cell (MoveMemory).
-The penalties are the former V-unit weights (RISK_WEIGHT, FAIL_COST, DEAD_END) x FX_GROUND frames per tile (on open
-ground 1 V unit is about 1 tile). Vetoed candidates sort below every other one, by their veto frame (later is
+- point-of-no-return memory: deaths / (tries + 1) x DEATH_FRAMES for this first move from this start cell
+  (MoveMemory).
+FAIL_FRAMES and DEAD_END_FRAMES are the former V-unit weights (FAIL_COST, DEAD_END) x FX_GROUND frames per tile (on
+open ground 1 V unit is about 1 tile). (Until step 4's follow-up a soft risk cost RISK_FRAMES = 50 frames, about
+what waiting out the window costs, so plans ran into hazards after frame 16.) Vetoed candidates sort below every other one, by their veto frame (later is
 better), then by estimate. Waiting costs its frames; no uncertainty factor (the members' end spread is logged:
 Plan.score["spread_end"]); no hand-tuned shaping.
 Airborne completion (final stage only, Planner.complete): a candidate lands when a majority of members are
@@ -57,8 +61,8 @@ right), up to COMPLETE_MAX = 90 frames in batches of COMPLETE_CHUNK, stopping wh
 Landed: the first supported frame (the cling rule) or a goal touch (T = 0); died: a deadly contact by the same
 safety sweep (hazard boxes, remembered deaths, the level's edge) against the deadly boxes of those frames (the
 decision's inputs reach H + COMPLETE_MAX: Planner.future_frames; beyond what is given, the last frame's boxes).
-Score: the best continuation that lands before dying: H + k + T_support(landing); none lands: all died, soft risk
-+1 and H + T_air(end); some still airborne after 90: H + 90 + their best T_air there. Deaths in completion are
+Score: the best continuation that lands before dying: H + k + T_support(landing); none lands: all died, a death
+(soft risk 1, i.e. DEATH_FRAMES; with the window's soft risk at most one death) and H + T_air(end); some still airborne after 90: H + 90 + their best T_air there. Deaths in completion are
 risk, never veto. Plan.completion records the chosen plan's (continuation, frames, x, y, on, died, path);
 counts["final"]["completions"] every candidate's, counts["final"]["safe_alternatives"] the other candidates not
 vetoed, with soft risk < SAFE_RISK, that land (majority supported, completion landed, or a success).
@@ -128,8 +132,7 @@ from wm.rollout import World, advance, _stacked
 H_DEFAULT, B1_DEFAULT, BRANCH_DEFAULT, S_DEFAULT, BUDGET_MS = 48, 8, 16, 16, 120.0
 STAGE1_SHARE, STAGE2_SHARE = 0.30, 0.45      # of the budget: stage 1's deadline, stage 2's earliest one
 # penalties in frames, from the former V-unit weights by FX_GROUND frames per tile (on open ground 1 V unit ~ 1 tile)
-RISK_WEIGHT, FAIL_COST, DEAD_END = 10.0, 1.0, 100.0        # the former weights (V units)
-RISK_FRAMES = RISK_WEIGHT * FX_GROUND        # per unit of soft risk
+FAIL_COST, DEAD_END = 1.0, 100.0                          # the former weights (V units)
 FAIL_FRAMES = FAIL_COST * FX_GROUND          # per counted failure of the first move from the start cell
 DEAD_END_FRAMES = DEAD_END * FX_GROUND       # an end with T = +inf: T(start) + this
 DEAD_FAR = 1e4                               # frames: T of a dead end when the start is one too
@@ -139,7 +142,7 @@ DEAD_FAR = 1e4                               # frames: T of a dead end when the 
 CLING_SPEED = math.inf
 COMPLETE_MAX = 90                            # frames: airborne final plans are completed this far at most
 COMPLETE_CHUNK = 10                          # frames rolled out per completion batch (early stop between them)
-NO_PROGRESS = 0.0                            # frames: "no progress" when T(start) - estimate is not above this
+NO_PROGRESS = 0.0                            # frames: "no progress" when T(start) - T(end) is not above this
 SAFE_RISK = 0.5                              # soft risk under which a landing alternative counts as safe
 MIN_EXPECT = 0.5                             # FailureMemory: an expected V drop below this expects nothing
 VETO_SCORE = -1e6
@@ -942,6 +945,7 @@ class Planner:
         cell0 = self.cell(x0, y0)
         scale = max(self.t_spawn - T0, DEAD_END_FRAMES) if T0_ok and math.isfinite(self.t_spawn) else DEAD_END_FRAMES
         death_of = (lambda nm: self.moves.penalty(cell0, nm, scale)) if self.moves is not None else (lambda nm: 0.0)
+        self.death_frames = scale                    # DEATH_FRAMES of this decision (module docstring)
         mem = slice(self.member, self.member + 1)
         timing, counts = {}, {}
         gt = self.guard_terrain(keys)
@@ -982,7 +986,7 @@ class Planner:
         tend1 = ends_time(xe1, ye1, vye1, legs1)
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
         death1 = np.array([death_of(m.name) for m in self.lib])
-        pen1 = RISK_FRAMES * soft1 + fail1 + death1
+        pen1 = scale * soft1 + fail1 + death1
         est1 = up1 + self._tt(tend1) + pen1
         score1 = np.where(veto1, vetoed_total(vf1, est1), -est1)
         score1 = np.where(succ1, success_total(tg1, pen1), score1)
@@ -1045,7 +1049,7 @@ class Planner:
             succ2 = tg2 > 0
             veto2, vf2, _, _, soft2, _ = _verdict(sw2, np.where(succ2, np.minimum(up2, tg2), up2))
             tend2 = ends_time(xs2[0, np.arange(n2), up2], ys2[0, np.arange(n2), up2], vye2, legs2)
-            pen2 = RISK_FRAMES * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
+            pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
             est2 = up2 + self._tt(tend2) + pen2
             score2 = np.where(veto2, vetoed_total(vf2, est2), -est2)
             score2 = np.where(succ2, success_total(tg2, pen2), score2)
@@ -1129,8 +1133,8 @@ class Planner:
         first_name = [next((nm for nm, a, b in segs if nm != "pad"), "pad") for segs, _ in final]
         fail3 = np.array([self.memory.penalty(cell0, nm) for nm in first_name])
         death3 = np.array([death_of(nm) for nm in first_name])
-        soft3 = saf.soft_risk + comp_risk
-        risk3 = RISK_FRAMES * soft3
+        soft3 = np.minimum(saf.soft_risk + comp_risk, 1.0)          # one death at most
+        risk3 = scale * soft3
         est3 = base3 + risk3 + fail3 + death3
         total3 = np.where(saf.veto, vetoed_total(saf.veto_frame, est3), -est3)
         total3 = np.where(succ3, success_total(tg3, risk3 + fail3 + death3), total3)
@@ -1169,7 +1173,7 @@ class Planner:
         spread_end = np.sqrt(xe.var(0) + ye.var(0))
         goal_touch, key_touches = self._touches(out3["x"][:, best], out3["y"][:, best], tg_e[:, best],
                                                 [(j, t[:, best], w[:, best]) for j, t, w in keys_e], E)
-        parts = {"base": base3, "risk": risk3, "fail": fail3, "death": death3, "est": est3, "soft": soft3,
+        parts = {"base": base3, "t_end": t_end3, "comp_death": comp_risk, "risk": risk3, "fail": fail3, "death": death3, "est": est3, "soft": soft3,
                  "first": first_name}
         alts = self._alternatives(final, best, saf, parts, total3, T0, cell0, scale, veto1, vf1, vk1, vid1, est1,
                                   paths=(out3["x"].mean(0), out3["y"].mean(0), out1["x"][0], out1["y"][0], up1),
@@ -1327,12 +1331,15 @@ class Planner:
                 gaps = {"time": parts["base"][c] - parts["base"][best], "risk": parts["risk"][c] - parts["risk"][best],
                         "fail": parts["fail"][c] - parts["fail"][best], "death": parts["death"][c] - parts["death"][best]}
                 why = max(gaps, key=gaps.get)
-                if why == "time" and math.isfinite(T0) and T0 - parts["base"][c] <= NO_PROGRESS:
-                    reason = f"no progress (estimate {est[c]:.0f} frames, T at the start {T0:.0f})"
+                if why == "time" and math.isfinite(T0) and T0 - parts["t_end"][c] <= NO_PROGRESS:
+                    reason = (f"no progress (T {T0:.0f} -> {parts['t_end'][c]:.0f} frames; estimate {est[c]:.0f} "
+                              f"vs {est[best]:.0f})")
                 elif why == "fail" and parts["fail"][c] > 0:
                     reason = self.memory.reason(cell0, parts["first"][c])
                 elif why == "death" and parts["death"][c] > 0 and self.moves is not None:
                     reason = self.moves.reason(cell0, parts["first"][c], scale)
+                elif why == "risk" and parts["comp_death"][c] > 0:
+                    reason = f"every continuation of its completion dies (+{parts['risk'][c]:.0f} frames: a death)"
                 elif why == "risk" and parts["risk"][c] > 0:
                     near = saf.nearest[c][0]["id"] if saf.nearest[c] else "?"
                     reason = (f"risk {parts['soft'][c]:.2f} near {near} at frame {int(saf.soft_frame[c])} "

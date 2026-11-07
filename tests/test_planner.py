@@ -336,11 +336,8 @@ def test_a_move_into_a_hazard_is_vetoed_and_explained(flat):
     worlds, frames = empty_inputs(pl.H, [wall])
     plan = pl.plan(standing(x0), 200, worlds, frames)
     assert plan.veto is None
-    # no contact within the veto frames. A contact later is soft risk 1, charged RISK_FRAMES (50 frames, the
-    # former RISK_WEIGHT x FX_GROUND): about what 48 frames of waiting cost, so behind this strip (no way on)
-    # the chosen plan may run into it after frame 16 (measured: walk L 8f > run R 16f, contact at f24)
-    first = [k for k, p in enumerate(plan.path) if p[0] >= x0 + 30.0 - 4.0 - 6.0]
-    assert not first or first[0] > S.VETO_FRAMES
+    assert all(p[0] < x0 + 30.0 for p in plan.path)                     # never passes the strip (a predicted
+    # contact after the veto frames costs a whole death, DEATH_FRAMES, not a fixed 50 frames)
     hits = [a for a in plan.alternatives if a["reason"].startswith("hits h0 at frame")]
     assert hits, plan.alternatives
     assert plan.counts["stage1"]["vetoed"] > 0
