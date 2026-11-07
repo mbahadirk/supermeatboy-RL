@@ -37,6 +37,7 @@ WALL_PROBE = BODY + 1.0
 
 SHAPE_OPEN, SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE = 0, 1, 2, 3
 _DC, _DR = np.array([0, 1, 0, 1]), np.array([0, 0, 1, 1])     # box_overlap: the 2 x 2 cells a box can touch
+SUB = TILE / 2                                                 # travel: half blocks are 2 of 4 such squares
 
 
 def solid_now(words0: np.ndarray, words: np.ndarray) -> np.ndarray:
@@ -111,22 +112,26 @@ class Terrain:
         line, a slope: its diagonal, a full block: none; `lin`: solid where a u + b v + c > 0, u, v 0..1 in the
         cell), so the box's part inside a cell overlaps the solid when its corner furthest into the solid side
         is strictly inside. Touching is not overlapping. Outside the map: not solid."""
-        x = np.asarray(x, np.float64)
-        y = np.asarray(y, np.float64)
-        h = np.asarray(half, np.float64)
-        x0, x1 = ((x - h - self.ox) / TILE)[..., None], ((x + h - self.ox) / TILE)[..., None]
-        y0, y1 = ((y - h - self.oy) / TILE)[..., None], ((y + h - self.oy) / TILE)[..., None]
-        c = np.floor(x0).astype(np.int64) + _DC                   # the box spans at most 2 x 2 cells
-        r = np.floor(y0).astype(np.int64) + _DR
-        ua, ub = np.maximum(x0 - c, 0.0), np.minimum(x1 - c, 1.0)   # the box inside each cell, 0..1
-        va, vb = np.maximum(y0 - r, 0.0), np.minimum(y1 - r, 1.0)
-        L = self.lin[np.clip(r + 1, 0, self.H + 1), np.clip(c + 1, 0, self.W + 1)]   # border: open
+        x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
+        h = np.broadcast_to(np.asarray(half, np.float64), x.shape)
+        shape = x.shape
+        x, y, h = x.ravel(), y.ravel(), h.ravel()
+        x0, x1, y0, y1 = x - h, x + h, y - h, y + h
+        c = np.floor((x0[:, None] - self.ox) / TILE).astype(np.int64) + _DC      # the 2 x 2 cells a box touches
+        r = np.floor((y0[:, None] - self.oy) / TILE).astype(np.int64) + _DR
+        idx = np.clip(r + 1, 0, self.H + 1) * (self.W + 2) + np.clip(c + 1, 0, self.W + 1)   # border: open
+        ua = np.maximum((x0[:, None] - self.ox) / TILE - c, 0.0)
+        ub = np.minimum((x1[:, None] - self.ox) / TILE - c, 1.0)      # the box inside each cell, 0..1
+        va = np.maximum((y0[:, None] - self.oy) / TILE - r, 0.0)
+        vb = np.minimum((y1[:, None] - self.oy) / TILE - r, 1.0)
+        L = self.lin.reshape(-1, 3)[idx]
         A, B = L[..., 0], L[..., 1]
         val = np.where(A > 0, A * ub, A * ua) + np.where(B > 0, B * vb, B * va) + L[..., 2]
-        return ((val > 0) & (ub > ua) & (vb > va)).any(-1)
+        return ((val > 0) & (ub > ua) & (vb > va)).any(1).reshape(shape)
 
     def _line_form(self):
-        """`lin` (H + 2, W + 2, 3): per cell (a, b, c), solid where a u + b v + c > 0; a 1-cell open border."""
+        """`lin` (H + 2, W + 2, 3): per cell (a, b, c), solid where a u + b v + c > 0; a 1-cell open border.
+        Without slopes (rects_only) also travel's surface tables."""
         sh, nx, ny, oc = self.shape, self.nx.astype(np.float64), self.ny.astype(np.float64), self.open_corner
         lin = np.zeros((self.H + 2, self.W + 2, 3))
         lin[..., 2] = -1.0
@@ -137,6 +142,63 @@ class Terrain:
         for k, abc in enumerate(((1.0, 1.0, -1.0), (-1.0, 1.0, 0.0), (1.0, -1.0, 0.0), (-1.0, -1.0, 1.0))):
             L[(sh == SHAPE_SLOPE) & (oc == k)] = abc
         self.lin = lin
+        self.rects_only = not (sh == SHAPE_SLOPE).any()
+        if self.rects_only:
+            self._surfaces()
+
+    def _surfaces(self):
+        """travel's tables. Full and half blocks are unions of SUB x SUB squares (half a tile), so the map is a
+        grid G of those (rows along y). For each direction of motion, a table over the grid (along x
+        transposed): the nearest solid face a box's leading edge meets moving that way from each square,
+        cumulated along the motion, as a "falling along -axis" lookup in a mirrored frame for the + directions.
+        Each table has one -inf row before the map (nothing there) and -inf columns beside it."""
+        sh, nx, ny = self.shape, self.nx, self.ny
+        hm = sh == SHAPE_HALF
+        full = sh == SHAPE_FULL
+        G = np.zeros((2 * self.H, 2 * self.W), bool)                        # [row, col] of half-tile squares
+        for dr in (0, 1):
+            for dc in (0, 1):
+                part = hm & np.where(ny != 0, ny == (2 * dr - 1), nx == (2 * dc - 1))   # the half's two squares
+                G[dr::2, dc::2] = full | part
+        tabs, origins = [], []
+        for grid, oP, oQ in ((G, self.oy, self.ox), (G.T, self.ox, self.oy)):   # along y, along x
+            N = grid.shape[0]
+            for mirror in (False, True):                                    # -axis, +axis (mirrored)
+                g = grid[::-1] if mirror else grid
+                o = -(oP + SUB * N) if mirror else oP                       # the mirrored frame's origin
+                top = np.where(g, o + SUB * (np.arange(N)[:, None] + 1), -np.inf)
+                t = np.full((N + 1, g.shape[1] + 2), -np.inf)
+                t[1:, 1:-1] = np.maximum.accumulate(top, axis=0)            # the highest face at or below
+                tabs.append(t)
+                origins.append((o, oQ))
+        self._tab_flat = np.concatenate([t.ravel() for t in tabs])
+        base = np.cumsum([0] + [t.size for t in tabs[:-1]])
+        # per table: origin along, origin across, last row, last column, offset, row length (floats: one gather)
+        self._tab_par = np.array([(o, q, t.shape[0] - 1, t.shape[1] - 1, b, t.shape[1])
+                                  for (o, q), t, b in zip(origins, tabs, base)], np.float64)
+
+    def travel(self, px, py, d, along_y, half: float) -> np.ndarray:
+        """How far (0..1) a box (centre px, py, half size `half`) can move by d along one axis (x, or y where
+        along_y) before it overlaps a solid shape with positive area: the nearest solid face across the box's
+        path at or beyond its leading edge; a solid the box already overlaps that way stops it at once (0). No
+        move (d 0): 1. Exact for full and half blocks (`_surfaces`); only for a map without slopes
+        (rects_only)."""
+        assert self.rects_only, "travel: a map with slopes"
+        ay, d = np.asarray(along_y, bool), np.asarray(d, np.float64)
+        up = d > 0
+        par = np.take(self._tab_par, np.where(ay, 0, 2) + up, axis=0)     # table y-, y+, x-, x+: its parameters
+        oP, oQ, top_i, last_j, base, nc = par.T
+        P = np.where(up, -1.0, 1.0) * np.where(ay, py, px)                  # along (mirrored for + moves)
+        lead = P - half
+        i = np.minimum(np.maximum(np.ceil((lead - oP) / SUB), 0.0), top_i)  # the square below the edge, +1
+        u = (np.where(ay, px, py) - oQ) / SUB                               # across, in squares
+        hs = half / SUB
+        j0, j1 = np.floor(u - hs), np.ceil(u + hs) - 1                       # the columns the box overlaps
+        js = (j0, j1) if half <= SUB / 2 else (j0, j1, np.floor(0.5 * (j0 + j1)))   # 2, or 3 for a wider box
+        j = np.minimum(np.maximum(np.stack(js) + 1, 0.0), last_j)            # -inf columns beside the map
+        face = np.take(self._tab_flat, (base + i * nc + j).astype(np.int64)).max(0)
+        t = np.minimum(np.maximum((lead - face) / np.maximum(np.abs(d), 1e-12), 0.0), 1.0)
+        return np.where(d == 0, 1.0, t)
 
     def opened(self, cells) -> "Terrain":
         """A copy with these cells [(row, col)] open (lock tiles an agent's keys opened)."""

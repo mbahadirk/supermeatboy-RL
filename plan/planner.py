@@ -120,7 +120,6 @@ HAZ_FAR = 300.0                              # wm.features.hazard_features clips
 FINAL_MS0 = 60.0                             # first guess of the final stage's cost (then measured, averaged)
 COLLIDE_TOL = 1.0                            # units: the collision guard moves imagined bodies overlapping more
 CONTACT_EPS = 0.01                           # units: a body put back to contact is this clear of the solid
-CONTACT_SAMPLES = 16                         # per pass of the contact search (2 passes: 1/256 of the move)
 
 
 # ---- world model rollouts with per-row time offsets -------------------------------------------------------
@@ -189,60 +188,55 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
 
 
 def collide(ter: Terrain, prev: np.ndarray, s: np.ndarray, tol: float = COLLIDE_TOL) -> np.ndarray:
-    """The collision guard: imagined rows s (just stepped from prev) whose body box (half size BODY) overlaps
-    solid tiles by more than `tol` are put back to contact, per axis as a platformer resolves it. If moving
-    only along x (from the previous position) is free, x is kept and y goes back to where the box touches
-    (vy = 0); else if moving only along y is free, y is kept and x goes back to contact (vx = 0); else x then
-    y, each to contact (a cut axis' velocity 0). Contact: the box shrunk by CONTACT_EPS just clear (by `tol`
-    when the start already overlapped that much). Rows whose previous position already overlapped by more
-    than `tol` are left as the model said (no free position to go back to). Flags, movement state and the
-    jump key stay what the model predicted (the next step sees the corrected position and velocity). In
-    place; returns which rows were clipped."""
-    h = BODY - tol
-    hit = ter.box_overlap(s["x"], s["y"], h)
-    if not hit.any():
-        return hit
-    i = np.nonzero(hit)[0]
-    x0, y0 = prev["x"][i].astype(np.float64), prev["y"][i].astype(np.float64)
-    x1, y1 = s["x"][i].astype(np.float64), s["y"][i].astype(np.float64)
-    free = ~ter.box_overlap(np.concatenate([x0, x1, x0]), np.concatenate([y0, y0, y1]), h).reshape(3, -1)
-    ok = free[0]
-    a, b = free[1] & ok, free[2] & ok & ~free[1]
-    c = ok & ~free[1] & ~free[2]
-    # first axis: y for a (from (x1, y0)), x for b (from (x0, y1)) and c (from (x0, y0))
-    px, py = np.where(a, x1, x0), np.where(b, y1, y0)
-    dx, dy = np.where(a, 0.0, x1 - x0), np.where(a, y1 - y0, 0.0)
-    t = _contact(ter, px, py, dx, dy, tol)
-    nx, ny = px + t * dx, py + t * dy
-    cut_x, cut_y = (b | c) & (t < 1), a & (t < 1)
-    if c.any():                                      # then y, from where x stopped
+    """The collision guard: imagined rows s (just stepped from prev) whose body box (half size BODY) would go
+    into solid tiles by more than `tol` are put back to contact, per axis as a platformer resolves it: if
+    moving only along x (from the previous position) is free, x is kept and y goes back to where the box
+    touches (vy = 0); else if moving only along y is free, y is kept and x goes back to contact (vx = 0); else
+    x then y, each to contact (a cut axis' velocity 0). "Free" and "touches": Terrain.travel of the box shrunk
+    by `tol` (exact on the guard's map of full and half blocks, slopes open: ter.rects_only); a cut move is
+    then backed off to CONTACT_EPS of overlap (never behind its start). A body already deeper in a solid
+    than that stays where it was. Flags, movement state and the jump key stay what the model predicted (the
+    next step sees the corrected position and velocity). Cost per step: one travel pass of every row (x
+    alone, y after x, y alone, x after y: a table lookup each), a second only for rows blocked both ways. In
+    place; returns which rows were moved."""
+    m = len(s)
+    x0, y0, x1, y1 = prev["x"], prev["y"], s["x"], s["y"]
+    dx, dy = x1 - x0, y1 - y0
+    D = np.concatenate([dx, dy, dy, dx])
+    q = ter.travel(np.concatenate([x0, x1, x0, x0]), np.concatenate([y0, y0, y0, y1]), D, _AXES4(m),
+                   BODY - tol)                           # x alone / y after x / y alone / x after y
+    e = np.where(q < 1, np.maximum(q - (tol - CONTACT_EPS) / np.maximum(np.abs(D), 1e-12), 0.0), 1.0)
+    q, e = q.reshape(4, m), e.reshape(4, m)              # a cut move backed off to CONTACT_EPS of overlap
+    a = q[0] == 1                                        # x free: x kept, y after x
+    b = ~a & (q[2] == 1)                                 # else y free: y kept, x after y
+    c = ~a & ~b                                          # else x, then y from there
+    nx = np.where(a, x1, x0 + np.where(b, e[3], e[0]) * dx)
+    ny = np.where(a, y0 + e[1] * dy, y1)
+    cut_x = ~a & (c | (q[3] < 1))
+    cut_y = (a & (q[1] < 1)) | c
+    if c.any():
         k = np.nonzero(c)[0]
-        t2 = _contact(ter, nx[k], y0[k], np.zeros(len(k)), (y1 - y0)[k], tol)
-        ny[k] = y0[k] + t2 * (y1 - y0)[k]
+        t2 = ter.travel(nx[k], y0[k], dy[k], np.ones(len(k), bool), BODY - tol)
+        e2 = np.where(t2 < 1, np.maximum(t2 - (tol - CONTACT_EPS) / np.maximum(np.abs(dy[k]), 1e-12), 0.0), 1.0)
+        ny[k] = y0[k] + e2 * dy[k]
         cut_y[k] = t2 < 1
-    j = i[ok]
-    s["x"][j], s["y"][j] = nx[ok], ny[ok]
-    s["vx"][i[cut_x]] = 0.0
-    s["vy"][i[cut_y]] = 0.0
-    out = np.zeros(len(s), bool)
-    out[j] = True
-    return out
+    moved = cut_x | cut_y
+    np.copyto(s["x"], nx, casting="unsafe", where=moved)
+    np.copyto(s["y"], ny, casting="unsafe", where=moved)
+    np.copyto(s["vx"], 0.0, casting="unsafe", where=cut_x)
+    np.copyto(s["vy"], 0.0, casting="unsafe", where=cut_y)
+    return moved
 
 
-def _contact(ter: Terrain, px, py, dx, dy, tol: float, n: int = CONTACT_SAMPLES) -> np.ndarray:
-    """How far along (dx, dy) from (px, py) the body can move (0..1) before overlapping solid: the box shrunk by
-    CONTACT_EPS (by `tol` where the start overlaps more than that) at n samples of the move, then n samples
-    between the last free and the first blocked one (resolution 1 / n^2 of the move)."""
-    hs = np.where(ter.box_overlap(px, py, BODY - CONTACT_EPS), BODY - tol, BODY - CONTACT_EPS)
-    lo, w = np.zeros(len(px)), np.ones(len(px))
-    for _ in range(2):
-        f = lo[:, None] + w[:, None] * np.arange(1, n + 1) / n                       # (rows, n)
-        blocked = ter.box_overlap(px[:, None] + f * dx[:, None], py[:, None] + f * dy[:, None], hs[:, None])
-        first = np.where(blocked.any(1), blocked.argmax(1), n)                     # first blocked sample
-        done = first == n
-        lo = np.where(done, lo + w, lo + w * first / n)
-        w = np.where(done, 0.0, w / n)
-    return np.minimum(lo, 1.0)
+_AXES = {}
+
+
+def _AXES4(n: int) -> np.ndarray:
+    """travel's axis flags for [x alone, y after x, y alone, x after y] of n rows (cached per n)."""
+    a = _AXES.get(n)
+    if a is None:
+        a = _AXES[n] = np.repeat(np.array([False, True, True, False]), n)
+    return a
 
 
 HAZ_COLS = slice(FEAT_DIM - 6 - 5 * N_HAZ, FEAT_DIM - 6)     # wm.features.featurize: [..., hazards, platform]

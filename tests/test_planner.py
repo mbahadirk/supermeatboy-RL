@@ -94,6 +94,24 @@ def test_box_overlap_follows_the_exact_shapes():
     assert not Terrain(t.words0, 0.0, 0.0, slopes=False).box_overlap(np.array([417.0]), np.array([49.0]), h)[0]
 
 
+def test_travel_is_exact_for_full_and_half_blocks():
+    t = Terrain(terrain().words0, 0.0, 0.0, slopes=False)
+    up = np.array
+    Y, X = True, False
+    # down onto the lower-half block (top 50) from 60 by 8: stops at 55 (2 of 8 left: t = 5/8)
+    assert t.travel(up([310.0]), up([60.0]), up([-8.0]), up([Y]), 5.0)[0] == pytest.approx(5 / 8)
+    # right into the wall column (x 200) from 190 by 10: stops at 195 (half 5): t = 0.5; left: free
+    assert t.travel(up([190.0, 190.0]), up([100.0, 100.0]), up([10.0, -10.0]), up([X, X]), 5.0).tolist() == [0.5, 1.0]
+    # beside the half block's open upper half (y 50..60): a box above it moves sideways freely
+    assert t.travel(up([290.0]), up([56.0]), up([40.0]), up([X]), 5.0)[0] == 1.0
+    # outside the map: nothing to hit; a long move is cut at the first block
+    assert t.travel(up([100.0]), up([-50.0]), up([-30.0]), up([Y]), 5.0)[0] == 1.0
+    assert t.travel(up([100.0]), up([80.0]), up([-60.0]), up([Y]), 5.0)[0] == pytest.approx(35 / 60)
+    # already inside the floor: no deeper (0), but out of it freely
+    assert t.travel(up([100.0, 100.0]), up([42.0, 42.0]), up([-3.0, 3.0]), up([Y, Y]), 5.0).tolist() == [0.0, 1.0]
+    assert not Terrain(terrain().words0, 0.0, 0.0).rects_only      # with the slope: no travel
+
+
 def _rows(xy, v=(0.0, 0.0)):
     from wm.buffer import ROW
     r = np.zeros(len(xy), ROW)
@@ -103,27 +121,33 @@ def _rows(xy, v=(0.0, 0.0)):
 
 
 def test_collide_lands_on_the_half_floor_and_keeps_the_free_axis():
-    from plan.planner import collide
-    t = terrain()
+    from plan.planner import CONTACT_EPS, collide
+    from realpath import BODY
+    t = Terrain(terrain().words0, 0.0, 0.0, slopes=False)          # the guard's map: slopes open
     # falling into the lower-half block (top y = 50) while moving right: x kept, y back to contact, vy 0
     prev, s = _rows([(305.0, 60.0)]), _rows([(308.0, 47.0)], (180.0, -400.0))
     s2 = s.copy()
     assert collide(t, prev, s2).tolist() == [True]
-    assert s2["x"][0] == 308.0 and abs(s2["y"][0] - 56.0) < 0.05 and s2["y"][0] >= 56.0
+    assert s2["x"][0] == 308.0 and abs(s2["y"][0] - (50.0 + BODY - CONTACT_EPS)) < 1e-4   # touching, exactly
     assert s2["vy"][0] == 0.0 and s2["vx"][0] == 180.0
     # running into the wall column (x 200..220) from the left: y kept, x back to contact (194), vx 0
     prev, s = _rows([(190.0, 100.0)]), _rows([(197.0, 98.0)], (390.0, -50.0))
     assert collide(t, prev, s).tolist() == [True]
-    assert abs(s["x"][0] - 194.0) < 0.05 and s["x"][0] <= 194.0 and s["y"][0] == 98.0
+    assert abs(s["x"][0] - (200.0 - BODY + CONTACT_EPS)) < 1e-4 and s["y"][0] == 98.0
     assert s["vx"][0] == 0.0 and s["vy"][0] == -50.0
     # into the corner of floor and wall: both axes cut
     prev, s = _rows([(190.0, 50.0)]), _rows([(197.0, 42.0)], (390.0, -400.0))
     assert collide(t, prev, s).tolist() == [True]
-    assert abs(s["x"][0] - 194.0) < 0.05 and abs(s["y"][0] - 46.0) < 0.05 and s["vx"][0] == 0 and s["vy"][0] == 0
-    # within the tolerance (0.5 into the floor), clear, or starting already deep inside: left alone
-    prev, s = _rows([(100.0, 47.0), (100.0, 60.0), (100.0, 30.0)]), _rows([(100.0, 45.5), (104.0, 55.0), (100.0, 25.0)])
+    assert abs(s["x"][0] - (200.0 - BODY + CONTACT_EPS)) < 1e-4 and abs(s["y"][0] - (40.0 + BODY - CONTACT_EPS)) < 1e-4
+    assert s["vx"][0] == 0 and s["vy"][0] == 0
+    # within the tolerance (0.5 into the floor) or clear: left alone
+    prev, s = _rows([(100.0, 47.0), (100.0, 60.0)]), _rows([(100.0, 45.5), (104.0, 55.0)])
     s0 = s.copy()
-    assert collide(t, prev, s).tolist() == [False, False, False] and np.array_equal(s, s0)
+    assert collide(t, prev, s).tolist() == [False, False] and np.array_equal(s, s0)
+    # starting deep inside the floor: held where it was (inside a solid every way is blocked)
+    prev, s = _rows([(100.0, 30.0)]), _rows([(103.0, 25.0)], (180.0, -300.0))
+    assert collide(t, prev, s).tolist() == [True] and (s["x"][0], s["y"][0]) == (100.0, 30.0)
+    assert s["vx"][0] == 0 and s["vy"][0] == 0
     # through the open cell next to the half block (the hole): nothing to clip
     prev, s = _rows([(290.0, 70.0)]), _rows([(290.0, 60.0)])
     assert collide(t, prev, s).tolist() == [False]

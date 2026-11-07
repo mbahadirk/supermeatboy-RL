@@ -1424,12 +1424,12 @@
     "from_prev": false,
     "score": {
      "progress": 2.5230447378299514,
-     "progress_credit": 1.0883966719734108,
+     "progress_credit": 1.0883462168203655,
      "risk": 0.0,
-     "uncertainty": 0.4313822326073898,
-     "spread_end": 18.407607313008388,
+     "uncertainty": 0.43136223488309705,
+     "spread_end": 18.40807089695589,
      "failure": 0.0,
-     "total": 1.0883966719734108
+     "total": 1.0883462168203655
     },
     "v_start": 55.093607692702584,
     "v_end": 52.57056295487263,
@@ -1446,7 +1446,7 @@
        "run wall-jump R hold 15",
        "run-jump R hold 22"
       ],
-      "total": 0.9812578275210074,
+      "total": 0.9832598832081942,
       "progress": 2.5230447378299514,
       "stage": "final",
       "reason": "lower score than chosen: progress 2.5 vs 2.5 (uncertain: spread 19u, credit x0.39)",
@@ -1457,7 +1457,7 @@
        "run-jump R hold 22",
        "run wall-jump R hold 15"
       ],
-      "total": 0.424126793609076,
+      "total": 0.4241266752941681,
       "progress": 2.4987806691180223,
       "stage": "final",
       "reason": "lower score than chosen: progress 2.5 vs 2.5 (uncertain: spread 28u, credit x0.17)",
@@ -1468,7 +1468,7 @@
        "run-jump R hold 22",
        "run-jump R hold 15 after 4f"
       ],
-      "total": 0.4170649600831804,
+      "total": 0.4170290978105624,
       "progress": 2.4987806691180223,
       "stage": "final",
       "reason": "lower score than chosen: progress 2.5 vs 2.5 (uncertain: spread 28u, credit x0.17)",
@@ -1479,7 +1479,7 @@
        "run-jump R hold 22",
        "run-jump R hold 15"
       ],
-      "total": 0.4060524590533745,
+      "total": 0.4060379167722255,
       "progress": 2.4987806691180223,
       "stage": "final",
       "reason": "lower score than chosen: progress 2.5 vs 2.5 (uncertain: spread 28u, credit x0.16)",
@@ -1490,7 +1490,7 @@
        "run-jump R hold 22",
        "run-jump R hold 10 after 8f"
       ],
-      "total": 0.3625186382866908,
+      "total": 0.3624755661236793,
       "progress": 2.2987806691180226,
       "stage": "final",
       "reason": "lower score than chosen: progress 2.3 vs 2.5 (uncertain: spread 28u, credit x0.16)",
@@ -1626,7 +1626,7 @@
      "progress_credit": 11.414213562373092,
      "risk": 0.0,
      "uncertainty": 1.0,
-     "spread_end": 4.681149128437355,
+     "spread_end": 4.670052160367065,
      "failure": 0.0,
      "total": 11.414213562373092
     },
@@ -1656,7 +1656,7 @@
        "run R 24f",
        "run-jump R hold 10 after 8f"
       ],
-      "total": 10.580301766220499,
+      "total": 10.588420230587317,
       "progress": 10.614213562373092,
       "stage": "final",
       "reason": "lower score than chosen: progress 10.6 vs 11.4",
@@ -1750,5 +1750,5 @@
    }
   ]
  ],
- "guarded_about": "re-recorded with the collision guard (plan/planner.py collide, tolerance 1 unit): the cases in which it clipped a candidate; every other case is unchanged"
+ "guarded_about": "re-recorded with the collision guard (plan/planner.py collide, tolerance 1 unit; exact contact by Terrain.travel since the guard's speed-up): the cases in which it clipped a candidate; every other case is unchanged"
 }
