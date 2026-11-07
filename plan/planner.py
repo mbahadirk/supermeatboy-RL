@@ -16,7 +16,7 @@ Search, per decision (Planner.plan):
    best is chosen, unless the switch rule below keeps the previous plan.
 
 Switch rule (hysteresis, Planner(hysteresis=...), agent.py / plan/offline.py --hysteresis, frames, default
-HYSTERESIS_FRAMES = 3 there): the shifted previous plan is kept unless the best other candidate's estimate is lower
+HYSTERESIS_FRAMES = 160 there, measured re-score noise): the shifted previous plan is kept unless the best other candidate's estimate is lower
 by more than `hysteresis` frames (both successes: SUCCESS_MARGIN frames earlier at the goal); a success always
 beats a non-success; a vetoed previous plan never blocks a switch; a previous plan whose soft risk is over the
 best's by more than RISK_SWITCH is dropped. hysteresis 0 (the default here): no rule, the best total is chosen.
@@ -150,7 +150,11 @@ VETO_TIE = 1e-6                              # vetoed: by veto frame, then (tiny
 SUCCESS_SCORE = 1e5                          # a plan touching the goal at frame t: SUCCESS_SCORE - t
 TIE = 1e-3                                   # successes at the same frame: tie-break by their penalty frames
 SUCCESS_MARGIN = 3                           # frames: a success replaces a successful previous plan only if earlier
-HYSTERESIS_FRAMES = 3.0                      # agent.py / plan/offline.py --hysteresis default (frames)
+# agent.py / plan/offline.py --hysteresis default (frames): the 90th percentile (rounded) of how much a kept plan's
+# re-scored estimate moves between consecutive decisions triggered only by the interval, beyond the frames played
+# (206 pairs: new-code closed loops on 1-13, 1-8, 1-14 and recorded 1-14 decisions re-planned; median 16, 75% 60,
+# 90% 160 frames; the tail is soft risk and completion deaths changing, each worth up to DEATH_FRAMES)
+HYSTERESIS_FRAMES = 160.0
 RISK_SWITCH = 0.2                            # soft risk: a previous plan riskier than the best by more is dropped
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
 N_ALTERNATIVES = 5

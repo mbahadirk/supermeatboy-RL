@@ -21,7 +21,7 @@ error tube (--tube) or its support, new danger on the remaining path, fewer than
 goal or key touch that did not happen; --triggers off: every --replan frames only, the old behaviour with
 --replan 2); each decision's triggers go into its plans.jsonl line ("trigger"). The real
 states are checked against earlier predictions (surprises) and against the moves' expected progress (failed
-moves). Plans are scored in estimated frames to the goal (plan/planner.py); --hysteresis is in frames (default 3);
+moves). Plans are scored in estimated frames to the goal (plan/planner.py); --hysteresis is in frames (default 160, the measured re-score noise);
 each decision's inputs reach H + the airborne completion's 90 frames. A death of a planned agent the geometry does
 not explain (plan.safety.explain_death) is remembered (plan.safety.DeathMemory, saved to --death-memory): the
 planner avoids that place at that wave frame from then on. Every death of a planned agent (explained or not)
