@@ -47,7 +47,7 @@ def _runner(tmp_path, tel):
     import agent
     args = agent.build_parser().parse_args(
         ["--agents", "2", "--replan", "2", "--budget-ms", "60", "--model", MODEL, "--name", str(tmp_path / "run"),
-         "--wm-collect", "--death-memory", str(tmp_path / "deaths.json"), "--telemetry", "off",
+         "--wm-collect", "--death-memory", str(tmp_path / "deaths.json"), "--move-memory", str(tmp_path / "moves.json"), "--telemetry", "off",
          "--best-times", str(tmp_path / "best_times.json")])
     r = agent.Runner(args, telemetry=tel)
     r.script = _FakeScript()
@@ -279,7 +279,7 @@ def test_finish_times_and_best_times(tmp_path, capsys):
     best = tmp_path / "best_times.json"
     args = agent.build_parser().parse_args(
         ["--agents", "1", "--explore", "1", "--replan", "2", "--budget-ms", "40", "--model", MODEL,
-         "--name", str(tmp_path / "run"), "--death-memory", str(tmp_path / "deaths.json"), "--telemetry", "off",
+         "--name", str(tmp_path / "run"), "--death-memory", str(tmp_path / "deaths.json"), "--move-memory", str(tmp_path / "moves.json"), "--telemetry", "off",
          "--best-times", str(best)])
     tel = _CaptureTel()
     r = agent.Runner(args, telemetry=tel)
@@ -395,7 +395,7 @@ def test_s_writes_the_agents_best_after_one_save_backup(tmp_path, capsys):
     (game / "UserData" / "savegame.dat").write_bytes(b"\x01\x02save")
     args = agent.build_parser().parse_args(
         ["--agents", "0", "--explore", "1", "--name", str(tmp_path / "run"), "--telemetry", "off",
-         "--death-memory", str(tmp_path / "deaths.json"), "--best-times", str(best)])
+         "--death-memory", str(tmp_path / "deaths.json"), "--move-memory", str(tmp_path / "moves.json"), "--best-times", str(best)])
     r = agent.Runner(args, telemetry=None)
     r.script = _FakeScript()
     r.backup_root = str(tmp_path / "backups")

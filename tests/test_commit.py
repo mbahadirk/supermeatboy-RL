@@ -40,7 +40,7 @@ def old_mode_run(tmp: str, extra=(), tol="default") -> dict:
             super().__init__(*a, **kw)
     args = agent.build_parser().parse_args(
         ["--agents", "2", "--replan", "2", "--budget-ms", "60", "--model", MODEL, "--name", os.path.join(tmp, "run"),
-         "--death-memory", os.path.join(tmp, "deaths.json"), "--telemetry", "off", "--threads", "1",
+         "--death-memory", os.path.join(tmp, "deaths.json"), "--move-memory", os.path.join(tmp, "moves.json"), "--telemetry", "off", "--threads", "1",
          "--best-times", os.path.join(tmp, "best_times.json"), *extra])
     old_planner = agent.Planner
     agent.Planner = NoDeadline
@@ -71,7 +71,7 @@ def test_old_replan_mode_reproduces_the_old_schedule(tmp_path):
 
 
 def _clipped(p) -> int:
-    return sum(int((p["counts"].get(s) or {}).get("clipped") or 0) for s in ("stage1", "stage2", "final"))
+    return sum(int((p["counts"].get(s) or {}).get("clipped") or 0) for s in ("stage1", "stage2", "final")) +         int((p["counts"].get("final") or {}).get("completion_clipped") or 0)
 
 
 @need_data
@@ -371,6 +371,7 @@ if __name__ == "__main__" and "--write" in sys.argv:
     torch.set_num_threads(2)
     os.makedirs(os.path.dirname(OLD), exist_ok=True)
     with open(OLD, "w", encoding="utf-8") as f:
-        json.dump({"about": "agent.py decisions with --replan 2 before the replan triggers (tests/test_commit.py)",
+        json.dump({"about": "agent.py decisions with --replan 2 --triggers off --hysteresis 0 (the old replan mode; "
+                            "tests/test_commit.py), re-recorded with the step-4 score in frames",
                    "model_sha256": model_digest(), **out}, f)
     print(f"wrote {OLD}: {len(out['decisions'])} decisions")

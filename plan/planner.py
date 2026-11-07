@@ -811,6 +811,7 @@ class Planner:
         mem = slice(self.member, self.member + 1)
         ck = {"terrain": self.guard_terrain(keys), "tol": self.collide_tol}
         done, rolled = 0, 0
+        clipped = np.zeros(n, bool)
         while done < Kmax:
             act_i = np.nonzero(state == 0)[0]
             if not len(act_i):
@@ -819,6 +820,8 @@ class Planner:
             out = imagine(self.model, mem, self.geom, s[act_i], np.repeat(acts[act_i, None], K, 1), dt_ms, worlds,
                           offsets=np.full(len(act_i), H + done), **ck)
             rolled += len(act_i) * K
+            if out["clip"] is not None:
+                clipped[act_i] |= out["clip"][0].any(1)
             x, y, vy = out["x"][0], out["y"][0], out["vy"][0]               # (a, K+1)
             fr = [frames[min(H + done + k, len(frames) - 1)] if k else None for k in range(K + 1)]
             fr = _near_frames(fr, x[None], y[None])
@@ -883,6 +886,7 @@ class Planner:
                    "on": on[i] if ok else ("air" if not risk else None), "died": died,
                    "hits": {names[j]: hit[j] for j in idx if state[j] == 3}}
             res.append((float(est), risk, rec, [[float(a), float(b)] for a, b in zip(xs[i, :kk + 1], ys[i, :kk + 1])]))
+        self.completion_clipped = int(clipped.sum())
         self.last_completion = {"frames": done, "rows": n, "flying_at_end": int((state == 0).sum()),
                                 "xs": xs, "ys": ys, "names": names,
                                 "states": state.copy(), "at": at.copy()}
@@ -1087,6 +1091,7 @@ class Planner:
         tc = time.perf_counter()
         need = np.nonzero(~lands & ~succ3 & ~saf.veto)[0] if self.complete_max > 0 else np.zeros(0, np.int64)
         rolled = 0
+        self.completion_clipped = 0
         if len(need):
             mi = min(self.member, E - 1)
             res, rolled = self.complete(out3["last"][mi, need], acts3[need, H - 1], legs_e[mi, need], worlds,
@@ -1117,7 +1122,7 @@ class Planner:
         counts["final"] = {"candidates": n3, "members": E, "steps": H, "vetoed": int(saf.veto.sum()),
                            "prev_included": prev_idx >= 0, "goal": int(succ3.sum()), "start_in_goal": start_in_goal,
                            "clipped": n_clip(out3["clip"]), "landing": int(lands.sum()), "completed": int(len(need)),
-                           "completion_rows_frames": int(rolled),
+                           "completion_rows_frames": int(rolled), "completion_clipped": self.completion_clipped,
                            "completion_inputs": int(min(len(worlds), len(frames) - 1)),
                            "safe_alternatives": safe_alts,
                            "completions": [None if r is None else {k: r[k] for k in ("continuation", "frames", "on", "died")}

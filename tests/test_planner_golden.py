@@ -1,6 +1,7 @@
-"""Plans that touch no goal and no key score exactly as before goal / key contact was added (plan/planner.py):
-the decisions below were recorded with the planner before that change (tests/data/planner_golden.json, with
-the world model's digest) and are compared field by field, floats exactly. Skipped without the model, or
+"""Plans that touch no goal and no key score exactly as recorded (plan/planner.py): the decisions below were
+re-recorded when the score became estimated frames to the goal (step 4: time field, airborne completion,
+point-of-no-return memory; tests/data/planner_golden.json, with the world model's digest) and are compared
+field by field, floats exactly; goal / key contact must not change them. Skipped without the model, or
 when the model file is not the one the record was made with.
 
 The collision guard (plan/planner.py collide): with the guard off every case is the record ("cases"); with
@@ -77,19 +78,19 @@ def cases(tol="default"):
     torch.set_num_threads(1)
     out = []
     lv, pl = _flat(tol=tol)
-    worlds, frames = _inputs(pl.H)
+    worlds, frames = _inputs(pl.future_frames)               # inputs as decisions get them: H + the completion
     st = state_row(210.0, 46.0, 0.0, 0.0, 0, 5, 0, 0)
     out.append(("flat standing", record(pl.plan(st, 100, worlds, frames))))
     out.append(("flat standing, previous plan", record(pl.plan(st, 102, worlds, frames))))
     pl.new_wave()
-    worlds, frames = _inputs(pl.H, [(240.0, 150.0, 4.0, 150.0, 0.0)])
+    worlds, frames = _inputs(pl.future_frames, [(240.0, 150.0, 4.0, 150.0, 0.0)])
     out.append(("flat hazard strip", record(pl.plan(st, 200, worlds, frames))))
     pl.new_wave()
-    worlds, frames = _inputs(pl.H, [(330.0, 60.0, 10.0, 10.0, 0.0)])
+    worlds, frames = _inputs(pl.future_frames, [(330.0, 60.0, 10.0, 10.0, 0.0)])
     air = state_row(260.0, 120.0, 240.0, -100.0, 0, 7, 0, 0)
     out.append(("flat airborne, hazard ahead", record(pl.plan(air, 50, worlds, frames))))
     lvk, plk = _flat(keys=[(800.0, 50.0)], tol=tol)                        # a key far away: two legs
-    worlds, frames = _inputs(plk.H)
+    worlds, frames = _inputs(plk.future_frames)
     out.append(("flat with a far key", record(plk.plan(st, 100, worlds, frames))))
     if os.path.isdir(DATA_113):
         from mpc.future import FutureWorld
@@ -107,7 +108,7 @@ def cases(tol="default"):
                     fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), lv3.hz_keep, None, 16.667,
                                lv3.hz_grow)
             r = [r for r in rows if r["frame"] == f and r["status"] == 0][0]
-            worlds, frames, _ = future_inputs(fw, f, pl3.H, 16.667, lv3.name)
+            worlds, frames, _ = future_inputs(fw, f, pl3.future_frames, 16.667, lv3.name)
             pl3.prev = {}
             plan = pl3.plan(state_row(r["x"], r["y"], r["vx"], r["vy"], r["flags"], r["state"], r["keys"], r["held"]),
                             f, worlds, frames)
@@ -132,7 +133,7 @@ def _same(a, b, path=""):
 
 def clipped(rec) -> int:
     """Candidates the collision guard clipped in any stage of a recorded decision."""
-    return sum(int(rec["counts"][s].get("clipped") or 0) for s in ("stage1", "stage2", "final"))
+    return sum(int(rec["counts"][s].get("clipped") or 0) for s in ("stage1", "stage2", "final")) +         int(rec["counts"]["final"].get("completion_clipped") or 0)               # completion rollouts too
 
 
 def _check(now, want):
@@ -196,8 +197,8 @@ if __name__ == "__main__" and "--write" in sys.argv:
     os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
     off = cases(None)
     on = dict(cases("default"))
-    data = {"about": "planner decisions before goal / key contact (tests/test_planner_golden.py); guarded: the "
-                     "cases re-recorded with the collision guard because it clipped a candidate in them",
+    data = {"about": "planner decisions scored in estimated frames to the goal (step 4; tests/test_planner_golden.py); "
+                     "guarded: the cases recorded with the collision guard because it clipped a candidate in them",
             "model_sha256": model_digest(), "cases": off,
             "guarded": [[k, v] for k, v in on.items() if clipped(v) > 0]}
     with open(GOLDEN, "w", encoding="utf-8") as f:
