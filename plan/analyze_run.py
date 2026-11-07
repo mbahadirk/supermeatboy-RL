@@ -19,11 +19,14 @@ the decisions' triggers by kind (plans.jsonl "trigger", plan/commit.py), the swi
 switched plans / all decisions) and the gains the kept plans were kept against (plans.jsonl "switch"; runs
 before these fields report none); the share of decisions whose next 16 actions differ from the previous plan's
 remaining ones (all, airborne); the score margin chosen - best rejected, among plans that do not touch the
-goal (V units; successes, total = SUCCESS_SCORE - touch frame, are compared with the best rejected success by
-their touch frames instead: success_margin, in frames); uncertainty factor shares; plans ending supported; the share of decisions whose chosen plan the collision guard
-clipped (plans.jsonl "model_clipped"; older runs: none); the position error per
+goal (frames: runs scored by the estimated frames to the goal, score.estimate; older runs V units; successes,
+total = SUCCESS_SCORE - touch frame, are compared with the best rejected success by their touch frames instead:
+success_margin, in frames); uncertainty factor shares (older runs only); plans ending supported; chosen plans
+completed in the air (Plan.completion) and landing (score.landing); the share of decisions whose chosen plan
+the collision guard clipped (plans.jsonl "model_clipped"; older runs: none); the position error per
 horizon for followed and not followed predictions (alive agents only); per level: decisions, no-progress
-share (progress <= 0.05), dead-end ends, the most common first-move families, deaths per cause, finishes and
+share (frames: T(start) - estimate <= 0, the plan does not get closer faster than time passes; older runs:
+progress <= 0.05 V units), dead-end ends, the most common first-move families, deaths per cause, finishes and
 their times (times.jsonl or finish events; for older runs without them, the wave length of a 'quota' wave a
 planned agent finished, labelled as an estimate).
 """
@@ -48,8 +51,9 @@ from plan.commit import kind_of                    # noqa: E402
 RUNS = os.path.join(HERE, "runs")
 HORIZONS = (1, 4, 8, 16, 24, 32, 48)
 CHANGE_WINDOW = 16                 # actions compared for "plan changed"
-NO_PROGRESS = 0.05                 # plan.planner.NO_PROGRESS
-NEAR_TIE = 0.1
+NO_PROGRESS = 0.0                  # frames: plan.planner.NO_PROGRESS (T(start) - estimate not above it)
+NO_PROGRESS_V = 0.05               # older runs (V units)
+NEAR_TIE = 0.1                     # V units (older runs); frames: NEAR_TIE_FRAMES
 SUCCESS_SCORE = 1e5                # plan.planner.SUCCESS_SCORE: a success's total is SUCCESS_SCORE - touch frame
 NEAR_TIE_FRAMES = 3                # successes whose touch frames are this close (plan.planner.SUCCESS_MARGIN)
 FRAME_MS = 16.667                  # the locked time step (older runs' finishes have no dt)
@@ -138,11 +142,18 @@ def slim(d: dict) -> dict:
     path = d.get("path") or []
     c2 = (d.get("counts") or {}).get("stage2") or {}
     chosen = d.get("chosen") or []
+    frames = "estimate" in sc                                          # scored in frames (else older V units)
+    if frames:
+        t0, est = sc.get("t_start"), sc.get("estimate")
+        progress = None if t0 is None or est is None else t0 - est
+    else:
+        progress = sc.get("progress")
     return {"frame": int(d["frame"]), "actions": [int(a) for a in d.get("actions") or []],
             "path": {h: path[h] for h in HORIZONS if h < len(path) and path[h] is not None},
             "air": not bool((d.get("state") or {}).get("supported")),
             "end_supported": bool(d.get("end_supported")), "unc": sc.get("uncertainty"),
-            "progress": sc.get("progress"), "total": total, "best_alt": max(rivals) if rivals else None,
+            "progress": progress, "frames": frames, "total": total, "best_alt": max(rivals) if rivals else None,
+            "completed": d.get("completion") is not None, "landing": sc.get("landing"),
             "success": succ, "from_prev": bool(d.get("from_prev")), "trigger": d.get("trigger"),
             "switch": None if not sw else {"kept": bool(sw.get("kept")), "gain": sw.get("gain"),
                                            "unit": sw.get("unit")},
@@ -178,7 +189,8 @@ def analyze(run: str, level: str | None = None) -> dict:
     triggers, n_trig = Counter(), 0
     n_switch = n_kept = 0
     kept_gain = defaultdict(list)                   # unit -> gains the kept plans were kept against
-    end_sup = 0
+    end_sup = n_completed = n_landing = n_landing_known = 0
+    units = Counter()                               # decisions scored in frames / V
     n_clip_known = n_clip = 0                       # decisions with model_clipped (older runs: none)
     lv = defaultdict(lambda: {"decisions": 0, "no_progress": 0, "dead_end": 0, "families": Counter()})
     for (k, agent), ps in plans.items():
@@ -240,12 +252,18 @@ def analyze(run: str, level: str | None = None) -> dict:
             if p["unc"] is not None:
                 unc.append(p["unc"])
             end_sup += p["end_supported"]
+            units["frames" if p["frames"] else "V"] += 1
+            n_completed += p["completed"]
+            if p["landing"] is not None:
+                n_landing_known += 1
+                n_landing += int(p["landing"])
             if p["clipped"] is not None:
                 n_clip_known += 1
                 n_clip += int(p["clipped"] > 0)
             L = lv[k[0]]
             L["decisions"] += 1
-            L["no_progress"] += int(p["progress"] is not None and p["progress"] <= NO_PROGRESS)
+            L["no_progress"] += int(p["progress"] is not None and
+                                    p["progress"] <= (NO_PROGRESS if p["frames"] else NO_PROGRESS_V))
             L["dead_end"] += int(p["dead_end"])
             L["families"][p["family"]] += 1
             prev = p
@@ -295,6 +313,7 @@ def analyze(run: str, level: str | None = None) -> dict:
                                     "from": "estimate: wave length"})
             fin_in_wave = 0
 
+    unit = "frames" if units["frames"] >= units["V"] and units["frames"] else "V"
     err = {}
     for hz in HORIZONS:
         err[str(hz)] = {"followed": q(err_f[hz]) + [len(err_f[hz])], "not_followed": q(err_u[hz]) + [len(err_u[hz])]}
@@ -324,14 +343,16 @@ def analyze(run: str, level: str | None = None) -> dict:
                    "kept_gain": {u: q(g, (50, 90)) + [len(g)] for u, g in kept_gain.items()}},
         "plan_changed": {"all": share(changed, with_prev), "airborne": share(changed_air, with_prev_air),
                          "n": with_prev, "n_airborne": with_prev_air},
-        "margin": {"median": q(margins, (50,))[0], "near_tie": share(sum(m < NEAR_TIE for m in margins), len(margins)),
-                   "n": len(margins)},
+        "margin": {"median": q(margins, (50,))[0], "unit": unit,
+                   "near_tie": share(sum(m < (NEAR_TIE_FRAMES if unit == "frames" else NEAR_TIE) for m in margins),
+                                     len(margins)), "n": len(margins)},
         "success_margin": {"median": q(s_margins, (50,))[0],
                            "near_tie": share(sum(m < NEAR_TIE_FRAMES for m in s_margins), len(s_margins)),
                            "n": len(s_margins)},
         "uncertainty": {"below_0.9": share(sum(u < 0.9 for u in unc), len(unc)),
                         "below_0.5": share(sum(u < 0.5 for u in unc), len(unc))},
         "ends_supported": share(end_sup, n),
+        "completed": share(n_completed, n), "landing": share(n_landing, n_landing_known),
         "clipped": {"share": share(n_clip, n_clip_known), "n": n_clip_known},
         "position_error": err,
         "levels": per_level}
@@ -372,14 +393,17 @@ def report(r: dict) -> str:
     w(f"plan changed (next {CHANGE_WINDOW} actions differ from the previous plan's remaining): all {pct(pc['all'])}, "
       f"airborne {pct(pc['airborne'])} (n {pc['n']} / {pc['n_airborne']})")
     mg = r["margin"]
-    w(f"score margin chosen - best rejected (no goal touch): median {num(mg['median'], '.2f')}; < {NEAR_TIE} in "
+    fr = mg.get("unit") == "frames"
+    w(f"score margin chosen - best rejected (no goal touch, {mg.get('unit', 'V')}): median "
+      f"{num(mg['median'], '.1f' if fr else '.2f')}; < {NEAR_TIE_FRAMES if fr else NEAR_TIE} in "
       f"{pct(mg['near_tie'])} (n {mg['n']})")
     sm = r["success_margin"]
     if sm["n"]:
         w(f"goal touches against the best rejected touch: median {num(sm['median'], '.1f')} frames earlier; < "
           f"{NEAR_TIE_FRAMES} frames in {pct(sm['near_tie'])} (n {sm['n']})")
     w(f"uncertainty factor < 0.9: {pct(r['uncertainty']['below_0.9'])}, < 0.5: {pct(r['uncertainty']['below_0.5'])}; "
-      f"plans ending supported {pct(r['ends_supported'])}")
+      f"plans ending supported {pct(r['ends_supported'])}; completed in the air {pct(r.get('completed'))}, landing "
+      f"{pct(r.get('landing'))}")
     cl = r.get("clipped") or {}
     w(f"chosen plans the collision guard clipped (the model's path went into solid tiles): {pct(cl.get('share'))}"
       + (f" (n {cl['n']})" if cl.get("n") else " (not logged: an older run)"))

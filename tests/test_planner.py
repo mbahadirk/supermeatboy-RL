@@ -15,7 +15,7 @@ from plan import safety as S                                          # noqa: E4
 from plan.explain import Plan, SurpriseTracker, HORIZONS, ERR90_AT, SURPRISE_FACTOR   # noqa: E402
 from plan.geometry import Terrain                                     # noqa: E402
 from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MIN_LEN, MAX_LEN, padded       # noqa: E402
-from plan.planner import FAIL_COST, FailureMemory                     # noqa: E402
+from plan.planner import FAIL_FRAMES, FailureMemory                   # noqa: E402
 
 MODEL = os.path.join(HERE, "runs", "wm_locked", "wm_model.pt")
 DATA_113 = os.path.join(HERE, "runs", "real_20261102-165351", "wm_data")
@@ -190,8 +190,8 @@ def test_failure_memory_counts_a_move_that_did_not_deliver():
     assert m.update(0, 110, 39.0) == []                                            # not finished yet
     ev = m.update(0, 116, 39.0)                                                    # dropped 1 < 4 / 2
     assert len(ev) == 1 and ev[0]["move"] == "run R 16f" and ev[0]["count"] == 1
-    assert m.penalty((5, 2), "run R 16f") == pytest.approx(FAIL_COST)
-    assert m.reason((5, 2), "run R 16f") == "run R 16f from (5,2) failed 1 times"
+    assert m.penalty((5, 2), "run R 16f") == pytest.approx(FAIL_FRAMES)
+    assert m.reason((5, 2), "run R 16f") == "run R 16f from (5,2) failed 1 times (+5 frames)"
     m.expect(0, 200, "run R 16f", 16, padded(acts, 48), (5, 2), 40.0, 36.0)
     m.expect(0, 202, "wait 8f", 8, padded(BY_NAME["wait 8f"].array, 48), (5, 2), 40.0, 39.8)   # changed move:
     assert m.update(0, 216, 40.0) == []                                            # abandoned, expects nothing
@@ -199,6 +199,9 @@ def test_failure_memory_counts_a_move_that_did_not_deliver():
     m.expect(0, 302, "run R 16f", 16, padded(acts, 48)[2:], (5, 2), 39.5, 36.0)   # the same move continued
     assert m.update(0, 316, 37.5) == []                                            # dropped 2.5 >= 2: fine
     assert m.count((5, 2), "run R 16f") == 1
+    # a death is not a failure here (the point-of-no-return memory owns deaths): no count, no event
+    m.expect(0, 400, "run R 16f", 16, padded(acts, 48), (5, 2), 40.0, 36.0)
+    assert m.update(0, 405, None, dead=True) == [] and m.count((5, 2), "run R 16f") == 1 and 0 not in m.pending
 
 
 def fake_plan(frame=10, preds=None, veto=None, risk=0.0):
@@ -296,7 +299,13 @@ def test_plan_has_full_horizon_predictions_and_serialises(flat):
     assert plan.chosen and all(n in BY_NAME for n in plan.chosen)
     assert plan.state["ground"] and plan.v_start is not None and plan.veto is None
     assert plan.counts["stage1"]["candidates"] == len(LIBRARY) and plan.counts["final"]["members"] == 5
-    assert plan.score["progress"] > 0                                   # the goal is to the right, open floor
+    sc = plan.score                                                    # the goal is to the right, open floor:
+    assert plan.path[-1][0] > plan.path[0][0] + 100                     # it runs there,
+    assert sc["landing"] and sc["frames_used"] == pl.H + (sc["completion"] or 0)
+    assert sc["estimate"] == pytest.approx(sc["frames_used"] + sc["t_end"] + sc["risk_frames"]
+                                           + sc["failure_frames"] + sc["death_frames"])
+    assert sc["total"] == pytest.approx(-sc["estimate"])
+    assert sc["estimate"] <= sc["t_start"] + 10                         # about as fast as T says it can be done
     d = json.loads(json.dumps(plan.to_dict()))
     assert d["chosen"] == plan.chosen and "alternatives" in d and "1" in d["predictions"]
     # the next decision keeps the previous plan, shifted, as a candidate
@@ -327,7 +336,11 @@ def test_a_move_into_a_hazard_is_vetoed_and_explained(flat):
     worlds, frames = empty_inputs(pl.H, [wall])
     plan = pl.plan(standing(x0), 200, worlds, frames)
     assert plan.veto is None
-    assert all(p[0] < x0 + 30.0 for p in plan.path)                     # never passes the strip
+    # no contact within the veto frames. A contact later is soft risk 1, charged RISK_FRAMES (50 frames, the
+    # former RISK_WEIGHT x FX_GROUND): about what 48 frames of waiting cost, so behind this strip (no way on)
+    # the chosen plan may run into it after frame 16 (measured: walk L 8f > run R 16f, contact at f24)
+    first = [k for k, p in enumerate(plan.path) if p[0] >= x0 + 30.0 - 4.0 - 6.0]
+    assert not first or first[0] > S.VETO_FRAMES
     hits = [a for a in plan.alternatives if a["reason"].startswith("hits h0 at frame")]
     assert hits, plan.alternatives
     assert plan.counts["stage1"]["vetoed"] > 0
@@ -345,7 +358,7 @@ def test_failure_memory_penalty_changes_the_choice(flat):
     pl.prev = {}
     p2 = pl.plan(standing(), 300, worlds, frames)
     assert p2.chosen[0] != p1.chosen[0]
-    assert pl.memory.penalty(cell, p1.chosen[0]) == pytest.approx(50 * FAIL_COST)
+    assert pl.memory.penalty(cell, p1.chosen[0]) == pytest.approx(50 * FAIL_FRAMES)
     pl.memory.counts.clear()
 
 
@@ -401,7 +414,7 @@ DATA_114 = os.path.join(HERE, "runs", "plan_20261107-174219", "wm_data")
 @pytest.mark.skipif(not (os.path.exists(MODEL) and os.path.isdir(DATA_114)), reason="no model or 1-14 recording")
 def test_lookups_on_the_1_14_half_floor_stay_out_of_solid():
     """Item b of the guard round: with the collision guard, no point the planner's score looks up in the
-    progress field (Planner.value: every stage's end points, per member) is inside solid geometry on a recorded
+    progress field (Planner.time_to_go: every stage's end points, per member) is inside solid geometry on a recorded
     1-14 state standing on the half-block floor (so the field's "best open neighbour" rule for points inside
     walls is not reached through a floor); without the guard many are (the model goes through that floor)."""
     import torch
@@ -414,12 +427,12 @@ def test_lookups_on_the_1_14_half_floor_stay_out_of_solid():
         r = next(r for rows, _ in waves_of(DATA_114, "1-14") for r in rows
                  if r["status"] == 0 and 60 <= r["x"] <= 120 and abs(r["y"] - 36.0) < 0.5)
         got = []
-        orig = pl.value
+        orig = pl.time_to_go
 
-        def logged(x, y, keys=0, leg=None):
+        def logged(x, y, keys=0, leg=None, vy=None):
             got.append((np.ravel(x).astype(float), np.ravel(y).astype(float)))
-            return orig(x, y, keys, leg)
-        pl.value = logged
+            return orig(x, y, keys, leg, vy)
+        pl.time_to_go = logged
         worlds, frames = empty_inputs(pl.H)
         pl.plan(state_row(r["x"], r["y"], r["vx"], r["vy"], r["flags"], r["state"], r["keys"], r["held"]), 10,
                 worlds, frames)
@@ -509,3 +522,106 @@ def test_a_key_pickup_continues_on_the_next_leg():
     ex, ey = plan.path[-1]
     v_leg0 = float(pl.field.values(np.array([ex]), np.array([ey]), 0, True)[0])
     assert plan.v_end is not None and plan.v_end < v_leg0 - 1.0              # V of the leg after the key
+
+
+# ---- step 4: frames, cling, completion, point of no return ---------------------------------------------------
+def test_cling_rule_fast_falls_are_not_support(monkeypatch):
+    """Planner.support: wall contact is support only up to CLING_SPEED of downward speed (units / frame). The
+    measured value (plan/measure_time.py M2) is inf: a wall jump works at every recorded speed, so no fall is cut
+    off; the rule itself is checked with a finite threshold."""
+    from types import SimpleNamespace
+    import plan.planner as P
+    assert P.CLING_SPEED == float("inf")
+    w = np.zeros((10, 10), np.uint32)
+    w[0:10, 5] = 1                                                   # a wall: x 100..120
+    pl = SimpleNamespace(terrain=Terrain(w, 0.0, 0.0), lv=SimpleNamespace(plats=[]))
+    x, y = np.array([93.0, 93.0, 93.0, 50.0]), np.array([110.0, 110.0, 110.0, 110.0])
+    vy = np.array([-1.0, -9.0, 2.0, -1.0])                           # slow slide, fast fall, rising, no wall
+    sup, g, side = P.Planner.support(pl, x, y, vy)
+    assert sup.tolist() == [True, True, True, False]                 # inf: every wall contact
+    monkeypatch.setattr(P, "CLING_SPEED", 3.0)
+    sup, g, side = P.Planner.support(pl, x, y, vy)
+    assert sup.tolist() == [True, False, True, False] and side.tolist() == [1, 1, 1, 0]
+    assert P.Planner.support(pl, x, y, None)[0].tolist() == [True, True, True, False]   # speed unknown: geometry
+
+
+@needs_model
+def test_completion_lands_on_the_floor_and_waiting_costs_frames(flat):
+    """An airborne end above the floor is completed until it lands (frames, on the ground, T there); a higher
+    start lands later and its estimate is higher by those frames. Waiting: the stage-1 estimates of the wait
+    moves (the body stays put, T at the end the same) differ by their lengths."""
+    from plan.planner import continuations, state_row
+    from mpc.candidates import act
+    lv, pl = flat
+    pl.new_wave()
+    worlds, frames = empty_inputs(pl.future_frames)
+    rows = np.concatenate([state_row(300.0, 120.0, 0.0, 0.0, 0, 7, 0, 0), state_row(300.0, 200.0, 0.0, 0.0, 0, 7, 0, 0)])
+    res, rolled = pl.complete(rows, np.array([act(1), act(1)]), np.array([0, 0]), worlds, frames, 16.667, 0, 0)
+    (e1, r1, c1, p1), (e2, r2, c2, p2) = res
+    assert r1 == r2 == 0 and c1["on"] == c2["on"] == "ground" and c1["died"] == [] and 0 < c1["frames"] < c2["frames"]
+    assert len(p1) == c1["frames"] + 1 and p1[0] == [300.0, 120.0] and c1["y"] < 60.0
+    assert e1 == pytest.approx(c1["frames"] + pl.field.times(np.array([c1["x"]]), np.array([c1["y"]]), 0, True)[0])
+    assert e2 > e1 and rolled > 0
+    assert [n for n, _ in continuations(act(1))] == ["keep", "neutral", "reverse"]
+    assert [n for n, _ in continuations(act(0, jump=True))] == ["neutral", "left", "right"]
+    pl.plan(standing(), 0, worlds, frames)
+    st = pl.last_stage1
+    i8, i16 = st["names"].index("wait 8f"), st["names"].index("wait 16f")
+    if abs(st["t_end"][i8] - st["t_end"][i16]) < 1e-6:                # the model kept the body in the same spot
+        assert st["estimate"][i16] - st["estimate"][i8] == pytest.approx(8.0)
+    assert st["frames"][i16] - st["frames"][i8] == 8
+
+
+def test_move_memory_charges_the_point_of_no_return(tmp_path):
+    from plan.planner import MoveMemory
+    m = MoveMemory(str(tmp_path / "moves.json"))
+    m.set_level("1-14")
+    m.decided(0, 10, (3, 2), "run R 16f", 2, adopted=True)          # had safe alternatives
+    m.decided(0, 18, (5, 2), "run-jump R hold 15", 1, adopted=True)  # the latest one with an alternative
+    m.decided(0, 26, (8, 3), "fall drift R 12f", 0, adopted=True)    # too late: no safe alternative
+    m.decided(0, 30, (8, 3), "fall drift R 12f", 0, adopted=False)   # kept: not a try
+    ev = m.died(0, 80, "out of level")
+    assert ev["kind"] == "point of no return" and ev["charged"] and ev["decision_frame"] == 18
+    assert ev["cell"] == [5, 2] and ev["move"] == "run-jump R hold 15" and ev["cause"] == "out of level"
+    assert m.stats((5, 2), "run-jump R hold 15") == (1, 1) and m.stats((8, 3), "fall drift R 12f") == (0, 1)
+    assert m.stats((3, 2), "run R 16f") == (0, 1)
+    assert m.penalty((5, 2), "run-jump R hold 15", 500.0) == pytest.approx(250.0)
+    assert m.reason((5, 2), "run-jump R hold 15", 500.0) == "run-jump R hold 15 from (5,2) died 1 of 1 tries (+250 frames)"
+    ev = m.died(0, 90, "hazard h3")                                  # no decisions left this wave: nothing charged
+    assert not ev["charged"] and "nothing charged" in ev["reason"]
+    m.decided(1, 5, (1, 1), "wait 8f", 0, adopted=True)
+    assert not m.died(1, 9)["charged"]                               # no decision had a safe alternative
+    m.save()
+    m2 = MoveMemory.load(str(tmp_path / "moves.json"))
+    m2.set_level("1-14")
+    assert m2.stats((5, 2), "run-jump R hold 15") == (1, 1) and m2.levels == m.levels
+    m2.set_level("1-13")
+    assert m2.stats((5, 2), "run-jump R hold 15") == (0, 0)          # per level
+    (tmp_path / "bad.json").write_text('{"version": 1, "levels": {"1-1": [[1, 2, "x", -1, 0]]}}')
+    with pytest.raises(ValueError):
+        MoveMemory.load(str(tmp_path / "bad.json"))
+    (tmp_path / "bad2.json").write_text('[1, 2]')
+    with pytest.raises(ValueError):
+        MoveMemory.load(str(tmp_path / "bad2.json"))
+    assert MoveMemory.load(str(tmp_path / "missing.json")).levels == {}
+
+
+@needs_model
+def test_move_memory_penalty_changes_the_choice_and_failures_ignore_deaths(flat):
+    lv, pl = flat
+    pl.new_wave()
+    worlds, frames = empty_inputs(pl.future_frames)
+    p1 = pl.plan(standing(), 300, worlds, frames)
+    cell = tuple(p1.state["cell"])
+    pl.moves.levels.setdefault(pl.moves.level, {})[(cell[0], cell[1], p1.chosen[0])] = [5, 1]
+    pl.prev = {}
+    p2 = pl.plan(standing(), 300, worlds, frames)
+    assert p2.chosen[0] != p1.chosen[0]
+    alt = [a for a in p2.alternatives if a["moves"] and a["moves"][0] == p1.chosen[0] and a["stage"] == "final"
+           and not a.get("vetoed")]
+    assert all("died 5 of 1 tries" in a["reason"] for a in alt), [a["reason"] for a in alt]   # (if still shown)
+    ev = pl.observe(0, 320, 220.0, 46.0, 0, dead=True, cause="hazard h1")
+    kinds = [e["kind"] for e in ev]
+    assert "failed move" not in kinds and "point of no return" in kinds
+    pl.moves.levels.clear()
+    pl.new_wave()

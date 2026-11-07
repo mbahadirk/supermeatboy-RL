@@ -51,10 +51,21 @@ class Plan:
     the wall is on, L | R}.
     nearest: the closest hazards {id, kind, clearance, frame} (plan.safety.Safety.nearest; "out" = the level's
     edge); veto: None or {frame, id, kind} (contact within 16 frames, any member); soft_risk / soft_frame.
-    score: {progress, progress_credit, risk, uncertainty (factor), spread_end, failure, total}; v_start, v_end
-    (mean over the members whose end is not a dead end), dead_end_members (ends with V = +inf), leg;
-    end_supported.
-    alternatives: the top rejected plans {moves, total, progress, stage, reason}, and from Planner.plan also
+    score (frames, plan/planner.py): {frames_used (H, or H + the completion's frames), t_start (T at the start,
+    None for a dead end), t_end (T at the end or at the completion's landing), estimate (frames_used + t_end +
+    the penalties: the score, lower is better), risk_frames, failure_frames, death_frames (the point-of-no-return
+    charge), total (-estimate; successes SUCCESS_SCORE - touch frame; vetoed below every other), completion
+    (its frames, None when not completed), landing (lands: a majority of members supported at H, the completion
+    landed, or a success), spread_end (the members' position std at H, units: logged only)}; v_start, v_end (V,
+    display only: mean over the members whose end is not a dead end), dead_end_members (ends with V = +inf),
+    leg; end_supported.
+    completion: None, or the chosen plan's airborne completion (Planner.complete) {continuation (keep /
+    neutral / reverse, or neutral / left / right; None when every one died), frames (after H), x, y (where it
+    ends), on (ground / wall / goal; "air" when still airborne after the completion's frames; None when all
+    died), died [continuations that died], hits {continuation: what it hit}, risk (1 when all died), path
+    [[x, y], ...] from the plan's end (frame H) on, one member}.
+    alternatives: the top rejected plans {moves, total, estimate, progress (T at the start minus the estimate,
+    frames), stage, reason}, and from Planner.plan also
     path (predicted [[x, y], ...]: final-stage ones the members' mean over frames 0..H, stage-1 ones member 0
     over their move's frames) and vetoed (bool).
     predictions: {1: [x, y], 4: ..., 8: ..., 16: ...} for the surprise check.
@@ -107,6 +118,7 @@ class Plan:
     finish_model: float | None = None
     switch: dict | None = None
     model_clipped: int | None = None
+    completion: dict | None = None
 
     @property
     def name(self) -> str:
@@ -132,8 +144,16 @@ class Plan:
         touch = (f"touches the princess at f{gt['frame']} ({gt['members']} members); " if gt else "") + "".join(
             f"takes key {k['key']} at f{k['frame']}; " for k in self.key_touches or [])
         sw = f" [{self.switch['reason']}]" if self.switch else ""
-        return (f"{'[prev] ' if self.from_prev else ''}{self.name}{sw}: {touch}progress {sc['progress']:+.2f} (V {v0} -> {v1}, "
-                f"leg {self.leg}), risk {sc['risk']:.2f}, unc x{sc['uncertainty']:.2f}, total {sc['total']:+.2f}; "
+        comp = self.completion
+        comp_s = ""
+        if comp is not None:
+            comp_s = (f" + completion {comp['frames']}f ({comp['continuation']}, on {comp['on']})" if comp["frames"] is not None
+                      else " + completion: every continuation dies")
+        t0 = sc.get("t_start")
+        return (f"{'[prev] ' if self.from_prev else ''}{self.name}{sw}: {touch}estimate {sc['estimate']:.0f} frames "
+                f"({sc['frames_used']}{comp_s} + T {sc['t_end']:.0f} + risk {sc['risk_frames']:.0f} + fail "
+                f"{sc['failure_frames']:.0f} + deaths {sc['death_frames']:.0f}; T at the start "
+                f"{'?' if t0 is None else format(t0, '.0f')}; V {v0} -> {v1}, leg {self.leg}); "
                 f"{near_s}; {land_s}{wj}{veto}{alt_s}")
 
 

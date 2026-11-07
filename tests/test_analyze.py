@@ -130,3 +130,30 @@ def test_triggers_switches_committed_plans_and_success_margins(tmp_path):
     assert r["margin"]["n"] == 2 and r["success_margin"] == {"median": 4.0, "near_tie": 0.0, "n": 1}
     out = A.report(r)
     assert "switch rate" in out and "interval 1" in out and "goal touches" in out
+
+
+def test_frame_scored_runs_no_progress_and_completion(tmp_path):
+    """Runs scored in frames (score.estimate): no progress = T(start) - estimate <= 0 (the plan does not get
+    closer faster than time passes), margins in frames, completed / landing shares."""
+    run = tmp_path / "plan_f"
+    os.makedirs(run)
+    ps = []
+    for k, (t0, est, comp) in enumerate([(300.0, 290.0, None), (300.0, 300.0, 6), (300.0, 340.0, None),
+                                         (None, 1e4, None)]):
+        p = _plan(2 * k, 1, total=-est, alt=-est - 2.0)
+        p["score"] = {"total": -est, "estimate": est, "t_start": t0, "frames_used": 48 + (comp or 0),
+                      "landing": comp is not None or k == 0}
+        p["completion"] = None if comp is None else {"frames": comp, "on": "ground", "continuation": "keep"}
+        ps.append(p)
+    with open(run / "plans.jsonl", "w", encoding="utf-8") as f:
+        for p in ps:
+            f.write(json.dumps(p) + "\n")
+    with open(run / "states.jsonl", "w", encoding="utf-8") as f:
+        for fr in range(10):
+            f.write(json.dumps({"frame": fr, "wave": 1, "level": "1-1", "agents": [[0, float(fr), 0.0, 0.0, 0.0, 0]]})
+                    + "\n")
+    r = A.analyze(str(run))
+    assert r["levels"]["1-1"]["no_progress"] == pytest.approx(2 / 4)       # 300 -> 300 and 300 -> 340; no T: unknown
+    assert r["margin"]["unit"] == "frames" and r["margin"]["n"] == 4 and r["margin"]["near_tie"] == 1.0
+    assert r["completed"] == 0.25 and r["landing"] == 0.5
+    assert "frames" in A.report(r)

@@ -81,20 +81,22 @@ Ground movement states 5, 10, 15, 4: rule ground 97-99.9% (1-5), 88-99% (1-13); 
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 import time
 from dataclasses import dataclass, replace
 
 import numpy as np
 import torch
 
-from mpc.candidates import ACTIONS
+from mpc.candidates import ACTIONS, act
 from plan import safety as S
 from plan.explain import Plan, SurpriseTracker, HORIZONS
 from plan.geometry import Terrain
 from realpath import BODY
 from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MAX_LEN, padded
-from plan.progress import ProgressField
+from plan.progress import FX_GROUND, ProgressField
 from wm.buffer import ROW
 from wm.features import (FEAT_DIM, N_HAZ, RES_SCALE, EVENTS, LevelGeom, box_distances, featurize,
                          hazard_features, platform_features, prior)
@@ -103,16 +105,27 @@ from wm.rollout import World, advance, _stacked
 
 H_DEFAULT, B1_DEFAULT, BRANCH_DEFAULT, S_DEFAULT, BUDGET_MS = 48, 8, 16, 16, 120.0
 STAGE1_SHARE, STAGE2_SHARE = 0.30, 0.45      # of the budget: stage 1's deadline, stage 2's earliest one
-RISK_WEIGHT = 10.0
-FAIL_COST = 1.0
-DEAD_END = 100.0                             # V units charged for an end state with V = +inf
-UNC_KNEE, UNC_SCALE = 20.0, 20.0             # uncertainty factor exp(-max(0, 2 spread - KNEE) / SCALE)
-NO_PROGRESS = 0.05                           # V units: "no progress" below this
+# penalties in frames, from the former V-unit weights by FX_GROUND frames per tile (on open ground 1 V unit ~ 1 tile)
+RISK_WEIGHT, FAIL_COST, DEAD_END = 10.0, 1.0, 100.0        # the former weights (V units)
+RISK_FRAMES = RISK_WEIGHT * FX_GROUND        # per unit of soft risk
+FAIL_FRAMES = FAIL_COST * FX_GROUND          # per counted failure of the first move from the start cell
+DEAD_END_FRAMES = DEAD_END * FX_GROUND       # an end with T = +inf: T(start) + this
+DEAD_FAR = 1e4                               # frames: T of a dead end when the start is one too
+# wall contact is support (for scoring) only up to this downward speed (units / frame). Measured (plan/measure_time.py,
+# M2: 13,385 wall jump presses, runs/plan_2026110*): a press on a wall gives a wall jump in 93-100% of the cases in
+# every downward-speed bucket up to 10 u/f (8+ u/f: 16 presses only), so no bucket drops below 80%: inf (no cut)
+CLING_SPEED = math.inf
+COMPLETE_MAX = 90                            # frames: airborne final plans are completed this far at most
+COMPLETE_CHUNK = 10                          # frames rolled out per completion batch (early stop between them)
+NO_PROGRESS = 0.0                            # frames: "no progress" when T(start) - estimate is not above this
+SAFE_RISK = 0.5                              # soft risk under which a landing alternative counts as safe
 MIN_EXPECT = 0.5                             # FailureMemory: an expected V drop below this expects nothing
 VETO_SCORE = -1e6
+VETO_TIE = 1e-6                              # vetoed: by veto frame, then (tiny) by estimate
 SUCCESS_SCORE = 1e5                          # a plan touching the goal at frame t: SUCCESS_SCORE - t
-TIE = 1e-3                                   # successes at the same frame: tie-break by risk and failure penalty
+TIE = 1e-3                                   # successes at the same frame: tie-break by their penalty frames
 SUCCESS_MARGIN = 3                           # frames: a success replaces a successful previous plan only if earlier
+HYSTERESIS_FRAMES = 3.0                      # agent.py / plan/offline.py --hysteresis default (frames)
 RISK_SWITCH = 0.2                            # soft risk: a previous plan riskier than the best by more is dropped
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
 N_ALTERNATIVES = 5
@@ -129,7 +142,9 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
             terrain: Terrain | None = None, tol: float = None) -> dict:
     """wm.rollout.rollout_batched for a subset of ensemble members (`members`, a slice) whose rows may start at
     different future frames: row i at step k sees the level's moving parts worlds[offsets[i] + k] (clamped to
-    the last). s0 (n,) ROW, actions (n, K). Returns x, y (E, n, K+1) float64, alive (E, n, K+1) (the learned
+    the last). s0 (n,) ROW, actions (n, K). Returns x, y (E, n, K+1) float64; vx, vy (E, n, K+1): the velocity
+    per step as position differences (units / frame, y up; step 0: the start rows' vx, vy x dt); last (E, n)
+    ROW: the rows after the last step run; alive (E, n, K+1) (the learned
     death head: a second opinion only), finish (E, n, K+1) (the learned finish head's probability per step:
     a cross-check only), rows (E, n, K+1) when keep_rows, and steps (how many steps ran before the deadline;
     positions after that are held at the last one). terrain: the collision guard (collide) after every step
@@ -184,7 +199,12 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
         xs[:, :, done + 1:] = xs[:, :, done:done + 1]
         ys[:, :, done + 1:] = ys[:, :, done:done + 1]
         alive[:, :, done + 1:] = alive[:, :, done:done + 1]
-    return {"x": xs, "y": ys, "alive": alive, "finish": fin, "rows": rows, "steps": done, "clip": clip}
+    vx, vy = np.empty_like(xs), np.empty_like(ys)
+    vx[:, :, 1:], vy[:, :, 1:] = np.diff(xs, axis=2), np.diff(ys, axis=2)
+    vx[:, :, 0] = np.tile(s0["vx"], E).reshape(E, n) * (dt_ms / 1000.0)
+    vy[:, :, 0] = np.tile(s0["vy"], E).reshape(E, n) * (dt_ms / 1000.0)
+    return {"x": xs, "y": ys, "vx": vx, "vy": vy, "last": s.reshape(E, n), "alive": alive, "finish": fin,
+            "rows": rows, "steps": done, "clip": clip}
 
 
 def collide(ter: Terrain, prev: np.ndarray, s: np.ndarray, tol: float = COLLIDE_TOL) -> np.ndarray:
@@ -388,10 +408,12 @@ class FailureMemory:
     predicted V drop by the move's end. The expectation stays while later plans keep playing the same move
     (their actions continue it); a plan that changes the move drops it (abandoned, not failed). update() (the
     runner, or Planner.observe) gives the real V each frame; once the move has been played to its end, a
-    real drop below half the expected one (or a death) counts a failure. Expected drops below MIN_EXPECT expect
-    nothing. Penalty: FAIL_COST x count for plans starting with that move from that cell."""
+    real drop below half the expected one counts a failure. A death counts nothing here (the point-of-no-return
+    memory, MoveMemory, owns deaths: no double charge). Expected drops below MIN_EXPECT expect nothing.
+    Penalty: fail_cost (default FAIL_FRAMES) x count, in frames, for plans starting with that move from that
+    cell."""
 
-    def __init__(self, fail_cost: float = FAIL_COST):
+    def __init__(self, fail_cost: float = FAIL_FRAMES):
         self.fail_cost = fail_cost
         self.counts: dict[tuple, int] = {}
         self.pending: dict[int, _Expect] = {}
@@ -403,7 +425,8 @@ class FailureMemory:
         return self.fail_cost * self.count(cell, move)
 
     def reason(self, cell, move: str) -> str:
-        return f"{move} from ({int(cell[0])},{int(cell[1])}) failed {self.count(cell, move)} times"
+        return (f"{move} from ({int(cell[0])},{int(cell[1])}) failed {self.count(cell, move)} times "
+                f"(+{self.penalty(cell, move):.0f} frames)")
 
     def expect(self, agent: int, frame: int, move: str, move_frames: int, actions, cell, v_start, v_end_pred):
         p = self.pending.get(agent)
@@ -421,19 +444,135 @@ class FailureMemory:
                                       float(v_start - v_end_pred))
 
     def update(self, agent: int, frame: int, v_real: float | None, dead: bool = False) -> list[dict]:
-        """The agent's real V at this frame (None / inf when unknown). Returns the failures counted now."""
+        """The agent's real V at this frame (None / inf when unknown). Returns the failures counted now (a death
+        drops the expectation and counts nothing)."""
         p = self.pending.get(agent)
         if p is None or (frame < p.end and not dead):
             return []
         del self.pending[agent]
-        real = None if dead or v_real is None or not math.isfinite(v_real) else p.v_start - float(v_real)
+        if dead:
+            return []
+        real = None if v_real is None or not math.isfinite(v_real) else p.v_start - float(v_real)
         if real is not None and real >= p.drop / 2:
             return []
         key = (p.cell, p.move)
         self.counts[key] = self.counts.get(key, 0) + 1
         return [{"kind": "failed move", "agent": int(agent), "frame": int(frame), "move": p.move, "cell": list(p.cell),
                  "expected_drop": round(p.drop, 3), "real_drop": None if real is None else round(real, 3),
-                 "dead": bool(dead), "count": self.counts[key], "reason": self.reason(p.cell, p.move)}]
+                 "dead": False, "count": self.counts[key], "reason": self.reason(p.cell, p.move)}]
+
+
+# ---- point-of-no-return memory ---------------------------------------------------------------------------
+class MoveMemory:
+    """Deaths charged to the move taken at the point of no return, per level, (start cell, first move name).
+
+    Planner.plan calls decided() with every decision of a planned agent: its frame, start cell, chosen first
+    move and how many safe alternatives it had (counts["final"]["safe_alternatives"]: other final candidates
+    not vetoed, soft risk < SAFE_RISK, that land or reach the princess). A plan adopted (not kept from the
+    previous one) counts a try of its first move from its start cell. On the agent's death (explained or not:
+    Planner.observe(dead=True)) the point of no return is the latest decision of the wave with a safe
+    alternative; its (cell, first move) gets a death, and a "point of no return" event says where (decision
+    frame, cell, move, death frame, cause); none found: the event says so and nothing is charged.
+    Penalty, frames, for candidates whose first move matches from the start cell: deaths / (tries + 1) x
+    max(T_support(spawn) - T(start), DEAD_END_FRAMES) (the progress the death throws away, at least a dead
+    end's charge). Keyed by cell and move only, not by the wave frame (moving hazards' timing is not part of
+    the key). Persisted per level in a JSON file (save(): atomic; load(): a malformed file raises). learn False
+    (agent.py on held-out evaluation levels): decisions are kept, nothing is charged or counted."""
+
+    VERSION = 1
+
+    def __init__(self, path: str | None = None):
+        self.path = path
+        self.levels: dict[str, dict[tuple, list]] = {}     # level -> {(c, r, move): [deaths, tries]}
+        self.level: str | None = None
+        self.wave: dict[int, list] = {}                     # agent -> [(frame, cell, move, safe alternatives)]
+        self.dirty = False
+        self.learn = True                                   # False (held-out levels): nothing charged or counted
+
+    @classmethod
+    def load(cls, path: str) -> "MoveMemory":
+        m = cls(path)
+        if not os.path.exists(path):
+            return m
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        if not isinstance(d, dict) or d.get("version") != cls.VERSION or not isinstance(d.get("levels"), dict):
+            raise ValueError(f"{path}: not a move memory (version {cls.VERSION})")
+        for name, ents in d["levels"].items():
+            lv = m.levels.setdefault(str(name), {})
+            for e in ents:
+                c, r, move, deaths, tries = e
+                if not (isinstance(move, str) and int(deaths) >= 0 and int(tries) >= 0):
+                    raise ValueError(f"{path}: bad entry {e!r} for {name}")
+                lv[(int(c), int(r), move)] = [int(deaths), int(tries)]
+        return m
+
+    def save(self, path: str | None = None):
+        path = path or self.path
+        if path is None:
+            return
+        d = {"version": self.VERSION, "levels": {
+            name: [[c, r, mv, n[0], n[1]] for (c, r, mv), n in sorted(ents.items())] for name, ents in
+            sorted(self.levels.items())}}
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, separators=(",", ":"))
+        os.replace(tmp, path)
+        self.dirty = False
+
+    def set_level(self, name: str | None):
+        self.level = name
+        self.wave = {}
+
+    def new_wave(self):
+        self.wave = {}
+
+    def _ent(self, cell, move: str, make: bool = False):
+        lv = self.levels.setdefault(self.level, {}) if make else self.levels.get(self.level, {})
+        key = (int(cell[0]), int(cell[1]), move)
+        if make and key not in lv:
+            lv[key] = [0, 0]
+        return lv.get(key)
+
+    def stats(self, cell, move: str) -> tuple[int, int]:
+        e = self._ent(cell, move)
+        return (0, 0) if e is None else (e[0], e[1])
+
+    def penalty(self, cell, move: str, scale: float) -> float:
+        d, t = self.stats(cell, move)
+        return d / (t + 1.0) * scale if d else 0.0
+
+    def reason(self, cell, move: str, scale: float) -> str:
+        d, t = self.stats(cell, move)
+        return (f"{move} from ({int(cell[0])},{int(cell[1])}) died {d} of {t} tries "
+                f"(+{self.penalty(cell, move, scale):.0f} frames)")
+
+    def decided(self, agent: int, frame: int, cell, move: str, safe: int, adopted: bool):
+        self.wave.setdefault(int(agent), []).append((int(frame), (int(cell[0]), int(cell[1])), move, int(safe)))
+        if adopted and move != "pad" and self.learn:
+            self._ent(cell, move, make=True)[1] += 1
+            self.dirty = True
+
+    def died(self, agent: int, frame: int, cause=None) -> dict:
+        """The agent died at `frame`: charge its point of no return. Returns the event."""
+        decs = self.wave.pop(int(agent), [])
+        pnr = next((d for d in reversed(decs) if d[3] > 0 and d[2] != "pad"), None)
+        ev = {"kind": "point of no return", "agent": int(agent), "frame": int(frame), "death_frame": int(frame),
+              "cause": cause, "decisions": len(decs)}
+        if pnr is None or not self.learn:
+            ev.update(decision_frame=None if pnr is None else pnr[0], cell=None if pnr is None else list(pnr[1]),
+                      move=None if pnr is None else pnr[2], charged=False,
+                      reason="no decision of this wave had a safe alternative: nothing charged" if pnr is None
+                      else "held-out level: nothing charged")
+            return ev
+        f0, cell, move, safe = pnr
+        e = self._ent(cell, move, make=True)
+        e[0] += 1
+        self.dirty = True
+        ev.update(decision_frame=f0, cell=list(cell), move=move, safe_alternatives=safe, charged=True,
+                  deaths=e[0], tries=e[1])
+        return ev
 
 
 # ---- the planner ------------------------------------------------------------------------------------------
@@ -445,31 +584,52 @@ def state_row(x, y, vx, vy, flags, state, keys=0, held=0) -> np.ndarray:
     return r
 
 
+def continuations(a_last: int) -> list[tuple[str, int]]:
+    """The completion fan after a plan whose last action is a_last (no jump in any): keep its horizontal input
+    (and run), neutral, reverse. A plan ending without a horizontal input: neutral, left, right (keep and
+    reverse would both be neutral)."""
+    L, R, _, run = ACTIONS[int(a_last)]
+    d = int(R) - int(L)
+    if d == 0:
+        return [("neutral", act(0)), ("left", act(-1)), ("right", act(1))]
+    return [("keep", act(d, run=bool(run))), ("neutral", act(0)), ("reverse", act(-d, run=bool(run)))]
+
+
 class Planner:
     """One planner per level (several agents may share it; the previous plan is kept per agent)."""
 
     def __init__(self, model, level, field: ProgressField, H: int = H_DEFAULT, B1: int = B1_DEFAULT,
                  branch: int = BRANCH_DEFAULT, S_final: int = S_DEFAULT, budget_ms: float | None = BUDGET_MS,
                  member: int = 0, memory: FailureMemory | None = None, hysteresis: float = 0.0,
-                 collide_tol: float | None = COLLIDE_TOL):
+                 collide_tol: float | None = COLLIDE_TOL, moves: "MoveMemory | None | str" = "new",
+                 complete_max: int = COMPLETE_MAX):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms
-        self.hysteresis = float(hysteresis)          # V units (switch rule); 0: the best total is chosen
+        self.hysteresis = float(hysteresis)          # frames (switch rule); 0: the best total is chosen
         self.collide_tol = collide_tol               # the collision guard's tolerance; None: no guard
+        self.complete_max = int(complete_max)        # airborne completion frames (0: none)
         self.member = member
         self.final_ms = FINAL_MS0
         self.lib = list(LIBRARY)
         self.lib_len = np.array([len(m) for m in self.lib])
         self.lib_actions = np.stack([padded(m.actions, MAX_LEN) for m in self.lib])
+        self.moves = MoveMemory() if isinstance(moves, str) and moves == "new" else moves
+        self.last_stage1 = None                      # the last decision's stage-1 estimates (tests, offline checks)
+        self._dead_t = DEAD_FAR                      # T charged for a dead end (set per decision from T(start))
         self.set_level(level, field, memory)
+
+    @property
+    def future_frames(self) -> int:
+        """How many future frames a decision's inputs should cover (worlds; frames + 1): H + completion."""
+        return self.H + self.complete_max
 
     # ---- level state -------------------------------------------------------------------------------------
     def set_level(self, level, field: ProgressField, memory: FailureMemory | None = None):
         """A (new) level for this planner; the loaded model and the final stage's cost estimate stay. The level
         geometry, the progress field and every per-level memory (previous plans, failed moves, the surprise
-        tracker's predictions) start again."""
+        tracker's predictions) start again; the point-of-no-return memory switches to this level's entries."""
         self.lv = level
-        self.field = field
+        self.set_field(field)
         self.geom = LevelGeom(level.words0, {"ox": level.ox, "oy": level.oy})
         self.words = np.asarray(level.words0, np.uint32).copy()
         self.terrain = Terrain(level.words0, level.ox, level.oy)
@@ -480,8 +640,18 @@ class Planner:
         self.goal_boxes = np.asarray(getattr(level, "goal_boxes", list)(), np.float64).reshape(-1, 5)
         self.key_boxes = list(getattr(level, "key_boxes", list)())
         self.memory = memory if memory is not None else FailureMemory()
+        if self.moves is not None:
+            self.moves.set_level(getattr(level, "name", None))
         self.surprise = SurpriseTracker()
         self.prev: dict[int, Plan] = {}
+
+    def set_field(self, field: ProgressField):
+        """A (rebuilt) progress field: also T_support at the spawn (the point-of-no-return charge's scale)."""
+        self.field = field
+        sc, sr = field.start
+        ok = 0 <= sc < field.W and 0 <= sr < field.H
+        self.t_spawn = float(field.T_support[0, sr, sc]) if ok else math.inf
+
     def tiles(self, changes):
         """Tile changes from the game [(cell index, word)]: the model's tile inputs and the support geometry."""
         if not changes:
@@ -514,14 +684,27 @@ class Planner:
     def new_wave(self):
         self.prev = {}
         self.memory.pending = {}
+        if self.moves is not None:
+            self.moves.new_wave()
         self.surprise.new_wave()
 
     def cell(self, x, y) -> tuple:
         return int((x - self.lv.ox) // 20.0), int((y - self.lv.oy) // 20.0)
 
-    def value(self, x, y, keys=0, leg=None):
+    def support(self, x, y, vy=None):
+        """The scoring's support rule at positions (arrays): (supported, ground, wall side). Ground, or a wall
+        (plan/geometry.py's probe) while the downward speed -vy (units / frame; None: unknown, any speed) is at
+        most CLING_SPEED. The explanation's landings / wall jumps and the safety check use the geometry alone."""
+        g, side = self.terrain.support(x, y, self.lv.plats or None)
+        wall = side != 0
+        if vy is not None and math.isfinite(CLING_SPEED):
+            wall = wall & (-np.asarray(vy, np.float64) <= CLING_SPEED)
+        return g | wall, g, side
+
+    def value(self, x, y, keys=0, leg=None, vy=None):
         """V at positions (arrays) for an agent holding `keys`, or on leg `leg` (an int or one per position):
-        (V, supported, ground, wall side, leg).
+        (V, supported, ground, wall side, leg). Supported: Planner.support (vy: the bodies' vertical velocity in
+        units / frame, for the cling rule).
 
         Points inside solid: ProgressField.values gives a point in a wall cell its best open 3 x 3 neighbour,
         which can be across a floor. With the collision guard the score's points (every stage's end points, per
@@ -532,11 +715,20 @@ class Planner:
         field, so it still takes the best neighbour, which there is the cell below the floor (1-14: V 13.1 on the
         floor at x 110 from the cell below, 22.4 just above it)."""
         x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
-        g, side = self.terrain.support(x, y, self.lv.plats or None)
-        sup = g | (side != 0)
+        sup, g, side = self.support(x, y, vy)
         if leg is None:
             leg = int(self.field.leg_of(np.int64(int(keys))))
         return self.field.values(x, y, leg, sup), sup, g, side, leg
+
+    def time_to_go(self, x, y, keys=0, leg=None, vy=None):
+        """T (frames to the goal, plan/progress.py) at positions for an agent holding `keys` or on leg `leg`:
+        (T, supported, ground, wall side, leg). Supported by Planner.support (cling rule with vy); airborne
+        bodies take T_rise when vy > 0 (units / frame), else T_fall (vy None: the better of the two)."""
+        x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+        sup, g, side = self.support(x, y, vy)
+        if leg is None:
+            leg = int(self.field.leg_of(np.int64(int(keys))))
+        return self.field.times(x, y, leg, sup, vy), sup, g, side, leg
 
     def _contacts(self, xs, ys, upto, death, leg: int):
         """Goal and key contact of paths xs, ys (E, n, K+1) on their frames 1..upto ((n,), None: all K), given
@@ -567,31 +759,162 @@ class Planner:
             on, last = ok, np.where(ok, t, last)
         return goal, legs, keys
 
-    def observe(self, agent: int, frame: int, x: float, y: float, keys: int = 0, dead: bool = False) -> list[dict]:
-        """The runner calls this with every real state: surprise events (SurpriseTracker) and failed moves
-        (FailureMemory.update)."""
+    def observe(self, agent: int, frame: int, x: float, y: float, keys: int = 0, dead: bool = False,
+                cause=None) -> list[dict]:
+        """The runner calls this with every real state: surprise events (SurpriseTracker), failed moves
+        (FailureMemory.update) and, on a death (cause: what killed it, for the log), the point of no return
+        (MoveMemory.died)."""
         ev = self.surprise.observe(agent, frame, x, y, dead)
         v = None if dead else float(self.value(np.array([x]), np.array([y]), keys)[0][0])
-        return ev + self.memory.update(agent, frame, v, dead)
+        ev = ev + self.memory.update(agent, frame, v, dead)
+        if dead and self.moves is not None:
+            ev.append(self.moves.died(agent, frame, cause))
+        return ev
 
     def played(self, agent: int, frame: int, action: int):
         """The runner calls this with the action index it really played for the agent on this frame (the
         surprise check counts a prediction only while its plan was followed)."""
         self.surprise.played(agent, frame, action)
 
+    # ---- airborne completion -----------------------------------------------------------------------------
+    def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H):
+        """C1b: from each candidate's main-member end row at H (rows (m,) ROW, its last action a_last (m,), its
+        leg there legs (m,)), the continuation fan (continuations()) rolled out with the main member up to
+        complete_max frames in batches of COMPLETE_CHUNK (rows that landed or died stop; all stopped: early
+        end). Landed: the first frame the cling rule calls supported, or a goal touch (T = 0 there). Died: the
+        safety sweep's deadly contact (hazard boxes, remembered deaths, the level's edge) against frames[H + k]
+        (the last given frame's boxes beyond the inputs). Returns per candidate (estimate frames after H,
+        completion risk 0 / 1, the record {continuation, frames, x, y, on, died}, its path [[x, y], ...]) and
+        the frames rolled out."""
+        m_all = len(rows)
+        fan = [continuations(a) for a in a_last]
+        nf = len(fan[0])
+        cand = np.repeat(np.arange(m_all), nf)
+        names = [nm for f in fan for nm, _ in f]
+        acts = np.array([a for f in fan for _, a in f], np.int64)
+        n = len(cand)
+        s = np.repeat(np.asarray(rows, ROW), nf)
+        leg = np.asarray(legs, np.int64)[cand]
+        Kmax = self.complete_max
+        xs = np.zeros((n, Kmax + 1))
+        ys = np.zeros((n, Kmax + 1))
+        xs[:, 0], ys[:, 0] = s["x"], s["y"]
+        state = np.zeros(n, np.int8)                   # 0 flying, 1 landed, 2 goal, 3 died
+        at = np.full(n, -1, np.int64)
+        hit = [None] * n
+        vy0 = s["vy"].astype(np.float64) * dt_ms / 1000.0
+        sup0, g0, side0 = self.support(s["x"].astype(np.float64), s["y"].astype(np.float64), vy0)
+        state[sup0] = 1
+        at[sup0] = 0
+        on = np.where(g0, "ground", "wall").astype(object)
+        last_vy = vy0.copy()
+        mem = slice(self.member, self.member + 1)
+        ck = {"terrain": self.guard_terrain(keys), "tol": self.collide_tol}
+        done, rolled = 0, 0
+        while done < Kmax:
+            act_i = np.nonzero(state == 0)[0]
+            if not len(act_i):
+                break
+            K = min(COMPLETE_CHUNK, Kmax - done)
+            out = imagine(self.model, mem, self.geom, s[act_i], np.repeat(acts[act_i, None], K, 1), dt_ms, worlds,
+                          offsets=np.full(len(act_i), H + done), **ck)
+            rolled += len(act_i) * K
+            x, y, vy = out["x"][0], out["y"][0], out["vy"][0]               # (a, K+1)
+            fr = [frames[min(H + done + k, len(frames) - 1)] if k else None for k in range(K + 1)]
+            fr = _near_frames(fr, x[None], y[None])
+            sw = S.sweep(x[None], y[None], fr, self.bounds)
+            cf = sw.contact_frame[0]
+            tg = S.first_contact(x[None], y[None], self.goal_boxes)[0][0] if len(self.goal_boxes) else \
+                np.full(len(act_i), -1)
+            sup, g, side = self.support(x[:, 1:], y[:, 1:], vy[:, 1:])
+            land = np.where(sup.any(1), sup.argmax(1) + 1, -1)
+            for j, r in enumerate(act_i):
+                ev = [(t, kd) for t, kd in ((int(land[j]), 1), (int(tg[j]), 2), (int(cf[j]), 3)) if t > 0]
+                if not ev:
+                    continue
+                t, kd = min(ev, key=lambda e: (e[0], -e[1]))     # same frame: a deadly contact, then the goal, then support
+                state[r], at[r] = kd, done + t
+                if kd == 1:
+                    on[r] = "ground" if g[j, t - 1] else "wall"
+                elif kd == 2:
+                    on[r] = "goal"
+                else:
+                    kind = int(sw.contact_kind[0, j])
+                    hit[r] = S.OUT_ID if kind == S.KIND_OUT else sw.ids[sw.contact_box[0, j]]
+                xs[r, done + 1:done + t + 1], ys[r, done + 1:done + t + 1] = x[j, 1:t + 1], y[j, 1:t + 1]
+                xs[r, done + t + 1:], ys[r, done + t + 1:] = x[j, t], y[j, t]
+            fly = state[act_i] == 0
+            fi = act_i[fly]
+            xs[fi, done + 1:done + K + 1], ys[fi, done + 1:done + K + 1] = x[fly, 1:], y[fly, 1:]
+            last_vy[fi] = vy[fly, -1]
+            s[fi] = out["last"][0][fly]
+            done += K
+        # the scores
+        xe, ye = xs[np.arange(n), np.where(at >= 0, at, done)], ys[np.arange(n), np.where(at >= 0, at, done)]
+        t_land = np.where(state == 2, 0.0, np.inf)
+        k = np.nonzero(state == 1)[0]
+        if len(k):
+            t_land[k] = self.field.times(xe[k], ye[k], leg[k], True)
+        t_fly = np.full(n, np.inf)
+        k = np.nonzero(state == 0)[0]
+        if len(k):
+            t_fly[k] = self.field.times(xe[k], ye[k], leg[k], False, last_vy[k])
+        res = []
+        for c in range(m_all):
+            idx = np.arange(c * nf, (c + 1) * nf)
+            died = [names[i] for i in idx if state[i] == 3]
+            ok = [i for i in idx if state[i] in (1, 2)]
+            if ok:
+                i = min(ok, key=lambda i: at[i] + self._tt(t_land[i]))
+                est, risk = at[i] + self._tt(t_land[i]), 0
+            elif len(died) == nf:
+                i = max(idx, key=lambda i: at[i])                       # the one that lived longest (shown)
+                xm, ym = float(rows["x"][c]), float(rows["y"][c])
+                vm = float(rows["vy"][c]) * dt_ms / 1000.0
+                t_end = self.field.times(np.array([xm]), np.array([ym]), int(legs[c]), False, np.array([vm]))[0]
+                est, risk = self._tt(t_end), 1
+            else:
+                fly_i = [i for i in idx if state[i] == 0]
+                i = min(fly_i, key=lambda i: self._tt(t_fly[i]))
+                est, risk = done + self._tt(t_fly[i]), 0
+            kk = int(at[i]) if at[i] >= 0 else done
+            rec = {"continuation": names[i] if ok or risk == 0 else None, "frames": kk if (ok or not risk) else None,
+                   "x": round(float(xe[i]), 2), "y": round(float(ye[i]), 2),
+                   "on": on[i] if ok else ("air" if not risk else None), "died": died,
+                   "hits": {names[j]: hit[j] for j in idx if state[j] == 3}}
+            res.append((float(est), risk, rec, [[float(a), float(b)] for a, b in zip(xs[i, :kk + 1], ys[i, :kk + 1])]))
+        self.last_completion = {"frames": done, "rows": n, "flying_at_end": int((state == 0).sum()),
+                                "xs": xs, "ys": ys, "names": names,
+                                "states": state.copy(), "at": at.copy()}
+        return res, rolled
+
+    def _tt(self, T):
+        """T with dead ends (+inf) charged: T(start) + DEAD_END_FRAMES (DEAD_FAR when the start is one too)."""
+        T = np.asarray(T, np.float64)
+        out = np.where(np.isfinite(T), T, self._dead_t)
+        return float(out) if out.ndim == 0 else out
+
     # ---- one decision ------------------------------------------------------------------------------------
     def plan(self, row, frame: int, worlds: list, frames: list, dt_ms: float = 16.667, agent: int = 0) -> Plan:
         """row: the agent's state (wm.buffer.ROW, one row; state_row builds one). worlds: at least H World
         (model inputs, index k = frame + k); frames: H + 1 plan.safety.FrameBoxes (index k = frame + k; index 0
-        unused). Returns the chosen Plan (also kept as this agent's previous plan)."""
+        unused); for the airborne completion they should cover H + complete_max (Planner.future_frames: the
+        last given ones are repeated beyond them). Returns the chosen Plan (also kept as this agent's previous
+        plan)."""
         t0 = time.perf_counter()
         H = self.H
         row = np.asarray(row, ROW).reshape(1)
         x0, y0, keys = float(row["x"][0]), float(row["y"][0]), int(row["keys"][0])
-        v0a, sup0, g0, side0, leg = self.value(np.array([x0]), np.array([y0]), keys)
-        v0 = float(v0a[0])
+        vy0 = np.array([float(row["vy"][0]) * dt_ms / 1000.0])
+        t0a, sup0, g0, side0, leg = self.time_to_go(np.array([x0]), np.array([y0]), keys, vy=vy0)
+        T0 = float(t0a[0])
+        T0_ok = math.isfinite(T0)
+        self._dead_t = T0 + DEAD_END_FRAMES if T0_ok else DEAD_FAR
+        v0 = float(self.value(np.array([x0]), np.array([y0]), keys, vy=vy0)[0][0])
         v0_ok = math.isfinite(v0)
         cell0 = self.cell(x0, y0)
+        scale = max(self.t_spawn - T0, DEAD_END_FRAMES) if T0_ok and math.isfinite(self.t_spawn) else DEAD_END_FRAMES
+        death_of = (lambda nm: self.moves.penalty(cell0, nm, scale)) if self.moves is not None else (lambda nm: 0.0)
         mem = slice(self.member, self.member + 1)
         timing, counts = {}, {}
         gt = self.guard_terrain(keys)
@@ -600,24 +923,21 @@ class Planner:
             (c if upto is None else c & (np.arange(c.shape[2])[None, None, :] <= np.asarray(upto)[None, :, None]))
             .any(axis=(0, 2)).sum())
 
-        def progress_of(vend):
-            vend = np.asarray(vend, np.float64)
-            base = v0 if v0_ok else 0.0
-            return np.where(np.isfinite(vend), base - vend, -DEAD_END if v0_ok else -1e3)
+        def ends_time(xe, ye, vye, legs=None):
+            return self.time_to_go(xe, ye, keys, legs, vye)[0]
 
-        def ends_value(xe, ye, legs=None):
-            return self.value(xe, ye, keys, legs)[0]
+        def success_total(t, pen):
+            # earlier touch first; the penalty frames (up to the touch) only break ties (< 1 frame)
+            return SUCCESS_SCORE - t - TIE * np.minimum(pen, 400.0)
 
-        def success_total(t, soft, fail):
-            # earlier touch first; risk and failure penalty (up to the touch) only break ties
-            return SUCCESS_SCORE - t - TIE * np.minimum(RISK_WEIGHT * soft + fail, 400.0)
+        def vetoed_total(vf, est):
+            return VETO_SCORE + vf - VETO_TIE * np.minimum(est, 1e5)
 
         start_in_goal = bool(len(self.goal_boxes)) and bool(
             (box_distances(np.array([x0]), np.array([y0]), self.goal_boxes) < S.BODY).any())
 
         # ---- stage 1: every library move, one member ------------------------------------------------------
         n1 = len(self.lib)
-        K1 = MAX_LEN
         out1 = imagine(self.model, mem, self.geom, np.repeat(row, n1), self.lib_actions, dt_ms, worlds,
                        deadline=None if self.budget is None else t0 + STAGE1_SHARE * self.budget / 1000.0,
                        keep_rows=True, **ck)
@@ -630,15 +950,18 @@ class Planner:
         tg1, legs1 = tg1[0], legs1[0]
         succ1 = tg1 > 0
         veto1, vf1, vk1, vid1, soft1, sf1 = _verdict(sw1, np.where(succ1, np.minimum(up1, tg1), up1))
-        xe1, ye1 = out1["x"][0, np.arange(n1), up1], out1["y"][0, np.arange(n1), up1]
-        vend1 = ends_value(xe1, ye1, legs1)
-        prog1 = progress_of(vend1)
+        ar1 = np.arange(n1)
+        xe1, ye1, vye1 = out1["x"][0, ar1, up1], out1["y"][0, ar1, up1], out1["vy"][0, ar1, up1]
+        tend1 = ends_time(xe1, ye1, vye1, legs1)
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
-        raw1 = prog1 - RISK_WEIGHT * soft1 - fail1
-        score1 = np.where(veto1, VETO_SCORE + vf1 + 1e-3 * prog1, raw1)
-        score1 = np.where(succ1, success_total(tg1, soft1, fail1), score1)
+        death1 = np.array([death_of(m.name) for m in self.lib])
+        pen1 = RISK_FRAMES * soft1 + fail1 + death1
+        est1 = up1 + self._tt(tend1) + pen1
+        score1 = np.where(veto1, vetoed_total(vf1, est1), -est1)
+        score1 = np.where(succ1, success_total(tg1, pen1), score1)
         order1 = np.argsort(-score1, kind="stable")
         keep1 = order1[:self.B1]
+        self.last_stage1 = {"names": [m.name for m in self.lib], "frames": up1, "t_end": tend1, "estimate": est1}
         t1 = time.perf_counter()
         timing["stage1"] = 1000 * (t1 - t0)
         counts["stage1"] = {"candidates": n1, "steps": int(steps1), "complete": int((self.lib_len <= steps1).sum()),
@@ -677,6 +1000,7 @@ class Planner:
             steps2 = out2["steps"]
             n2 = len(cands)
             xs2, ys2 = np.zeros((1, n2, H + 1)), np.zeros((1, n2, H + 1))
+            vye2 = np.zeros(n2)
             up2 = np.zeros(n2, np.int64)
             for c in range(n2):
                 i, L = firsts[c], offs[c]
@@ -685,6 +1009,7 @@ class Planner:
                 xs2[0, c, L + 1:L + m + 1], ys2[0, c, L + 1:L + m + 1] = out2["x"][0, c, 1:m + 1], out2["y"][0, c, 1:m + 1]
                 xs2[0, c, L + m + 1:], ys2[0, c, L + m + 1:] = xs2[0, c, L + m], ys2[0, c, L + m]
                 up2[c] = L + m
+                vye2[c] = out2["vy"][0, c, m] if m > 0 else out1["vy"][0, i, L]
             K = int(up2.max())
             fr2 = _near_frames(frames[:K + 1], xs2[:, :, :K + 1], ys2[:, :, :K + 1])
             sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds)
@@ -692,11 +1017,11 @@ class Planner:
             tg2, legs2 = tg2[0], legs2[0]
             succ2 = tg2 > 0
             veto2, vf2, _, _, soft2, _ = _verdict(sw2, np.where(succ2, np.minimum(up2, tg2), up2))
-            vend2 = ends_value(xs2[0, np.arange(n2), up2], ys2[0, np.arange(n2), up2], legs2)
-            prog2 = progress_of(vend2)
-            fail2 = np.array([fail1[i] for i in firsts])
-            score2 = np.where(veto2, VETO_SCORE + vf2 + 1e-3 * prog2, prog2 - RISK_WEIGHT * soft2 - fail2)
-            score2 = np.where(succ2, success_total(tg2, soft2, fail2), score2)
+            tend2 = ends_time(xs2[0, np.arange(n2), up2], ys2[0, np.arange(n2), up2], vye2, legs2)
+            pen2 = RISK_FRAMES * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
+            est2 = up2 + self._tt(tend2) + pen2
+            score2 = np.where(veto2, vetoed_total(vf2, est2), -est2)
+            score2 = np.where(succ2, success_total(tg2, pen2), score2)
             pick = np.argsort(-score2, kind="stable")[:self.S]
             final = [cands[c] for c in pick]
             counts["stage2"] = {"candidates": n2, "steps": int(steps2), "of_steps": int(K2),
@@ -749,26 +1074,54 @@ class Planner:
                           veto_id=[vid[c] if succ3[c] else saf.veto_id[c] for c in range(n3)],
                           soft_risk=np.where(succ3, vsoft, saf.soft_risk),
                           soft_frame=np.where(succ3, vsf, saf.soft_frame))
-        xe, ye = out3["x"][:, :, H], out3["y"][:, :, H]
-        vend_e = ends_value(xe, ye, legs_e)                          # (E, n3), each member's own leg
-        prog_e = progress_of(vend_e)
-        prog3 = prog_e.mean(0)
-        spread_end = np.sqrt(xe.var(0) + ye.var(0))
-        unc = np.exp(-np.maximum(0.0, 2 * spread_end - UNC_KNEE) / UNC_SCALE)
-        credit = np.where(prog3 > 0, prog3 * unc, prog3)
+        xe, ye, vye = out3["x"][:, :, H], out3["y"][:, :, H], out3["vy"][:, :, H]
+        tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, keys, legs_e, vye)      # (E, n3), each member's own leg
+        vend_e = self.value(xe, ye, keys, legs_e, vye)[0]                         # V: display only
+        lands = 2 * sup_e.sum(0) > E                                 # a majority of members supported at H
+        tend3 = self._tt(tend_e).mean(0)
+        base3 = H + tend3                                            # frames used + T at the end
+        frames_used = np.full(n3, H, np.int64)
+        t_end3 = tend3.copy()
+        comp_risk = np.zeros(n3)
+        comp_rec, comp_path = [None] * n3, [None] * n3
+        tc = time.perf_counter()
+        need = np.nonzero(~lands & ~succ3 & ~saf.veto)[0] if self.complete_max > 0 else np.zeros(0, np.int64)
+        rolled = 0
+        if len(need):
+            mi = min(self.member, E - 1)
+            res, rolled = self.complete(out3["last"][mi, need], acts3[need, H - 1], legs_e[mi, need], worlds,
+                                        frames, dt_ms, keys, H)
+            for c, (est, risk, rec, path) in zip(need, res):
+                base3[c] = H + est
+                comp_risk[c], comp_rec[c], comp_path[c] = risk, rec, path
+                k = rec["frames"] if rec["frames"] is not None else 0
+                frames_used[c] = H + k
+                t_end3[c] = est - k
+        timing["completion"] = 1000 * (time.perf_counter() - tc)
         first_name = [next((nm for nm, a, b in segs if nm != "pad"), "pad") for segs, _ in final]
         fail3 = np.array([self.memory.penalty(cell0, nm) for nm in first_name])
-        risk3 = RISK_WEIGHT * saf.soft_risk
-        raw3 = credit - risk3 - fail3
-        total3 = np.where(saf.veto, VETO_SCORE + saf.veto_frame + 1e-3 * raw3, raw3)
-        total3 = np.where(succ3, success_total(tg3, saf.soft_risk, fail3), total3)
-        best, switch = self.switch_rule(int(np.argmax(total3)), prev_idx, total3, succ3, tg3, saf)
+        death3 = np.array([death_of(nm) for nm in first_name])
+        soft3 = saf.soft_risk + comp_risk
+        risk3 = RISK_FRAMES * soft3
+        est3 = base3 + risk3 + fail3 + death3
+        total3 = np.where(saf.veto, vetoed_total(saf.veto_frame, est3), -est3)
+        total3 = np.where(succ3, success_total(tg3, risk3 + fail3 + death3), total3)
+        landing3 = lands | succ3 | np.array([r is not None and r["continuation"] is not None and r["on"] != "air"
+                                             for r in comp_rec])
+        best, switch = self.switch_rule(int(np.argmax(total3)), prev_idx, total3, succ3, tg3, saf, soft3)
+        safe_alts = int(sum(1 for c in range(n3) if c != best and not saf.veto[c] and saf.soft_risk[c] < SAFE_RISK
+                            and landing3[c]))
         t3 = time.perf_counter()
         timing["final"] = 1000 * (t3 - t2)
         self.final_ms = 0.7 * self.final_ms + 0.3 * timing["final"]
         counts["final"] = {"candidates": n3, "members": E, "steps": H, "vetoed": int(saf.veto.sum()),
                            "prev_included": prev_idx >= 0, "goal": int(succ3.sum()), "start_in_goal": start_in_goal,
-                           "clipped": n_clip(out3["clip"])}
+                           "clipped": n_clip(out3["clip"]), "landing": int(lands.sum()), "completed": int(len(need)),
+                           "completion_rows_frames": int(rolled),
+                           "completion_inputs": int(min(len(worlds), len(frames) - 1)),
+                           "safe_alternatives": safe_alts,
+                           "completions": [None if r is None else {k: r[k] for k in ("continuation", "frames", "on", "died")}
+                                           for r in comp_rec]}
 
         # ---- explanation -----------------------------------------------------------------------------------
         segs, acts = final[best]
@@ -783,12 +1136,12 @@ class Planner:
                       for k in range(H) if side[k] != 0 and not g[k] and jump[k] and (k == 0 or not jump[k - 1])]
         fin_e = np.isfinite(vend_e[:, best])
         vend_mean = float(np.mean(vend_e[fin_e, best])) if fin_e.any() else None
-        chosen_parts = {"progress": float(prog3[best]), "credit": float(credit[best]), "risk": float(risk3[best]),
-                        "fail": float(fail3[best]), "unc": float(unc[best]), "spread": float(spread_end[best])}
+        spread_end = np.sqrt(xe.var(0) + ye.var(0))
         goal_touch, key_touches = self._touches(out3["x"][:, best], out3["y"][:, best], tg_e[:, best],
                                                 [(j, t[:, best], w[:, best]) for j, t, w in keys_e], E)
-        alts = self._alternatives(final, best, saf, prog3, credit, risk3, fail3, unc, spread_end, total3, vend_e,
-                                  v0, cell0, first_name, veto1, vf1, vk1, vid1, prog1, vend1, keep1,
+        parts = {"base": base3, "risk": risk3, "fail": fail3, "death": death3, "est": est3, "soft": soft3,
+                 "first": first_name}
+        alts = self._alternatives(final, best, saf, parts, total3, T0, cell0, scale, veto1, vf1, vk1, vid1, est1,
                                   paths=(out3["x"].mean(0), out3["y"].mean(0), out1["x"][0], out1["y"][0], up1),
                                   goal=(succ3, tg3, n_goal, E), switch=switch)
         veto = None
@@ -796,6 +1149,9 @@ class Planner:
             veto = {"frame": int(saf.veto_frame[best]), "id": saf.veto_id[best],
                     "kind": S.KIND_NAMES[int(saf.veto_kind[best])]}
         first_frames = next((b for nm, a, b in segs if nm != "pad"), 0)
+        completion = None
+        if comp_rec[best] is not None:
+            completion = {**comp_rec[best], "risk": int(comp_risk[best]), "path": comp_path[best]}
         plan = Plan(
             frame=int(frame), agent=int(agent),
             state={"x": x0, "y": y0, "vx": float(row["vx"][0]), "vy": float(row["vy"][0]),
@@ -806,11 +1162,13 @@ class Planner:
             pad=int(sum(b - a for nm, a, b in segs if nm == "pad")), from_prev=best == prev_idx,
             path=[[float(a), float(b)] for a, b in zip(mx, my)], spread=[float(v) for v in spread],
             landings=landings, wall_jumps=wall_jumps, nearest=saf.nearest[best], veto=veto,
-            soft_risk=float(saf.soft_risk[best]), soft_frame=int(saf.soft_frame[best]),
-            score={"progress": chosen_parts["progress"], "progress_credit": chosen_parts["credit"],
-                   "risk": chosen_parts["risk"], "uncertainty": chosen_parts["unc"],
-                   "spread_end": chosen_parts["spread"], "failure": chosen_parts["fail"],
-                   "total": float(total3[best])},
+            soft_risk=float(soft3[best]), soft_frame=int(saf.soft_frame[best]),
+            score={"frames_used": int(frames_used[best]), "t_start": T0 if T0_ok else None,
+                   "t_end": float(t_end3[best]), "estimate": float(est3[best]),
+                   "risk_frames": float(risk3[best]), "failure_frames": float(fail3[best]),
+                   "death_frames": float(death3[best]), "total": float(total3[best]),
+                   "completion": None if completion is None else completion["frames"],
+                   "landing": bool(landing3[best]), "spread_end": float(spread_end[best])},
             v_start=v0 if v0_ok else None, v_end=vend_mean, dead_end_members=int((~fin_e).sum()), leg=leg,
             end_supported=bool(sup[H]),
             alternatives=alts,
@@ -820,33 +1178,40 @@ class Planner:
             finish_model=float(out3["finish"][:, best].max()),
             timing={**{k: round(v, 2) for k, v in timing.items()}, "total": round(1000 * (time.perf_counter() - t0), 2)},
             counts=counts, segments=[[nm, int(a), int(b)] for nm, a, b in segs], switch=switch,
-            model_clipped=None if out3["clip"] is None else int(out3["clip"][:, best].any(0).sum()))
+            model_clipped=None if out3["clip"] is None else int(out3["clip"][:, best].any(0).sum()),
+            completion=completion)
         plan.first_move_frames = int(first_frames)
         self.prev[agent] = plan
         if not plan.from_prev:                       # a kept plan keeps the predictions of its adoption
             self.surprise.add(plan)
+        if self.moves is not None:
+            self.moves.decided(agent, frame, cell0, plan.chosen[0] if plan.chosen else "pad", safe_alts,
+                               adopted=not plan.from_prev)
         if first_frames > 0 and v0_ok:
             vm = self.value(np.array([mx[first_frames]]), np.array([my[first_frames]]), keys)[0][0]
             self.memory.expect(agent, frame, plan.chosen[0], first_frames, acts, cell0, v0, float(vm))
         return plan
 
-    def switch_rule(self, best: int, p: int, total3, succ3, tg3, saf):
+    def switch_rule(self, best: int, p: int, total3, succ3, tg3, saf, soft=None):
         """The switch rule (module docstring) between the shifted previous plan (final index p, -1 none) and
-        the best other candidate. best: the best total. Returns (chosen index, Plan.switch record or None)."""
+        the best other candidate. best: the best total. soft: the candidates' soft risk (default the safety
+        check's). Returns (chosen index, Plan.switch record or None). Unit: frames (the totals are minus the
+        estimated frames to the goal; successes: their touch frames)."""
         if p < 0:
             return best, None
+        soft = saf.soft_risk if soft is None else soft
         others = np.array([c for c in range(len(total3)) if c != p], np.int64)
         if not len(others):
-            return p, {"kept": True, "gain": None, "margin": None, "unit": None, "reason": "kept: no other candidate"}
+            return p, {"kept": True, "gain": None, "margin": None, "unit": "frames", "reason": "kept: no other candidate"}
         b = int(others[np.argmax(total3[others])])
         h = self.hysteresis
-        frames = bool(succ3[p] and succ3[b])
-        gain = float(tg3[p] - tg3[b]) if frames else float(total3[b] - total3[p])
-        unit, margin = ("frames", float(SUCCESS_MARGIN)) if frames else ("V", h)
-        g = f"{gain:+.0f} frames" if frames else f"{gain:+.2f}"
+        both = bool(succ3[p] and succ3[b])
+        gain = float(tg3[p] - tg3[b]) if both else float(total3[b] - total3[p])
+        margin = float(SUCCESS_MARGIN) if both else h
+        g = f"{gain:+.0f} frames"
 
         def rec(kept, why):
-            return {"kept": kept, "gain": round(gain, 3), "margin": margin, "unit": unit, "reason": why}
+            return {"kept": kept, "gain": round(gain, 3), "margin": margin, "unit": "frames", "reason": why}
         if h <= 0:                                   # no rule: the best total (only described)
             return best, rec(best == p, f"kept: best other {g}" if best == p else f"switched: {g}")
         if best == p:
@@ -855,8 +1220,8 @@ class Planner:
             return b, rec(False, f"switched: previous plan vetoed ({saf.veto_id[p]} f{int(saf.veto_frame[p])})")
         if succ3[b] and not succ3[p]:
             return b, rec(False, "switched: reaches the princess, the previous plan does not")
-        if not frames and saf.soft_risk[p] - saf.soft_risk[b] > RISK_SWITCH:
-            return b, rec(False, f"switched: previous plan's risk {saf.soft_risk[p]:.2f} vs {saf.soft_risk[b]:.2f}")
+        if not both and soft[p] - soft[b] > RISK_SWITCH:
+            return b, rec(False, f"switched: previous plan's risk {soft[p]:.2f} vs {soft[b]:.2f}")
         if gain > margin:
             return b, rec(False, f"switched: {g}")
         return p, rec(True, f"kept: best other {g} < {margin:g}")
@@ -884,19 +1249,21 @@ class Planner:
             out.append({"frame": k[0], "key": int(vals[cnt.argmax()]), "x": k[1], "y": k[2]})
         return goal, out
 
-    def _alternatives(self, final, best, saf, prog3, credit, risk3, fail3, unc, spread_end, total3, vend_e, v0,
-                      cell0, first_name, veto1, vf1, vk1, vid1, prog1, vend1, keep1, paths=None,
-                      goal=None, switch=None) -> list[dict]:
-        """The top N_ALTERNATIVES rejected plans, each with the one reason that separates it from the chosen one:
-        the final stage's next best by score (up to N_ALTERNATIVES - 2 of them first), then the stage-1 moves the
-        safety check vetoed with the most progress (up to 2), then more of the final stage.
+    def _alternatives(self, final, best, saf, parts, total3, T0, cell0, scale, veto1, vf1, vk1, vid1, est1,
+                      paths=None, goal=None, switch=None) -> list[dict]:
+        """The top N_ALTERNATIVES rejected plans, each with the one reason that separates it from the chosen one
+        (in frames): the final stage's next best by score (up to N_ALTERNATIVES - 2 of them first), then the
+        stage-1 moves the safety check vetoed with the lowest estimate (up to 2), then more of the final stage.
+        parts: the final candidates' frames {base (frames used + T at the end), risk, fail, death, est (the
+        estimate), soft (soft risk), first (first move names)}.
 
         With `paths` (final mean x, y (n3, H+1); stage-1 member-0 x, y (n1, K1+1); stage-1 frames judged (n1,)),
         each alternative also carries its predicted path [[x, y], ...] (final: the members' mean over frames
-        0..H; stage 1: frames 0..its move's length) and whether it was vetoed (added keys: older readers ignore
-        them)."""
+        0..H; stage 1: frames 0..its move's length) and whether it was vetoed. "progress": T(start) minus its
+        estimate (frames gained beyond the time it takes; None without T(start))."""
         names = lambda segs: [nm for nm, a, b in segs if nm != "pad"]
-        vstr = lambda v: "inf" if not math.isfinite(v) else f"{v:.1f}"
+        est = parts["est"]
+        gained = lambda e: None if not math.isfinite(T0) else float(T0 - e)
 
         def with_path(d, xs, ys, vetoed):
             if paths is not None:
@@ -905,16 +1272,14 @@ class Planner:
             return d
 
         succ, tg, n_goal, E = goal if goal is not None else (np.zeros(len(final), bool), None, None, None)
-
         kept_over = switch is not None and switch["kept"]
 
         def final_alt(c):
-            vend = float(vend_e[:, c].mean())
             if kept_over and total3[c] > total3[best]:          # better, but within the switch margin
                 if succ[best] and succ[c]:
                     reason = f"reaches the princess {int(tg[best] - tg[c])} frames earlier"
                 else:
-                    reason = f"scores {total3[c] - total3[best]:+.2f} more"
+                    reason = f"estimate {est[c]:.0f} vs {est[best]:.0f} frames"
                 reason += f", within the switch margin: the committed plan is kept ({switch['reason']})"
             elif succ[best] and succ[c]:
                 if tg[c] > tg[best]:
@@ -928,36 +1293,36 @@ class Planner:
                 reason = hit_reason(int(saf.veto_kind[c]), saf.veto_id[c], int(saf.veto_frame[c]))
             elif succ[best]:
                 reason = "does not reach the princess" + (f" ({n_goal[c]} of {E} members do)" if n_goal[c] else "")
-            elif prog3[c] <= NO_PROGRESS:
-                reason = f"no progress (V {vstr(v0)} -> {vstr(vend)})"
             else:
-                gaps = {"progress": credit[best] - credit[c], "risk": risk3[c] - risk3[best],
-                        "fail": fail3[c] - fail3[best]}
+                gaps = {"time": parts["base"][c] - parts["base"][best], "risk": parts["risk"][c] - parts["risk"][best],
+                        "fail": parts["fail"][c] - parts["fail"][best], "death": parts["death"][c] - parts["death"][best]}
                 why = max(gaps, key=gaps.get)
-                if why == "fail" and fail3[c] > 0:
-                    reason = self.memory.reason(cell0, first_name[c])
-                elif why == "risk" and risk3[c] > 0:
+                if why == "time" and math.isfinite(T0) and T0 - parts["base"][c] <= NO_PROGRESS:
+                    reason = f"no progress (estimate {est[c]:.0f} frames, T at the start {T0:.0f})"
+                elif why == "fail" and parts["fail"][c] > 0:
+                    reason = self.memory.reason(cell0, parts["first"][c])
+                elif why == "death" and parts["death"][c] > 0 and self.moves is not None:
+                    reason = self.moves.reason(cell0, parts["first"][c], scale)
+                elif why == "risk" and parts["risk"][c] > 0:
                     near = saf.nearest[c][0]["id"] if saf.nearest[c] else "?"
-                    reason = (f"risk {saf.soft_risk[c]:.2f} near {near} at frame {int(saf.soft_frame[c])} "
-                              f"(chosen {saf.soft_risk[best]:.2f})")
+                    reason = (f"risk {parts['soft'][c]:.2f} near {near} at frame {int(saf.soft_frame[c])} "
+                              f"(chosen {parts['soft'][best]:.2f}, +{parts['risk'][c]:.0f} frames)")
                 else:
-                    reason = f"lower score than chosen: progress {prog3[c]:.1f} vs {prog3[best]:.1f}"
-                    if unc[c] < 0.9:
-                        reason += f" (uncertain: spread {spread_end[c]:.0f}u, credit x{unc[c]:.2f})"
-            d = {"moves": names(final[c][0]), "total": float(total3[c]), "progress": float(prog3[c]),
-                 "stage": "final", "reason": reason}
+                    reason = f"estimate {est[c]:.0f} vs {est[best]:.0f} frames"
+            d = {"moves": names(final[c][0]), "total": float(total3[c]), "estimate": float(est[c]),
+                 "progress": gained(est[c]), "stage": "final", "reason": reason}
             return with_path(d, paths[0][c], paths[1][c], saf.veto[c]) if paths is not None else d
 
         def stage1_alt(i):
-            d = {"moves": [self.lib[i].name], "total": None, "progress": float(prog1[i]), "stage": "stage 1",
-                 "reason": hit_reason(int(vk1[i]), vid1[i], int(vf1[i]))}
+            d = {"moves": [self.lib[i].name], "total": None, "estimate": float(est1[i]), "progress": gained(est1[i]),
+                 "stage": "stage 1", "reason": hit_reason(int(vk1[i]), vid1[i], int(vf1[i]))}
             if paths is None:
                 return d
             n = int(paths[4][i]) + 1
             return with_path(d, paths[2][i][:n], paths[3][i][:n], True)
 
         fin = [int(c) for c in np.argsort(-total3, kind="stable") if c != best]
-        vet = [int(i) for i in np.argsort(-prog1, kind="stable") if veto1[i]]
+        vet = [int(i) for i in np.argsort(est1, kind="stable") if veto1[i]]
         n_fin = min(len(fin), max(N_ALTERNATIVES - min(2, len(vet)), 0))
         n_vet = min(len(vet), N_ALTERNATIVES - n_fin)
         return [final_alt(c) for c in fin[:n_fin]] + [stage1_alt(i) for i in vet[:n_vet]]

@@ -275,31 +275,33 @@ def _rule(h, total, succ=None, tg=None, veto=None, risk=None, best=None, p=0):
 
 
 def test_switch_rule():
-    # previous plan (index 0) against a slightly better one: kept within the margin, switched over it
-    c, r = _rule(0.5, [1.0, 1.31, 0.2])
-    assert c == 0 and r["kept"] and r["reason"] == "kept: best other +0.31 < 0.5" and r["unit"] == "V"
-    c, r = _rule(0.5, [1.0, 2.8])
-    assert c == 1 and not r["kept"] and r["reason"] == "switched: +1.80" and r["gain"] == pytest.approx(1.8)
-    c, r = _rule(0.5, [2.0, 1.5])
-    assert c == 0 and r["kept"] and r["reason"] == "kept: best other -0.50"
+    # totals are minus the estimated frames to the goal: the previous plan (index 0) against a slightly better
+    # one: kept within the margin (frames), switched over it
+    c, r = _rule(3.0, [-300.0, -298.0, -400.0])
+    assert c == 0 and r["kept"] and r["reason"] == "kept: best other +2 frames < 3" and r["unit"] == "frames"
+    c, r = _rule(3.0, [-300.0, -296.0])
+    assert c == 1 and not r["kept"] and r["reason"] == "switched: +4 frames" and r["gain"] == pytest.approx(4.0)
+    assert r["margin"] == 3.0
+    c, r = _rule(3.0, [-300.0, -305.0])
+    assert c == 0 and r["kept"] and r["reason"] == "kept: best other -5 frames"
     # hysteresis 0: always the best total (only described)
-    assert _rule(0.0, [1.0, 1.01])[0] == 1 and _rule(0.0, [1.0, 1.0])[0] == 0
+    assert _rule(0.0, [-300.0, -299.9])[0] == 1 and _rule(0.0, [-300.0, -300.0])[0] == 0
     # a vetoed previous plan never blocks a switch; a riskier one is dropped
-    c, r = _rule(0.5, [-1e6 + 9, -1e6 + 12], veto=[True, True])
+    c, r = _rule(3.0, [-1e6 + 9, -1e6 + 12], veto=[True, True])
     assert c == 1 and r["reason"] == "switched: previous plan vetoed (h3 f9)"
-    c, r = _rule(0.5, [1.0, 1.1], risk=[0.5, 0.2])
+    c, r = _rule(3.0, [-300.0, -299.0], risk=[0.5, 0.2])
     assert c == 1 and r["reason"].startswith("switched: previous plan's risk 0.50")
     # successes: by the touch frame, 3 frames margin; a success always beats a non-success
     S5 = 1e5
-    c, r = _rule(0.5, [S5 - 20, S5 - 18], succ=[True, True], tg=[20, 18])
+    c, r = _rule(3.0, [S5 - 20, S5 - 18], succ=[True, True], tg=[20, 18])
     assert c == 0 and r["unit"] == "frames" and r["reason"] == "kept: best other +2 frames < 3"
-    c, r = _rule(0.5, [S5 - 20, S5 - 16], succ=[True, True], tg=[20, 16])
+    c, r = _rule(3.0, [S5 - 20, S5 - 16], succ=[True, True], tg=[20, 16])
     assert c == 1 and r["reason"] == "switched: +4 frames"
-    c, r = _rule(5.0, [3.0, S5 - 40], succ=[False, True], tg=[-1, 40])
+    c, r = _rule(50.0, [-300.0, S5 - 40], succ=[False, True], tg=[-1, 40])
     assert c == 1 and r["reason"] == "switched: reaches the princess, the previous plan does not"
-    assert _rule(0.5, [1.0], p=0) == (0, {"kept": True, "gain": None, "margin": None, "unit": None,
+    assert _rule(3.0, [1.0], p=0) == (0, {"kept": True, "gain": None, "margin": None, "unit": "frames",
                                           "reason": "kept: no other candidate"})
-    assert _rule(0.5, [1.0, 2.0], p=-1) == (1, None)
+    assert _rule(3.0, [1.0, 2.0], p=-1) == (1, None)
 
 
 @pytest.mark.skipif(not os.path.exists(MODEL), reason="no world model")
@@ -351,17 +353,18 @@ def test_closed_loop_harness(tmp_path):
     assert old["frames"] == 12 and old["decisions"] == 6 and [p["frame"] for p in old["plans"]] == list(range(0, 12, 2))
     assert old["triggers"] == {"start": 1, "interval": 5}
     assert 1 <= new["decisions"] < old["decisions"] and new["plans"][0]["trigger"] == ["start"]
-    assert new["mode"]["hysteresis"] == 0.5 and new["plan_ms_per_frame"] > 0
+    assert new["mode"]["hysteresis"] == 3.0 and new["plan_ms_per_frame"] > 0
     assert "the model plays itself, not the game" in closed_loop_text(new)
 
 
 if __name__ == "__main__" and "--write" in sys.argv:
     from test_planner_golden import model_digest
     import torch
+    flags = ["--triggers", "off", "--hysteresis", "0"]           # the old replan mode (as the tests run it)
     with tempfile.TemporaryDirectory() as tmp:
-        out = old_mode_run(tmp, tol=None)
+        out = old_mode_run(tmp, flags, tol=None)
     with tempfile.TemporaryDirectory() as tmp:
-        on = old_mode_run(tmp)
+        on = old_mode_run(tmp, flags)
     out.pop("plans")
     on.pop("plans")
     out["guarded"] = on

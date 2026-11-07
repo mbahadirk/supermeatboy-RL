@@ -4,7 +4,7 @@ costs.
     python -m plan.offline <run>/wm_data --level 4-6 [--decisions 20] [--model runs/wm_locked/wm_model.pt]
                            [--budget 120] [--threads 2] [--seed 0] [--json plans.jsonl]
     python -m plan.offline runs/plan_20261103-152013/wm_data --level 1-12 --closed-loop 400 [--start 0]
-                           [--replan 8] [--tube 1.5] [--triggers on] [--hysteresis 0.5] [--json summary.jsonl]
+                           [--replan 8] [--tube 1.5] [--triggers on] [--hysteresis 3] [--json summary.jsonl]
 
 --closed-loop: the world model (member 0) plays itself from a recorded state, the old way (--replan 2,
 triggers off, hysteresis 0) and then with the given flags (closed_loop): decisions per 100 frames, switch rate,
@@ -35,7 +35,7 @@ if HERE not in sys.path:
 
 from mpc.future import FutureWorld                                        # noqa: E402
 from plan.measure_progress import level_from_data, planner_inputs          # noqa: E402
-from plan.planner import Planner, future_inputs, state_row                 # noqa: E402
+from plan.planner import HYSTERESIS_FRAMES, Planner, future_inputs, state_row   # noqa: E402
 from plan.progress import ProgressField                                    # noqa: E402
 
 DEFAULT_MODEL = os.path.join(HERE, "runs", "wm_locked", "wm_model.pt")
@@ -64,14 +64,15 @@ def build(d: str, level: str, model: str, budget: float, collide_tol="default"):
 
 
 def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int = 8, tube: float = 1.5,
-                triggers: bool = True, hysteresis: float = 0.5, budget: float | None = 120.0, start: int = 0,
+                triggers: bool = True, hysteresis: float = HYSTERESIS_FRAMES, budget: float | None = 120.0, start: int = 0,
                 agent: int | None = None, log=None) -> dict:
     """The world model plays itself: ensemble member 0 stands in for the game for one level (NOT the game).
 
     From a recorded agent's state at wave frame `start` of the level's second recorded wave (agent: a planned
     one when the shard says so, else the first alive), each frame: the planner's surprise / failure check on
     the state (Planner.observe), the replan triggers (plan/commit.py, as agent.py with --replan / --tube /
-    --triggers), a decision when one fires (Planner.plan with `hysteresis`), the committed plan's action, then
+    --triggers), a decision when one fires (Planner.plan with `hysteresis`, frames; its inputs cover the airborne
+    completion's frames too: Planner.future_frames), the committed plan's action, then
     one step of member 0 with that action; the hazards are the recorded ones of that wave (the time step is
     locked, so they do not depend on the agent), death by the geometry (plan.safety against the next frame's
     recorded boxes and the level's edge), the goal and keys by their contact boxes. Not modelled: tile changes
@@ -107,7 +108,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
     s = state_row(r0["x"], r0["y"], r0["vx"], r0["vy"], r0["flags"], r0["state"], r0["keys"], r0["held"])
     goal_boxes = np.asarray(lv.goal_boxes(), np.float64).reshape(-1, 5)
     key_boxes = list(lv.key_boxes())
-    plans, played, plan_ms, check_s = [], {}, 0.0, 0.0
+    plans, played, plan_ms, check_s, events = [], {}, 0.0, 0.0, []
     cur = None
     outcome, f = "alive", start
     for f in range(start, start + frames):
@@ -131,7 +132,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
         trig = com.triggers(0, f, x, y, keys, False, planner, fboxes_now)
         check_s += time.perf_counter() - t
         if trig:
-            fboxes_now()
+            fut["w"], fut["fb"], _ = future_inputs(fw, f, planner.future_frames, dt, lv.name)
             cur = planner.plan(s, f, fut["w"], fut["fb"], dt, agent=0)
             com.decided(0, cur, f, fut["fb"], planner)
             plan_ms += cur.timing["total"]
@@ -150,6 +151,8 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
         seg = (np.array([[[x, x2]]]), np.array([[[y, y2]]]))
         if kind[0] != S.KIND_NONE:
             outcome = f"died at frame {f + 1} ({S.KIND_NAMES[int(kind[0])]})"
+            events += [e for e in planner.observe(0, f + 1, x2, y2, keys, dead=True, cause=S.KIND_NAMES[int(kind[0])])
+                       if e.get("kind") == "point of no return"]
             break
         if len(goal_boxes) and S.first_contact(*seg, goal_boxes)[0][0, 0] > 0:
             outcome = f"finished at frame {f + 1}"
@@ -185,7 +188,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
            "plan_ms_per_frame": round(plan_ms / n_frames, 2), "check_ms_per_frame": round(1000 * check_s / n_frames, 3),
            "triggers": dict(sorted(trig.items(), key=lambda kv: -kv[1])),
            "v_start": plans[0]["v_start"] if plans else None, "v_end": round(v1, 2) if math.isfinite(v1) else None,
-           "plans": plans}
+           "completed": sum(1 for p in plans if p.get("completion")), "events": events, "plans": plans}
     if log:
         log(closed_loop_text(res))
     return res
@@ -216,7 +219,8 @@ def main():
     ap.add_argument("--replan", type=int, default=8, help="closed loop: as agent.py --replan (default 8)")
     ap.add_argument("--tube", type=float, default=1.5, help="closed loop: as agent.py --tube (default 1.5)")
     ap.add_argument("--triggers", choices=("on", "off"), default="on", help="closed loop: as agent.py --triggers")
-    ap.add_argument("--hysteresis", type=float, default=0.5, help="closed loop: as agent.py --hysteresis (default 0.5)")
+    ap.add_argument("--hysteresis", type=float, default=HYSTERESIS_FRAMES,
+                    help=f"closed loop: as agent.py --hysteresis, frames (default {HYSTERESIS_FRAMES:g})")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--decisions", type=int, default=20)
     ap.add_argument("--budget", type=float, default=120.0, help="ms per decision (the cheap stages' deadline)")
@@ -280,7 +284,7 @@ def main():
         r = alive[int(rng.integers(len(alive)))]
         row = state_row(r["x"], r["y"], r["vx"], r["vy"], r["flags"], r["state"], r["keys"], r["held"])
         H, dt = planner.H, dt_of(w)
-        worlds, fboxes, recorded = future_inputs(fw, f, H, dt, lv.name)
+        worlds, fboxes, recorded = future_inputs(fw, f, planner.future_frames, dt, lv.name)
         planner.prev = {}                                 # sampled states of different agents: no previous plan
         plan = planner.plan(row, f, worlds, fboxes, dt, agent=int(r["agent"]))
         ms.append(plan.timing["total"])
@@ -295,7 +299,8 @@ def main():
               f"{c['stage1']['steps']} steps ({c['stage1']['vetoed']} vetoed); stage 2 {c['stage2'].get('candidates', 0)} x "
               f"{c['stage2'].get('steps', 0)}/{c['stage2'].get('of_steps', 0)} steps ({c['stage2'].get('complete', 0)} to 48 frames,"
               f" {c['stage2'].get('vetoed', 0)} vetoed); final {c['final']['candidates']} x {c['final']['members']} members "
-              f"({c['final']['vetoed']} vetoed); hazards recorded for {recorded}/{H} steps", flush=True)
+              f"({c['final']['vetoed']} vetoed, {c['final']['completed']} completed in {plan.timing.get('completion', 0):.0f} ms); "
+              f"hazards recorded for {recorded}/{planner.future_frames} steps", flush=True)
         if out is not None:
             out.write(json.dumps(plan.to_dict()) + "\n")
     if out is not None:
