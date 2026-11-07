@@ -126,7 +126,7 @@ def test_triggers_surprise_support_missed():
     c = CM.Committer(replan=8, tube=1.5, on=True)
     c.decided(0, _stub_plan(first=0, goal={"frame": 2, "x": 4.0, "y": 0.0, "members": 5},
                             keys=[{"frame": 1, "key": 1, "x": 2.0, "y": 0.0}]), 100, None, pl)
-    thr = 1.5 * ERR90_AT[4]
+    thr = max(1.5 * ERR90_AT[4], CM.MIN_TUBE)
     assert c.tube.at(4) == ERR90_AT[4] and c.tube.at(6) == pytest.approx((ERR90_AT[4] + ERR90_AT[8]) / 2)
     tr = c.triggers(0, 104, 8.0 + thr + 0.5, 0.0, keys=0b10, planner=pl)
     assert tr[0] == f"surprise +4 err {thr + 0.5:.1f} > {thr:.1f}" and "missed: princess f2" in tr
@@ -144,6 +144,20 @@ def test_triggers_surprise_support_missed():
     path = [[1001.0, 0.0 if k < 5 else 30.0] for k in range(49)]     # predicted on the right wall from frame 5
     c.decided(0, _stub_plan(path=path, first=0), 100, None, pl)
     assert c.triggers(0, 110, 990.0, 30.0, planner=pl) == ["support: lost the wall +10"]
+
+
+def test_surprise_tube_has_a_minimum_width():
+    pl = _stub_planner()
+    c = CM.Committer(replan=48, tube=1.5, on=True)
+    c.decided(0, _stub_plan(first=0), 100, None, pl)                  # path x = 2k on the ground
+    assert 1.5 * c.tube.at(1) < CM.MIN_TUBE
+    assert c.triggers(0, 101, 2.0 + 2.0, 0.0, planner=pl) == []      # 2 units off at +1: inside the minimum tube
+    assert c.triggers(0, 101, 2.0 + 3.5, 0.0, planner=pl) == ["surprise +1 err 3.5 > 3.0"]
+    c.tube.add({1: [0.1] * CM.MIN_SAMPLES})                          # the run's own +1 error: tiny, still the minimum
+    assert c.tube.table[1][1] == "run" and c.triggers(0, 101, 2.0 + 2.0, 0.0, planner=pl) == []
+    thr8 = 1.5 * c.tube.at(8)                                         # wider than the minimum: unchanged
+    assert thr8 > CM.MIN_TUBE
+    assert c.triggers(0, 108, 16.0 + thr8 + 0.5, 0.0, planner=pl) == [f"surprise +8 err {thr8 + 0.5:.1f} > {thr8:.1f}"]
 
 
 def test_triggers_danger():

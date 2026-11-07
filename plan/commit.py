@@ -7,8 +7,8 @@ Triggers, checked every frame (Committer.triggers), each recorded with the decis
 - interval: --replan frames since the last decision (default 8);
 - move end: the committed plan's first move (not "pad") has been played to its end;
 - surprise: the real position is off the committed plan's prediction for this frame by more than
-  tube x the 90% error of followed predictions at that horizon (ErrorTube: the run's own followed errors
-  once a horizon has MIN_SAMPLES of them, else plan.explain.ERR90_AT);
+  max(tube x the 90% error of followed predictions at that horizon, MIN_TUBE) (ErrorTube: the run's own
+  followed errors once a horizon has MIN_SAMPLES of them, else plan.explain.ERR90_AT);
 - support: the real support (plan/geometry.py rule on the real position: ground, wall or air) matches none of
   the plan's predicted ones for this frame and the frames just before and after (landed early, not landed,
   lost the wall, on a wall);
@@ -38,6 +38,10 @@ SHORT_FRAMES = 16
 DANGER_RISE = 0.3            # soft risk rise (0..1) over the decision's own value that counts as new danger
 MIN_SAMPLES = 200            # followed errors at a horizon before the run's own 90% replaces ERR90_AT
 KEEP_SAMPLES = 5000          # followed errors kept per horizon (the newest)
+# units: the surprise tube is never narrower. Well under the body's 6-unit half size (realpath.BODY), above the
+# live followed 90% error at +1 (0.9, runs/plan_20261103-162219) and about the one at +4 (3.4); without it the
+# early +1 tube from ERR90_AT (1.5 x 0.43 = 0.65) fires on ordinary frames until the run has its own errors
+MIN_TUBE = 3.0
 SOFT_REACH = 60.0            # units: boxes further from the path than this (plus their size) cannot matter
 KINDS = ("start", "interval", "move end", "surprise", "support", "danger", "short", "missed")
 
@@ -227,7 +231,7 @@ class Committer:
             out.append("move end")
         if c.xs is not None and 1 <= k < len(c.xs):
             err = math.hypot(x - c.xs[k], y - c.ys[k])
-            thr = self.tube_factor * self.tube.at(k)
+            thr = max(self.tube_factor * self.tube.at(k), MIN_TUBE)
             if err > thr:
                 out.append(f"surprise +{k} err {err:.1f} > {thr:.1f}")
         if c.support is not None and planner is not None and 1 <= k < len(c.support):
