@@ -20,7 +20,9 @@ contact region (outline: what counts as touching them), spawn; hazards now (red,
 rotated, already grown by their kill reach), predicted at +8 / +16 (faint outlines), remembered deaths
 (purple); planned agents (white) and explore agents (small dim dots) with a velocity arrow (0.1 s); deaths
 (X: red unexplained, orange explained). For the selected agent: the chosen path (green; dashed and faded where
-the ensemble spread is over 20 units; the part already played thinner), landings (yellow) and wall jumps (cyan)
+the ensemble spread is over 20 units; the part already played thinner), its airborne completion (plans.jsonl
+"completion": pale green, dashed, from the plan's end to where it lands, landing yellow, or a red X where every
+continuation died), landings (yellow) and wall jumps (cyan)
 with their frame, where it touches the princess (pink ring) or picks a key (yellow ring), the nearest hazards' clearance (a thin line from the path point at that frame to the closest
 box of that kind, labelled with the planner's own clearance number), the rejected alternatives (red vetoed,
 grey otherwise; hover for the reason), the plan's predictions at +1 / +4 / +8 / +16 (hollow circles) and, for
@@ -104,6 +106,7 @@ KILLBOX = (220, 90, 90)
 ALIVEBOX = (90, 92, 110)
 PLAN = (40, 225, 70)
 PLAN_DONE = (30, 120, 45)
+COMPLETION = (110, 170, 110)       # the airborne completion after the plan (fainter, dashed)
 LAND = (255, 225, 40)
 WALL = (40, 225, 255)
 ALT = (150, 150, 150)
@@ -400,6 +403,35 @@ class Stats:
                 "deaths": self.deaths, "unexplained": self.unexplained, "failed": self.failed,
                 "switched": self.switched, "kept": self.kept, "last_finish": self.last_finish,
                 "best": dict(self.best)}
+
+
+def score_lines(plan: dict) -> list[str]:
+    """The score's lines for a plan record: frames ("estimate N frames = H + completion k + T to go", then the
+    penalties), or the older V-unit fields for older runs."""
+    sc = plan.get("score") or {}
+    v0 = fmt(plan.get("v_start"), ".1f")
+    v1 = "inf" if plan.get("v_end") is None else fmt(plan.get("v_end"), ".1f")
+    vtxt = f"V {v0} -> {v1}" + (f" ({plan.get('dead_end_members')} members dead end)"
+                                 if plan.get("dead_end_members") else "") + f", leg {plan.get('leg', 0)}"
+    if "estimate" not in sc:
+        return [f"progress {fmt(sc.get('progress'), '+.2f')} (credit {fmt(sc.get('progress_credit'), '+.2f')}), " + vtxt,
+                f"risk {fmt(sc.get('risk'), '.2f')}  uncertainty x{fmt(sc.get('uncertainty'), '.2f')} "
+                f"(spread end {fmt(sc.get('spread_end'), '.1f')}u)  failure {fmt(sc.get('failure'), '.2f')}  "
+                f"total {fmt(sc.get('total'), '+.2f')}"]
+    comp = plan.get("completion")
+    k = sc.get("completion")
+    used = sc.get("frames_used")
+    h = (used - k) if used is not None and k is not None else used
+    head = f"estimate {fmt(sc.get('estimate'), '.0f')} frames = {fmt(h, '.0f')}"
+    if comp is not None and k is None:
+        head += " + completion: every continuation dies"
+    elif k is not None:
+        head += f" + completion {k} ({comp.get('continuation') if comp else '?'}, {comp.get('on') if comp else '?'})"
+    head += f" + T to go {fmt(sc.get('t_end'), '.0f')}"
+    pen = (f"+ risk {fmt(sc.get('risk_frames'), '.0f')}, failures {fmt(sc.get('failure_frames'), '.0f')}, deaths "
+           f"{fmt(sc.get('death_frames'), '.0f')}; T at the start {fmt(sc.get('t_start'), '.0f')}; "
+           f"{'lands' if sc.get('landing') else 'does not land'}")
+    return [head, pen, vtxt + f"; spread end {fmt(sc.get('spread_end'), '.1f')}u"]
 
 
 def decision_lines(plan: dict) -> tuple[str, str]:
@@ -1087,6 +1119,20 @@ class Renderer:
                     pg.draw.line(surf, PLAN_DONE, pts[k], pts[k + 1], 2)
             else:
                 pg.draw.line(surf, PLAN_DONE if done else PLAN, pts[k], pts[k + 1], 2 if done else 3)
+        # the airborne completion: dashed, fainter, from the plan's end to its landing (or death)
+        comp = plan.get("completion") or {}
+        cp = [m.pt(x, y) for x, y in comp.get("path") or []]
+        for k in range(0, len(cp) - 1, 2):
+            pg.draw.line(surf, COMPLETION, cp[k], cp[k + 1], 2)
+        if cp:
+            if comp.get("on") in ("ground", "wall", "goal"):
+                pg.draw.circle(surf, LAND, cp[-1], 5, 2)
+                self.text(surf, f"lands +{comp.get('frames')}f {comp.get('on')}", cp[-1][0] + 6, cp[-1][1] + 2, LAND,
+                          self.small)
+            elif comp.get("frames") is None:
+                p = cp[-1]
+                pg.draw.line(surf, BAD, (p[0] - 4, p[1] - 4), (p[0] + 4, p[1] + 4), 2)
+                pg.draw.line(surf, BAD, (p[0] - 4, p[1] + 4), (p[0] + 4, p[1] - 4), 2)
         # landings and wall jumps
         for ld in plan.get("landings") or []:
             p = m.pt(ld["x"], ld["y"])
@@ -1174,7 +1220,8 @@ class Renderer:
         if best is None:
             return
         lines = [" > ".join(best.get("moves") or []) + ("  VETOED" if best.get("vetoed") else ""),
-                 f"total {fmt(best.get('total'), '+.2f')}  progress {fmt(best.get('progress'), '+.2f')}  "
+                 (f"estimate {fmt(best.get('estimate'), '.0f')} frames  " if "estimate" in best else
+                  f"total {fmt(best.get('total'), '+.2f')}  ") + f"progress {fmt(best.get('progress'), '+.2f')}  "
                  f"stage {best.get('stage')}"] + wrap(str(best.get("reason", "")), 70)
         w = max(self.small.size(s)[0] for s in lines) + 12
         h = 16 * len(lines) + 8
@@ -1240,15 +1287,8 @@ class Renderer:
             small(trig, TEXT)
             small(swt, WARN if sw and not sw.get("kept") else DIM)
             line(plan_name(plan), PLAN)
-            sc = plan.get("score") or {}
-            v0 = fmt(plan.get("v_start"), ".1f")
-            v1 = "inf" if plan.get("v_end") is None else fmt(plan.get("v_end"), ".1f")
-            small(f"progress {fmt(sc.get('progress'), '+.2f')} (credit {fmt(sc.get('progress_credit'), '+.2f')}), "
-                  f"V {v0} -> {v1}" + (f" ({plan.get('dead_end_members')} members dead end)"
-                                       if plan.get("dead_end_members") else "") + f", leg {plan.get('leg', 0)}", TEXT)
-            small(f"risk {fmt(sc.get('risk'), '.2f')}  uncertainty x{fmt(sc.get('uncertainty'), '.2f')} "
-                  f"(spread end {fmt(sc.get('spread_end'), '.1f')}u)  failure {fmt(sc.get('failure'), '.2f')}  "
-                  f"total {fmt(sc.get('total'), '+.2f')}", TEXT)
+            for t in score_lines(plan):
+                small(t, TEXT)
             veto = plan.get("veto")
             if veto:
                 small(f"VETO: {veto.get('kind')} {veto.get('id')} at f{veto.get('frame')} (every option hit something)",
@@ -1280,12 +1320,12 @@ class Renderer:
             line(f"alternatives ({len(alts)})" + ("" if self.show_alts else "  [hidden: A]"), TEXT)
             for k, a in enumerate(alts[:6]):
                 col = ALT_VETO if a.get("vetoed") else ALT
-                small(f"{k + 1}. {' > '.join(a.get('moves') or [])}  {fmt(a.get('total'), '+.2f')} [{a.get('stage')}]",
-                      col)
+                val = f"{fmt(a.get('estimate'), '.0f')} f" if "estimate" in a else fmt(a.get('total'), '+.2f')
+                small(f"{k + 1}. {' > '.join(a.get('moves') or [])}  {val} [{a.get('stage')}]", col)
                 small("   " + str(a.get("reason", "")), FAINT)
             y += 4
             tm, ct = plan.get("timing") or {}, plan.get("counts") or {}
-            small("ms: " + "  ".join(f"{k} {fmt(tm.get(k), '.0f')}" for k in ("stage1", "stage2", "final", "total")),
+            small("ms: " + "  ".join(f"{k} {fmt(tm.get(k), '.0f')}" for k in ("stage1", "stage2", "final", "completion", "total")),
                   TEXT)
             small(counts_text(ct), DIM)
         y += 4

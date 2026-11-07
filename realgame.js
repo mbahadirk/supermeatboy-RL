@@ -715,7 +715,7 @@ Interceptor.replace(DRAW, new NativeCallback(function (drawer, ch, sprite, flag)
 // (0x4ac6a9) c0..c3 hold the plain camera matrix, which is kept. At Present the paths are drawn onto the
 // back buffer: each world point through that matrix to the screen, then pre-transformed coloured triangles
 // (no shaders, no texture), with every device state used saved before and restored after.
-let paths = [];                                      // [{pts: [[x, y], ...], col: 0xAARRGGBB, w: px}]
+let paths = [];                                      // [{pts: [[x, y], ...], col: 0xAARRGGBB, w: px, dash: bool}]
 function onPaths(m) { paths = m.payload || []; recv('path', onPaths); }
 recv('path', onPaths);
 const GFX = img(0x709068);
@@ -775,12 +775,18 @@ function drawPaths(d, M) {
   nv = 0;
   for (const p of paths) {                          // dark outline first, then every colour on top
     const s = p.pts.map(scr);
-    for (let k = 1; k < s.length; k++) quad(s[k - 1][0], s[k - 1][1], s[k][0], s[k][1], (p.w || 3) + 2, 0x90000000);
+    for (let k = 1; k < s.length; k++) {
+      if (p.dash && !(k & 1)) continue;             // dashed: every other segment
+      quad(s[k - 1][0], s[k - 1][1], s[k][0], s[k][1], (p.w || 3) + 2, 0x90000000);
+    }
   }
   for (const p of paths) {
     const s = p.pts.map(scr), hw = p.w || 3;
-    for (let k = 1; k < s.length; k++) quad(s[k - 1][0], s[k - 1][1], s[k][0], s[k][1], hw, p.col);
-    for (const q of s) dot(q[0], q[1], hw + 1, p.col);
+    for (let k = 1; k < s.length; k++) {
+      if (p.dash && !(k & 1)) continue;
+      quad(s[k - 1][0], s[k - 1][1], s[k][0], s[k][1], hw, p.col);
+    }
+    if (!p.dash || s.length === 1) for (const q of s) dot(q[0], q[1], hw + 1, p.col);
   }
   if (!nv) return;
   // save what is changed

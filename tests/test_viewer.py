@@ -333,3 +333,18 @@ def test_decision_trigger_and_switch_in_the_panel(tmp_path):
     assert sc.timeline["decisions"] == [(0, False), (2, True)]
     assert sc.stats["switched"] == 1 and sc.stats["kept"] == 0
     V.Renderer().render(_surface(), sc)
+
+
+def test_score_lines_in_frames_and_older_v():
+    from viz import viewer as V
+    p = {"score": {"estimate": 312.4, "frames_used": 60, "completion": 12, "t_end": 230.0, "t_start": 260.0,
+                   "risk_frames": 20.0, "failure_frames": 0.0, "death_frames": 2.4, "landing": True, "spread_end": 8.0},
+         "completion": {"continuation": "keep", "on": "ground", "frames": 12, "path": [[0, 0], [1, 1]]},
+         "v_start": 40.0, "v_end": 33.0, "leg": 0}
+    lines = V.score_lines(p)
+    assert lines[0] == "estimate 312 frames = 48 + completion 12 (keep, ground) + T to go 230"
+    assert "risk 20" in lines[1] and "T at the start 260" in lines[1] and "lands" in lines[1]
+    q = dict(p, score=dict(p["score"], completion=None, frames_used=48), completion={"frames": None, "on": None})
+    assert "every continuation dies" in V.score_lines(q)[0]
+    old = {"score": {"progress": 1.5, "progress_credit": 1.2, "risk": 0.0, "uncertainty": 0.8, "total": 1.2}}
+    assert V.score_lines(old)[0].startswith("progress +1.50")
