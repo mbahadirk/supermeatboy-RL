@@ -312,3 +312,24 @@ def test_goal_contact_boxes_and_touch_markers():
                            goal_touch=p["goal_touch"], key_touches=p["key_touches"])
     dots = [d for d in agent.overlay_payload(plan) if d["col"] in (agent.COL_GOAL, agent.COL_KEY)]
     assert [d["pts"] for d in dots] == [[[0.0, -2.0]], [[84.0, -30.0]]]
+
+
+def test_decision_trigger_and_switch_in_the_panel(tmp_path):
+    """plans.jsonl with "trigger" / "switch" (and an older line without them): panel lines, stats, timeline ticks."""
+    run = tmp_path / "runs" / "plan_20261107-120000"
+    _write_run(str(run))
+    lines = open(run / "plans.jsonl", encoding="utf-8").read().splitlines()
+    p2 = json.loads(lines[1])
+    p2.update(trigger=["move end", "surprise +2 err 3.1 > 2.1"],
+              switch={"kept": False, "gain": 1.8, "margin": 0.5, "unit": "V", "reason": "switched: +1.80"})
+    with open(run / "plans.jsonl", "w", encoding="utf-8") as f:
+        f.write(lines[0] + "\n" + json.dumps(p2) + "\n")
+    src = V.ReplaySource(str(run), runs_dir=str(tmp_path / "runs"))
+    assert src.decision_marks == [(0, False), (2, True)]
+    assert V.decision_lines(src.plans[0]) == ("trigger: -", "kept / switched: -")          # an older line
+    assert V.decision_lines(p2) == ("trigger: move end, surprise +2 err 3.1 > 2.1", "switched: +1.80 (margin 0.5 V)")
+    assert V.decision_lines(dict(p2, switch=None))[1] == "no previous plan to keep"
+    sc = src.scene(5)
+    assert sc.timeline["decisions"] == [(0, False), (2, True)]
+    assert sc.stats["switched"] == 1 and sc.stats["kept"] == 0
+    V.Renderer().render(_surface(), sc)

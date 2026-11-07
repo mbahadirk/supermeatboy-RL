@@ -26,7 +26,10 @@ box of that kind, labelled with the planner's own clearance number), the rejecte
 grey otherwise; hover for the reason), the plan's predictions at +1 / +4 / +8 / +16 (hollow circles) and, for
 each horizon, the latest prediction whose frame has arrived with a line to the real position and the error
 (green within the surprise threshold, red over it). The info panel also shows the last planned finish time and
-the level's best (from the finish events; before any, from smbrl/best_times.json).
+the level's best (from the finish events; before any, from smbrl/best_times.json), and for the current decision
+what triggered it and whether the committed plan was kept or switched, with the margin (plans.jsonl "trigger"
+and "switch"; older runs without them show "-"). The replay's timeline marks every decision of the planned
+agents (short ticks at its bottom: orange where the plan was switched, grey otherwise).
 
 Keys: Tab next planned agent, H help, A alternatives, F future hazards, Z zoom on the selected agent (mouse wheel or
 [ / ] zoom in / out), S screenshot (replay: into the run folder; live: the current folder), Esc / Q quit. Replay: Space play / pause, Left / Right one step, + / - speed,
@@ -302,7 +305,7 @@ class Scene:
     stats: dict = field(default_factory=dict)
     status: list = field(default_factory=list)   # extra header lines
     planned: list = field(default_factory=list)  # planned agent indices
-    timeline: dict | None = None                 # replay: {n, idx, marks: [(idx, colour)]}
+    timeline: dict | None = None                 # replay: {n, idx, marks: [(idx, colour)], decisions: [(idx, switched)]}
 
 
 def event_colour(e: dict):
@@ -364,11 +367,15 @@ class Stats:
     def __init__(self):
         self.ms = []
         self.surprises = self.unexplained = self.deaths = self.failed = 0
+        self.switched = self.kept = 0             # decisions that switched / kept the committed plan
         self.last_finish = None                  # the last planned finish event with a time
         self.best = {}                           # level -> best planned time (s) as the finish events said
 
     def plan(self, p: dict):
         self.ms.append(float((p.get("timing") or {}).get("total") or 0.0))
+        sw = p.get("switch")
+        self.switched += int(bool(sw) and not sw.get("kept"))
+        self.kept += int(bool(sw) and bool(sw.get("kept")))
 
     def event(self, e: dict):
         k = e.get("kind")
@@ -391,7 +398,24 @@ class Stats:
                 "ms_95": float(np.percentile(ms, 95)) if n else None,
                 "surprises": self.surprises, "surprises_per_100": 100.0 * self.surprises / n if n else None,
                 "deaths": self.deaths, "unexplained": self.unexplained, "failed": self.failed,
-                "last_finish": self.last_finish, "best": dict(self.best)}
+                "switched": self.switched, "kept": self.kept, "last_finish": self.last_finish,
+                "best": dict(self.best)}
+
+
+def decision_lines(plan: dict) -> tuple[str, str]:
+    """('trigger: interval, move end', 'kept: best other +0.31 < 0.5') for a plan record; '-' for older runs
+    without these fields, 'no previous plan' when there was none to keep."""
+    tr = plan.get("trigger")
+    sw = plan.get("switch")
+    if "switch" not in plan:
+        swt = "kept / switched: -"
+    elif sw is None:
+        swt = "no previous plan to keep"
+    else:
+        swt = str(sw.get("reason") or ("kept" if sw.get("kept") else "switched"))
+        if sw.get("margin") is not None and sw.get("unit"):
+            swt += f" (margin {sw['margin']:g} {sw['unit']})"
+    return "trigger: " + (", ".join(tr) if tr else "-"), swt
 
 
 _best_cache = {"mtime": None, "data": {}}
@@ -622,6 +646,8 @@ class ReplaySource:
         self._boxes_cache: dict = {}
         self.marks = [(self.event_step[k], event_colour(e)) for k, e in enumerate(events)
                       if e.get("kind") in SURPRISE_KINDS + ("death", "failed move", "finish")]
+        self.decision_marks = [(self.plan_step[k], bool(p.get("switch")) and not p["switch"].get("kept"))
+                               for k, p in enumerate(plans)]
 
     def _assign(self, rows: list) -> list[int]:
         out, ptr = [], 0
@@ -796,7 +822,8 @@ class ReplaySource:
                      "recorded (not the planner's prediction)", mem, plans, hist,
                      lambda i, f: self.real.get((seg, int(f), int(i))), boxes_at, deaths,
                      [e for e in evs if e.get("kind") != "field"][-EVENTS_SHOWN:], stats.summary(), status,
-                     list(self.planned), {"n": self.n, "idx": idx, "marks": self.marks})
+                     list(self.planned), {"n": self.n, "idx": idx, "marks": self.marks,
+                                          "decisions": self.decision_marks})
 
 
 # ---- drawing --------------------------------------------------------------------------------------------------
@@ -1164,6 +1191,12 @@ class Renderer:
         pg.draw.rect(surf, (30, 32, 44), rect)
         tl = scene.timeline
         n = max(1, tl["n"] - 1)
+        drawn = {}
+        for s, switched in tl.get("decisions") or []:                 # one tick per pixel column
+            px = int(x + 6 + (w - 12) * s / n)
+            drawn[px] = drawn.get(px, False) or switched
+        for px, switched in drawn.items():
+            pg.draw.line(surf, WARN if switched else FAINT, (px, y + h - 7), (px, y + h - 2), 1)
         for s, col in tl["marks"]:
             px = x + 6 + (w - 12) * s / n
             pg.draw.line(surf, col, (px, y + 4), (px, y + h - 4), 1)
@@ -1202,6 +1235,10 @@ class Renderer:
             age = scene.frame - int(plan.get("frame", 0))
             line(f"decision at f{plan.get('frame')} ({age} frames ago)" + ("  [previous plan, shifted]"
                                                                            if plan.get("from_prev") else ""), DIM)
+            trig, swt = decision_lines(plan)
+            sw = plan.get("switch")
+            small(trig, TEXT)
+            small(swt, WARN if sw and not sw.get("kept") else DIM)
             line(plan_name(plan), PLAN)
             sc = plan.get("score") or {}
             v0 = fmt(plan.get("v_start"), ".1f")
@@ -1259,7 +1296,7 @@ class Renderer:
         st = scene.stats
         line("running", TEXT)
         small(f"decisions {st.get('decisions', 0)}, ms mean {fmt(st.get('ms_mean'), '.0f')} / 95% "
-              f"{fmt(st.get('ms_95'), '.0f')}", TEXT)
+              f"{fmt(st.get('ms_95'), '.0f')}; switched {st.get('switched', 0)}, kept {st.get('kept', 0)}", TEXT)
         small(f"surprises {st.get('surprises', 0)} ({fmt(st.get('surprises_per_100'), '.1f')} per 100 decisions), "
               f"deaths {st.get('deaths', 0)} (unexplained {st.get('unexplained', 0)}), failed moves "
               f"{st.get('failed', 0)}", TEXT)

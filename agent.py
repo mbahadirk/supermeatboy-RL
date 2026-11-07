@@ -35,6 +35,9 @@ In the game (unless --no-overlay): the first planned agent's chosen path (green)
 wall jumps (cyan), where it touches the princess (pink) or picks a key (gold), and the top rejected
 alternatives (faint red when vetoed, grey otherwise).
 Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
+The wave summary line also says how often the planned agents decided: decisions per 100 alive frames, the
+median frames between an agent's decisions, the triggers by kind, the switch rate (decisions that switched
+plans / all decisions) and the planning ms per game frame (the decisions' own time, plus the trigger checks).
 Per wave, after the summary line, a [cost] line (FrameCost): ms per frame (mean, median, 95%) spent planning,
 observing (surprises, failed moves, deaths), on the explore agents, world-model data, telemetry, file logging, the
 overlay, the level's live state, the rest, and waiting for the game (from the reply to the next frame message),
@@ -267,6 +270,29 @@ class BestTimes:
         return True
 
 
+def commit_summary(st: dict, frames: int) -> dict:
+    """How often the planned agents decided in a wave (Runner.st): decisions per 100 alive agent frames, the
+    median frames between an agent's decisions, the switch rate (switched / decisions), the planning ms per
+    game frame (the decisions' own time) and the trigger checks' ms per game frame."""
+    d, af = st["decisions"], st["agent_frames"]
+    return {"decisions_per_100": round(100.0 * d / af, 2) if af else None,
+            "gap_median": float(np.median(st["gaps"])) if st["gaps"] else None,
+            "switch_rate": round(st["switched"] / d, 4) if d else None,
+            "plan_ms_per_frame": round(sum(st["ms"]) / frames, 2) if frames else None,
+            "check_ms_per_frame": round(1000.0 * st["check_s"] / frames, 3) if frames else None}
+
+
+def commit_text(c: dict, triggers: dict | None = None) -> str:
+    """'7.1 decisions/100 frames, every 8 f (median), switched 20%, plan 9.8 ms/frame (+checks 1.2); triggers
+    interval 30, move end 12'."""
+    f = lambda v, spec: "-" if v is None else format(v, spec)
+    tr = ", ".join(f"{k} {v}" for k, v in sorted((triggers or {}).items(), key=lambda kv: -kv[1]))
+    return (f"{f(c['decisions_per_100'], '.1f')} decisions/100 frames, every {f(c['gap_median'], '.0f')} f "
+            f"(median), switched {f(None if c['switch_rate'] is None else 100 * c['switch_rate'], '.0f')}%, plan "
+            f"{f(c['plan_ms_per_frame'], '.1f')} ms/frame (+checks {f(c['check_ms_per_frame'], '.1f')})"
+            + (f"; triggers {tr}" if tr else ""))
+
+
 def best_text(seconds, best: dict | None, new_best: bool, lock) -> str:
     """'4.25 s (best 4.25 s, new best)' for the console."""
     if lock is not True:
@@ -378,7 +404,7 @@ class Runner:
         self.st = {"finished": 0, "died": 0, "explained": 0, "unexplained": 0, "estimated": 0, "memory": 0,
                    "surprise_pos": 0, "surprise_death": 0, "decisions": 0, "ms": [], "cut1": 0, "cut2": 0,
                    "failed": 0, "errors": 0, "ex_finished": 0, "ex_died": 0, "triggers": {}, "gaps": [],
-                   "agent_frames": 0, "check_s": 0.0}
+                   "agent_frames": 0, "check_s": 0.0, "switched": 0, "kept": 0}
         self.fin = {"planned": [], "explore": []}     # this wave's finish times (s)
         self.new_best = False
 
@@ -641,6 +667,9 @@ class Runner:
         for t in trigger:
             kd = kind_of(t)
             st["triggers"][kd] = st["triggers"].get(kd, 0) + 1
+        sw = getattr(plan, "switch", None)
+        if sw is not None:
+            st["kept" if sw["kept"] else "switched"] += 1
         last = self.last_decision.get(plan.agent)
         if last is not None and plan.frame > last:
             st["gaps"].append(plan.frame - last)
@@ -851,6 +880,7 @@ class Runner:
         el = (time.time() - self.t0) / 60
         err_f = self.planner.surprise.errors() if self.planner is not None else None
         cost = self.cost.summary(frame, self.dt_ms)
+        com = commit_summary(st, frame)
         fin_p = min(self.fin["planned"]) if self.fin["planned"] else None
         fin_x = min(self.fin["explore"]) if self.fin["explore"] else None
         best_p = self.best.best(lv.name, "planned") if lv is not None else None
@@ -864,6 +894,7 @@ class Runner:
                 f"{st['surprise_death']})" + (f" | {followed_text(err_f)}" if err_f else "")
                 + f" | {st['decisions']} decisions"
                 + (f", {np.median(ms):.0f}/{np.percentile(ms, 95):.0f} ms (median/95%)" if ms is not None else "")
+                + f" | {commit_text(com, st['triggers'])}"
                 + f" | cut short: stage 1 {st['cut1']}, stage 2 {st['cut2']} | failed moves {st['failed']}"
                 + (f" | explore {st['ex_finished']}/{self.n_explore} finished"
                    + (f" (fastest {fin_x:.2f} s)" if fin_x is not None else "") + f", {st['ex_died']} died"
@@ -877,7 +908,8 @@ class Runner:
         self.event("wave", frame, **(cost or {}), why=m.get("why"), frames=frame,
                    **{k: v for k, v in st.items() if k not in ("ms", "gaps", "check_s")},
                    ms_median=float(np.median(ms)) if ms is not None else None,
-                   ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f,
+                   ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f, **com,
+                   tube=self.commit.tube.summary() if self.commit.on else None,
                    finish_s=fin_p, explore_finish_s=fin_x, best_s=float(best_p["seconds"]) if best_p else None,
                    new_best=self.new_best, lock=self.lock)
         self.fw.new_wave()

@@ -13,9 +13,14 @@ in a wave plays until its last alive frame. A plan is followed for h frames when
 actions played on its frames f .. f+h-1 equal its actions[0:h].
 
 Reported (text, and the same numbers with --json): decisions and the airborne share (start not supported);
-ms per stage (median / 90%); stage-2 steps rolled / needed; frames each plan was followed; the share of
-decisions whose next 16 actions differ from the previous plan's remaining ones (all, airborne); the score
-margin chosen - best rejected; uncertainty factor shares; plans ending supported; the position error per
+ms per stage (median / 90%); stage-2 steps rolled / needed; frames each plan was followed, and each committed
+plan (a decision that did not keep the previous plan: from_prev false), through the decisions that kept it;
+the decisions' triggers by kind (plans.jsonl "trigger", plan/commit.py), the switch rate (decisions that
+switched plans / all decisions) and the gains the kept plans were kept against (plans.jsonl "switch"; runs
+before these fields report none); the share of decisions whose next 16 actions differ from the previous plan's
+remaining ones (all, airborne); the score margin chosen - best rejected, among plans that do not touch the
+goal (V units; successes, total = SUCCESS_SCORE - touch frame, are compared with the best rejected success by
+their touch frames instead: success_margin, in frames); uncertainty factor shares; plans ending supported; the position error per
 horizon for followed and not followed predictions (alive agents only); per level: decisions, no-progress
 share (progress <= 0.05), dead-end ends, the most common first-move families, deaths per cause, finishes and
 their times (times.jsonl or finish events; for older runs without them, the wave length of a 'quota' wave a
@@ -35,11 +40,17 @@ from collections import Counter, defaultdict
 import numpy as np
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+from plan.commit import kind_of                    # noqa: E402
 RUNS = os.path.join(HERE, "runs")
 HORIZONS = (1, 4, 8, 16, 24, 32, 48)
 CHANGE_WINDOW = 16                 # actions compared for "plan changed"
 NO_PROGRESS = 0.05                 # plan.planner.NO_PROGRESS
 NEAR_TIE = 0.1
+SUCCESS_SCORE = 1e5                # plan.planner.SUCCESS_SCORE: a success's total is SUCCESS_SCORE - touch frame
+NEAR_TIE_FRAMES = 3                # successes whose touch frames are this close (plan.planner.SUCCESS_MARGIN)
 FRAME_MS = 16.667                  # the locked time step (older runs' finishes have no dt)
 TOP_FAMILIES = 5
 
@@ -119,6 +130,10 @@ def slim(d: dict) -> dict:
     sc = d.get("score") or {}
     alts = [a.get("total") for a in d.get("alternatives") or []]
     alts = [a for a in alts if a is not None and math.isfinite(a)]
+    total = sc.get("total")
+    succ = total is not None and total > SUCCESS_SCORE / 2
+    rivals = [a for a in alts if (a > SUCCESS_SCORE / 2) == succ]      # successes against successes only
+    sw = d.get("switch")
     path = d.get("path") or []
     c2 = (d.get("counts") or {}).get("stage2") or {}
     chosen = d.get("chosen") or []
@@ -126,7 +141,10 @@ def slim(d: dict) -> dict:
             "path": {h: path[h] for h in HORIZONS if h < len(path) and path[h] is not None},
             "air": not bool((d.get("state") or {}).get("supported")),
             "end_supported": bool(d.get("end_supported")), "unc": sc.get("uncertainty"),
-            "progress": sc.get("progress"), "total": sc.get("total"), "best_alt": max(alts) if alts else None,
+            "progress": sc.get("progress"), "total": total, "best_alt": max(rivals) if rivals else None,
+            "success": succ, "from_prev": bool(d.get("from_prev")), "trigger": d.get("trigger"),
+            "switch": None if not sw else {"kept": bool(sw.get("kept")), "gain": sw.get("gain"),
+                                           "unit": sw.get("unit")},
             "dead_end": d.get("v_end") is None, "family": family(chosen[0]) if chosen else "(none)",
             "timing": d.get("timing") or {},
             "s2": c2["steps"] / c2["of_steps"] if c2.get("of_steps") else None}
@@ -154,7 +172,11 @@ def analyze(run: str, level: str | None = None) -> dict:
     err_f, err_u = defaultdict(list), defaultdict(list)
     n = n_air = 0
     changed = changed_air = with_prev = with_prev_air = 0
-    margins, unc = [], []
+    margins, unc, s_margins = [], [], []
+    committed = []                                  # frames each committed plan (not kept from the previous) was followed
+    triggers, n_trig = Counter(), 0
+    n_switch = n_kept = 0
+    kept_gain = defaultdict(list)                   # unit -> gains the kept plans were kept against
     end_sup = 0
     lv = defaultdict(lambda: {"decisions": 0, "no_progress": 0, "dead_end": 0, "families": Counter()})
     for (k, agent), ps in plans.items():
@@ -182,6 +204,19 @@ def analyze(run: str, level: str | None = None) -> dict:
             while h < len(acts) and played.get(f + h) == acts[h]:
                 h += 1
             T["follow"].append(h)
+            if not p["from_prev"]:
+                committed.append(h)
+            if p["trigger"] is not None:
+                n_trig += 1
+                for t in p["trigger"]:
+                    triggers[kind_of(t)] += 1
+            if p["switch"] is not None:
+                if p["switch"]["kept"]:
+                    n_kept += 1
+                    if p["switch"]["gain"] is not None:
+                        kept_gain[p["switch"]["unit"] or "V"].append(p["switch"]["gain"])
+                else:
+                    n_switch += 1
             for hz, (px, py) in p["path"].items():
                 r = real.get(f + hz)
                 if r is None or r[2] != 0:
@@ -199,7 +234,7 @@ def analyze(run: str, level: str | None = None) -> dict:
                         with_prev_air += 1
                         changed_air += c
             if p["total"] is not None and p["best_alt"] is not None:
-                margins.append(p["total"] - p["best_alt"])
+                (s_margins if p["success"] else margins).append(p["total"] - p["best_alt"])
             if p["unc"] is not None:
                 unc.append(p["unc"])
             end_sup += p["end_supported"]
@@ -278,10 +313,17 @@ def analyze(run: str, level: str | None = None) -> dict:
         "timing_ms": {k[3:]: q(v) for k, v in T.items() if k.startswith("ms_")},
         "stage2_steps_share": q(T["s2"], (50, 10, 90)),
         "followed_frames": q(T["follow"], (10, 50, 90)),
+        "committed_followed_frames": q(committed, (10, 50, 90)) + [len(committed)],
+        "triggers": {"decisions": n_trig, "by_kind": dict(triggers.most_common())},
+        "switch": {"switched": n_switch, "kept": n_kept, "rate": share(n_switch, n) if n_switch + n_kept else None,
+                   "kept_gain": {u: q(g, (50, 90)) + [len(g)] for u, g in kept_gain.items()}},
         "plan_changed": {"all": share(changed, with_prev), "airborne": share(changed_air, with_prev_air),
                          "n": with_prev, "n_airborne": with_prev_air},
         "margin": {"median": q(margins, (50,))[0], "near_tie": share(sum(m < NEAR_TIE for m in margins), len(margins)),
                    "n": len(margins)},
+        "success_margin": {"median": q(s_margins, (50,))[0],
+                           "near_tie": share(sum(m < NEAR_TIE_FRAMES for m in s_margins), len(s_margins)),
+                           "n": len(s_margins)},
         "uncertainty": {"below_0.9": share(sum(u < 0.9 for u in unc), len(unc)),
                         "below_0.5": share(sum(u < 0.5 for u in unc), len(unc))},
         "ends_supported": share(end_sup, n),
@@ -310,12 +352,26 @@ def report(r: dict) -> str:
     w(f"stage 2 steps rolled / needed: median {num(s2[0], '.2f')}, 10% {num(s2[1], '.2f')}, 90% {num(s2[2], '.2f')}")
     fl = r["followed_frames"]
     w(f"frames each plan was followed: 10% {num(fl[0], '.0f')}, 50% {num(fl[1], '.0f')}, 90% {num(fl[2], '.0f')}")
+    cf = r["committed_followed_frames"]
+    w(f"frames each committed plan was followed (through the decisions that kept it): 10% {num(cf[0], '.0f')}, "
+      f"50% {num(cf[1], '.0f')}, 90% {num(cf[2], '.0f')} (n {cf[3]})")
+    tr = r["triggers"]
+    w(f"triggers ({tr['decisions']} decisions with them): "
+      + (", ".join(f"{k} {v}" for k, v in tr["by_kind"].items()) or "none logged (an older run)"))
+    sw = r["switch"]
+    kg = "; ".join(f"{u} median {num(g[0], '.2f')} / 90% {num(g[1], '.2f')} (n {g[2]})" for u, g in sw["kept_gain"].items())
+    w(f"switch rate (switched / decisions): {pct(sw['rate'])} (switched {sw['switched']}, kept {sw['kept']})"
+      + (f"; kept against a best other of {kg}" if kg else ""))
     pc = r["plan_changed"]
     w(f"plan changed (next {CHANGE_WINDOW} actions differ from the previous plan's remaining): all {pct(pc['all'])}, "
       f"airborne {pct(pc['airborne'])} (n {pc['n']} / {pc['n_airborne']})")
     mg = r["margin"]
-    w(f"score margin chosen - best rejected: median {num(mg['median'], '.2f')}; < {NEAR_TIE} in {pct(mg['near_tie'])} "
-      f"(n {mg['n']})")
+    w(f"score margin chosen - best rejected (no goal touch): median {num(mg['median'], '.2f')}; < {NEAR_TIE} in "
+      f"{pct(mg['near_tie'])} (n {mg['n']})")
+    sm = r["success_margin"]
+    if sm["n"]:
+        w(f"goal touches against the best rejected touch: median {num(sm['median'], '.1f')} frames earlier; < "
+          f"{NEAR_TIE_FRAMES} frames in {pct(sm['near_tie'])} (n {sm['n']})")
     w(f"uncertainty factor < 0.9: {pct(r['uncertainty']['below_0.9'])}, < 0.5: {pct(r['uncertainty']['below_0.5'])}; "
       f"plans ending supported {pct(r['ends_supported'])}")
     w("position error (units), median / 90% (n): followed | not followed")

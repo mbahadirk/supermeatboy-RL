@@ -75,7 +75,13 @@ Message types
  "score" {progress, progress_credit, risk, uncertainty, spread_end, failure, total}, "v_start", "v_end",
  "alternatives" [{moves, total, progress, stage, reason, path [[x, y], ...], vetoed: bool}],
  "predictions" {"1": [x, y], "4": ..., "8": ..., "16": ...}, "timing" {stage1, stage2, final, total} (ms),
- "counts", "segments" [[move, from frame, to frame]].
+ "counts", "segments" [[move, from frame, to frame]],
+ "trigger" [str] (why this decision was made, plan/commit.py: "start", "start: tiles", "interval", "move end",
+ "surprise +8 err 14.2 > 11.0", "support: landed early +5", "danger h12 f10", "danger: risk 0.10 -> 0.60",
+ "short", "missed: princess f12", "missed: key 0 f9"),
+ "switch" null (no previous plan to keep) | {kept: bool, gain: float (the best other candidate's advantage over
+ the previous plan), margin: float, unit: "V" | "frames", reason: str} (plan/planner.py switch rule).
+ Older senders have neither field.
  Shrunk when too big: alternatives' paths dropped, then "spread", then the alternatives.
 
 {"t": "event", "time", "level", "wave", "kind": str, "frame": int or null, ... kind-specific fields}

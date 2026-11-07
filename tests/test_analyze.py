@@ -73,9 +73,48 @@ def test_analyze_a_synthetic_run(tmp_path, capsys):
     # latest; one level only
     assert A.resolve_run("latest", str(tmp_path / "runs")) == str(run)
     assert A.analyze(str(run), "1-2")["decisions"] == 0
+    # an older run without "trigger" / "switch": none reported, every plan a committed one
+    assert r["triggers"] == {"decisions": 0, "by_kind": {}} and r["switch"]["rate"] is None
+    assert r["committed_followed_frames"][3] == 3 and r["success_margin"]["n"] == 0
+    assert "none logged (an older run)" in A.report(r)
 
 
 def test_move_family():
     assert A.family("run-jump R hold 10 after 4f") == "run-jump R"
     assert A.family("wait 8f") == "wait" and A.family("jump L hold 6 turn") == "jump L turn"
     assert A.family("fall drift L 12f") == "fall drift L" and A.family("jump up hold 22") == "jump up"
+
+
+def test_triggers_switches_committed_plans_and_success_margins(tmp_path):
+    """A run with plans.jsonl "trigger" / "switch" / from_prev: triggers by kind, switch rate, kept gains, frames
+    each committed plan was followed (through the decisions that kept it), and goal touches compared by frames."""
+    run = tmp_path / "plan_x"
+    os.makedirs(run)
+    p0 = _plan(0, 1, total=2.0, alt=1.95)
+    p0.update(trigger=["start"], switch=None, from_prev=False)
+    p1 = _plan(4, 1, total=1.0, alt=1.3)                          # kept against a better one (+0.3 < 0.5)
+    p1.update(trigger=["interval"], switch={"kept": True, "gain": 0.3, "margin": 0.5, "unit": "V", "reason": "kept"},
+              from_prev=True)
+    p2 = _plan(8, 2, total=1e5 - 20, alt=1e5 - 24)                # a success: 4 frames before the best rival success
+    p2["alternatives"].append({"moves": ["y"], "total": 3.0})       # a non-success: not its rival
+    p2.update(trigger=["move end", "surprise +3 err 4.0 > 3.0"],
+              switch={"kept": False, "gain": 2.1, "margin": 0.5, "unit": "V", "reason": "switched: +2.10"},
+              from_prev=False)
+    with open(run / "plans.jsonl", "w", encoding="utf-8") as f:
+        for p in (p0, p1, p2):
+            f.write(json.dumps(p) + "\n")
+    with open(run / "states.jsonl", "w", encoding="utf-8") as f:
+        for fr in range(14):
+            f.write(json.dumps({"frame": fr, "wave": 1, "level": "1-1", "agents": [[0, float(fr), 0.0, 0.0, 0.0, 0]]})
+                    + "\n")
+    r = A.analyze(str(run))
+    assert r["triggers"] == {"decisions": 3, "by_kind": {"start": 1, "interval": 1, "move end": 1, "surprise": 1}}
+    assert r["switch"]["switched"] == 1 and r["switch"]["kept"] == 1 and r["switch"]["rate"] == pytest.approx(1 / 3,
+                                                                                                             abs=1e-4)
+    assert r["switch"]["kept_gain"] == {"V": [0.3, 0.3, 1]}
+    # plan 0 (committed) played frames 0-7 (itself, then plan 1 keeping it): followed 8; plan 2: frames 8-13
+    assert r["committed_followed_frames"][3] == 2 and sorted(A.q([8, 6], (10, 50, 90))) == r["committed_followed_frames"][:3]
+    # the V margins ignore the success; the success is compared by touch frames (4 earlier)
+    assert r["margin"]["n"] == 2 and r["success_margin"] == {"median": 4.0, "near_tie": 0.0, "n": 1}
+    out = A.report(r)
+    assert "switch rate" in out and "interval 1" in out and "goal touches" in out

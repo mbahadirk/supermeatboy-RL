@@ -211,6 +211,12 @@ def test_runner_with_triggers_decides_less(tmp_path):
     events = [json.loads(l) for l in open(tmp_path / "run" / "events.jsonl", encoding="utf-8")]
     wave = [e for e in events if e["kind"] == "wave"][-1]
     assert sum(wave["triggers"].values()) >= wave["decisions"] and wave["agent_frames"] > 0
+    # the wave's commitment numbers
+    assert wave["decisions_per_100"] == pytest.approx(100 * wave["decisions"] / wave["agent_frames"], abs=0.01)
+    assert wave["switched"] + wave["kept"] <= wave["decisions"] and 0 <= wave["switch_rate"] <= 1
+    assert 1 <= wave["gap_median"] <= 8 and wave["plan_ms_per_frame"] > 0 and wave["check_ms_per_frame"] >= 0
+    assert set(wave["tube"]) == {"1", "4", "8", "16"}
+    assert all(("switch" in p) for p in plans) and any(p["switch"] for p in plans)
 
 
 # ---- the planner's switch rule ------------------------------------------------------------------------------
@@ -287,6 +293,25 @@ def test_kept_plan_is_registered_once():
             assert [e[0] for e in pl.surprise.plans[0]] == [100, 104]
     finally:
         torch.set_num_threads(threads)
+
+
+@need_data
+def test_closed_loop_harness(tmp_path):
+    """plan/offline.py closed_loop on recorded 1-13: the model plays itself; the old mode decides every 2 frames."""
+    import torch
+    from plan.offline import closed_loop, closed_loop_text
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        old = closed_loop(DATA, "1-13", MODEL, frames=12, replan=2, triggers=False, hysteresis=0.0, budget=None)
+        new = closed_loop(DATA, "1-13", MODEL, frames=12, budget=None)
+    finally:
+        torch.set_num_threads(threads)
+    assert old["frames"] == 12 and old["decisions"] == 6 and [p["frame"] for p in old["plans"]] == list(range(0, 12, 2))
+    assert old["triggers"] == {"start": 1, "interval": 5}
+    assert 1 <= new["decisions"] < old["decisions"] and new["plans"][0]["trigger"] == ["start"]
+    assert new["mode"]["hysteresis"] == 0.5 and new["plan_ms_per_frame"] > 0
+    assert "the model plays itself, not the game" in closed_loop_text(new)
 
 
 if __name__ == "__main__" and "--write" in sys.argv:
