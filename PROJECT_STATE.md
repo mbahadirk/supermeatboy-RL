@@ -1,4 +1,4 @@
-# Super Meat Boy RL: the state of the project (2026-11-03)
+# Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08)
 
 This document describes the project as it is: what it is for, what each part does and why it was built that
 way, what has been measured, what does not work, and where the code and ideas got tangled. Read it first
@@ -455,7 +455,8 @@ python smbrl/agent.py --agents 1 --explore 40 --wm-collect
 - `--replan 2` (frames between a planned agent's decisions; in between it plays its plan), `--budget-ms 120`,
   `--model runs/wm_locked/wm_model.pt`, `--wave-seconds 20`, `--end-after 1`, `--name` (default `plan_<time>`),
   `--no-overlay`, `--telemetry 127.0.0.1:47800` (or `off`), `--death-memory smbrl/death_memory.json`,
-  `--threads 2`, `--seed 0`.
+  `--move-memory smbrl/move_memory.json` (or `none`), `--hysteresis 3` (frames, since step 4), `--threads 2`,
+  `--seed 0`.
 - Stop: Ctrl+C or a file `runs/<name>/STOP`.
 
 **Per level:** the Level with its kill box, hazard boxes with measured reach, sealed pockets, the progress
@@ -477,8 +478,8 @@ death memory (level, wave frame, position) and saved; the planner treats it as a
   hazards, veto, score, the top rejected alternatives with their reason and predicted path, predictions at +1,
   +4, +8, +16, timing, counts per stage) plus `level`, `wave` and `real` (the reported state that frame);
 - `events.jsonl`: surprises (`position`, `unpredicted death`), `death` (explained or not, estimated, added to
-  memory), `failed move`, `finish`, `level`, `kill box`, `hazards`, `field`, `plan error`, `lock`, `wave` (the
-  per-wave summary);
+  memory), `point of no return` (since step 4: the decision charged for the death, or none found), `failed
+  move`, `finish`, `level`, `kill box`, `hazards`, `field`, `plan error`, `lock`, `wave` (the per-wave summary);
 - `states.jsonl`: per frame, frame, wave, level and every planned agent's `[i, x, y, vx, vy, status]` (replay);
 - `--wm-collect`: `wm_data/` shards with source `planner`, `explore` or `planner+explore`, and `agent_sources`
   (which indices were planned / explored) in each shard's meta. The reward column is NaN (no reward here).
@@ -487,8 +488,8 @@ death memory (level, wave frame, position) and saved; the planner treats it as a
 surprises, decisions, ms per decision (median / 95%), decisions with stage 1 / stage 2 cut short, failed moves.
 
 **Drawn in the game** (first planned agent, at most every `--replan` frames): the chosen plan's predicted path
-(green), predicted landings (yellow dots), wall jumps (cyan dots), the top 3 rejected alternatives faintly
-(red when vetoed, grey otherwise).
+(green), its airborne completion (since step 4: fainter green, dashed, landing yellow), predicted landings (yellow
+dots), wall jumps (cyan dots), the top 3 rejected alternatives faintly (red when vetoed, grey otherwise).
 
 **Telemetry** for a separate viewer: JSON over UDP (`viz/telemetry.py`, the schema is in its docstring):
 `level` (map, kill box, goals; at the start and every 2 s), `frame` (agents, hazard boxes now and predicted at
@@ -518,6 +519,24 @@ planner's prediction (that is not logged).
 
 **Checked without the game only** (`tests/test_agent.py`: a recorded 1-13 wave through a fake script). Not yet
 checked in the game: the overlay's look, decision cost with 2+ planned agents, the wave-end death estimate.
+
+### 7.5 Step 4 (2026-11-08): scores in frames, airborne completion, point of no return (offline only)
+
+Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In short:
+- **Time field T** (`plan/progress.py`): frames to the goal on realpath's graph (same states, modes, closed cells,
+  key legs as V), step frames from measured speeds (**measured**: 5.00 frames per tile on the ground and in the
+  air, 5.41 per tile up, 7.74 down; `plan/measure_time.py`). T_support, and airborne T_rise / T_fall by the
+  body's vertical velocity. V stays for display and the failure memory.
+- **Score** (`plan/planner.py`): estimated frames to the goal = frames used + T(end) + penalty frames (risk 50 per
+  unit, failure 5, the point-of-no-return charge); lower is better; no uncertainty factor. Wall contact is support
+  at any speed (**measured**: wall jumps work at every recorded falling speed).
+- **Airborne completion** (final stage): a plan not landing by a majority of members is continued with keep /
+  neutral / reverse for up to 90 frames and scored at its best landing; all die: risk.
+- **MoveMemory** (`--move-memory smbrl/move_memory.json`): each death charges the move taken at the latest
+  decision of the wave that had a safe alternative; `point of no return` events.
+- **Known limits (measured)**: the world model stops falling about 6 units above the map's bottom edge (its tile
+  input pads outside the map with solid), so falls out of the 1-14 pit are not predicted; completion costs
+  19-102 ms median per decision at the 120 ms budget, over its 20 ms target. **Unverified**: everything in the game.
 
 ---
 

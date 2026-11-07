@@ -242,3 +242,136 @@ A second agent reviewed this plan against the code. Its checked findings:
 5. **B,** then full C2 only if needed.
 6. **Viewer:** live parameter sliders and the training tab.
 7. **Asynchronous planning** only if still short of real speed; the world-model learner after that.
+
+---
+
+## 7. Step 4 as built (2026-11-08): C1 with A, plus the point-of-no-return charging
+
+Everything below was built and checked **offline only** (recorded states, the world model, no game). Nothing was
+tried in the game: not the overlay, not the timing under the live loop, not whether agents now finish more.
+
+### 7.1 Measured constants (`python -m plan.measure_time runs/plan_2026110*/wm_data`)
+
+548 shards, 2.07 M locked alive steps, levels 1-1, 1-2, 1-6 to 1-14; velocities from position differences.
+
+| constant | value | from |
+|---|---|---|
+| fx_ground | 5.00 frames / tile | TILE / p90 of abs(dx) on the ground (4.0 u/f); median-based 11.65 |
+| fx_air | 5.00 | the same in the air (p90 4.0 u/f); median-based 11.01 |
+| fy_up | 5.41 | TILE / mean rise speed (3.69 u/f); median-based 4.90 |
+| fy_down | 7.74 | TILE / mean speed of falls over 2 tiles (2.58 u/f); median-based 8.18 |
+| CLING_SPEED | inf | wall jumps after a press on a wall: 93-100% in every downward-speed bucket up to 10 u/f (13,385 presses; 8+ u/f only 16) |
+
+The rows' vx / vy fields are units / s (median field / difference: vx 57, vy 60).
+M3, T_support at the spawn vs the best finish (reported, not fitted): 1-14 246 vs 321 frames, 1-8 147 vs 129,
+1-13 192 vs 351.
+
+### 7.2 What was built (commits)
+
+- `d9f1b22` measure_time (M1, M2, M3).
+- `e66640e` the time field T on realpath's graph (`plan/progress.py`): frames per step, a second Dijkstra,
+  T_support / T_rise / T_fall per leg, one lookup code path (`_lookup`) for V and T. Build per level: 1-14
+  0.16 -> 0.19 s, 1-13 0.14 -> 0.16 s, 1-8 0.16 -> 0.19 s, 1-11 0.32 -> 0.36 s, 1-6 0.10 -> 0.11 s.
+- `38086bd` (breaking) the score in frames, the cling rule (`Planner.support`), velocity-aware airborne T, the
+  airborne completion fan in the final stage (`Planner.complete`), `MoveMemory` and FailureMemory without deaths,
+  analyze_run's frame fields; `--hysteresis` in frames (default 3). One commit: these are one function.
+- `6603b00` agent.py: `--move-memory`, death causes to the planner, point-of-no-return events, decisions get
+  inputs to H + 90 frames, the overlay's completion.
+- `d6d000f` viewer: completion path, landing, "estimate N frames = H + completion k + T to go".
+- `adbe209` re-recorded goldens (planner_golden, runner_old_schedule) for the new score.
+
+Small adjustments, explained:
+- the rising / falling tables of A2 were built in the field commit (they come out of the same pass);
+- after a plan ending without a horizontal input, the fan is neutral / left / right (keep and reverse would both
+  be neutral);
+- a cell where the graph reaches only rising or only falling states gives both the reachable one;
+- a portal crossing costs 1 frame in T;
+- an end with T = inf is charged T(start) + DEAD_END_FRAMES (as the old -DEAD_END below the start);
+- vetoed candidates break ties by 1e-6 x estimate (1e-3 x frames could reorder veto frames).
+
+### 7.3 Offline checks (old = 0214707; no deadlines unless said; no previous plan; hysteresis 0)
+
+**a. 1-14 pit** (`runs/plan_20261107-200300`): 100 out-of-level deaths with x in -20..130, 277 recorded supported
+decisions in the 30 frames before their takeoff.
+- old: the chosen plan ends airborne over the pit (x > -40) in 201 / 277 (73%); old itself predicts its plan dies
+  (veto or soft risk >= 0.5) in 8 / 277 (3%).
+- new: a different first move in 259 / 277 (94%); the chosen plan ends over the pit in 0 / 277; lands outside the
+  pit or a different first move 277 / 277.
+- the new planner's verdict on the old chosen plans: predicts they die in 8 / 277 (3%). It avoids them because
+  they score a median 61 frames worse (10%: 2, 90%: 85), not because it sees the death.
+- **Why it does not see the death (a measured contradiction of C1b's premise):** the world model's tile input
+  pads outside the map with solid (`wm/features.LevelGeom`), so imagined bodies stop about 6 units above the map's
+  bottom edge (y ~ -354; real ones fall on to -362 and die below the kill box at -368.6). Over the pit, keep and
+  neutral hover there for all 90 completion frames without leaving the kill box; reverse reaches the pit's left
+  wall (x ~ 6), a wall recorded agents did wall-jump off (30 of 2,691 bodies that reached the map bottom came
+  back). So neither the safety check nor the completion can see this fall. The long airborne completions make the
+  old jumps expensive in frames, and that is what changes the choice. A strict xfail test pins it
+  (`test_completion_over_the_1_14_pit_sees_every_continuation_die`).
+- Caveat: successful recorded lives also jump right across the pit (x 0..80, y -300..-314, on to x > 130). The new
+  choices go left (`run wall-jump L`, `run-jump L ... after 4f`) or make shorter right jumps (`wall-jump R hold
+  10`). Whether that is a way through is not checked in the game.
+
+**b. 1-14 hole**: 454afae's 60 moments were not kept as a script. Reconstructed: 60 recorded states on the
+half-block floor (runs/plan_20261107-174219, x 60..120, y ~ 36; seed 0); "through the hole" = the plan's path or
+its completion below y 15. Old 21 / 60, new 44 / 60 (11 within the 48-frame path, the rest by the completion). The
+commit's 54 / 60 is not reproduced by this definition, so ">= 53 / 60" can be confirmed neither way.
+
+**c. 1-11 h12** (`runs/plan_20261103-152013`, 17 deaths on h12): all 269 recorded decisions in the 30 frames before the 17
+takeoffs (the agent hops there: only 6 of them were supported, so the supported-only rule of (a) was widened; takeoff
+= the last support above y -250, the hop off at about (150, -158)). "Over the fall" = the plan's end more than 2
+tiles below the takeoff.
+- old: ends over the fall in 95 / 269 (35%); old predicts its own plan dies in 19 / 269 (7%).
+- new: ends over the fall in 102 / 269 (38%): **no improvement**; a different first move than old in 216 / 269.
+- the new planner's verdict on the old chosen plans: predicts they die in 103 / 269 (38%; in 97 every completion
+  continuation dies in h12), so the completion does see this fall (unlike the 1-14 pit); the new choices still
+  end over the fall about as often, scored a median 21 frames better than old's (90%: 79).
+
+**d. 1-6 princess wait** (wave 31, 12 decisions 17..40 units from her): old and new both touch the goal in 12 / 12
+(step 2's goal contact already fixed it); chosen `run R 8f > run-jump L hold 15` in 11 of 12.
+
+**e. Closed loop** (`plan/offline.py` closed_loop, 300 frames, replan 8, triggers on, no deadlines; old
+hysteresis 0.5 V, new 3 frames; 1-13 from 0 / 100 / 200, 1-8 from 0 / 30 / 60, 1-14 from 0 / 100 / 200): old 4
+finished, 0 died (1-13 306; 1-8 120 / 115; 1-14 292); new 5 finished, 0 died (1-13 249; 1-8 128; 1-14 241 / 380 /
+475). Switch rate mean old 0.47, new 0.58 (higher).
+
+**f. Timing** (30 recorded decisions per level, 2 threads; median ms):
+
+| | budget | total 1-14 / 1-13 / 1-11 | stage 1 | stage 2 | final | completion 1-14 / 1-13 / 1-11 | needing completion |
+|---|---|---|---|---|---|---|---|
+| old | 120 | 142 / 151 / 153 | 39-41 | 19-20 | 85-97 | - | - |
+| new | 120 | 239 / 193 / 220 | 40-41 | 18-19 | 132-188 | 102 / 42 / 72 | 93% |
+| old | none | 218 / 234 / 240 | 38-45 | 89-106 | 86-94 | - | - |
+| new | none | 254 / 268 / 319 | 43-44 | 90-108 | 110-169 | 20 / 36 / 67 | 70-93% |
+
+**The completion is over its 20 ms budget** (19-102 ms median per decision), and a decision is about 50-90 ms over
+the 120 ms budget, because the final stage (completion included) is not cut. Imagine costs about 1 ms per step at
+any batch size, so the cost follows the frames rolled, not the rows. Options measured (no deadlines, completion ms
+median / 90%, 30 states per level; the first move was the same as with 90 / 3 in 30 / 30 for every option):
+
+| COMPLETE_MAX / continuations | 1-14 | 1-13 | 1-11 |
+|---|---|---|---|
+| 90 / 3 (built) | 19 / 108 | 36 / 62 | 71 / 96 |
+| 45 / 3 | 19 / 60 | 40 / 51 | 66 / 79 |
+| 30 / 3 | 19 / 45 | 33 / 41 | 48 / 54 |
+| 90 / 2 | 17 / 103 | 34 / 59 | 60 / 99 |
+
+Fewer frames mainly cut the tail; two continuations save about 10%. None reaches 20 ms median on 1-11. Not changed
+here (the brief: report, do not cut).
+
+### 7.4 Concerns found while building
+
+- **A predicted contact after the veto frames costs only RISK_FRAMES = 50 frames**, about what 48 frames of
+  waiting cost. On a flat test level behind a hazard strip (no way on), the chosen plan now runs into the strip
+  after frame 16 (soft risk 1); before, the uncertainty tax kept it back. The test now checks only the veto window
+  and says why.
+- "No progress" (T(start) - estimate <= 0) is borderline for the best possible plan: running at full speed gains
+  exactly the frames it takes (fx is the p90 speed), so the share will be high even for good plans.
+- The world model's solid padding outside the map (7.3 a) hides falls out of any level whose kill box is below the
+  map. Fixing it means retraining with open padding, or a planner rule for the map bottom (which the wall-jump
+  recoveries above make non-trivial).
+
+### 7.5 Not verified
+
+Nothing was run in the game. Not checked: the overlay and viewer drawing (only their payloads and text), the live
+cost per frame with completion, MoveMemory over real waves (only unit tests and the offline closed loop), whether
+the new 1-14 choices find the way across the pit.

@@ -5,7 +5,7 @@ predicts and why it was chosen (plan/explain.py). No policy network, no PPO, no 
 Search, per decision (Planner.plan):
 1. Stage 1 (one ensemble member): every library move (73, 8 to 24 frames; rolled out as one batch to 24
    frames with its last action held, and judged on its own frames) plus the safety check of those frames.
-   Scored (below, without the uncertainty term); the best B1 = 8 not vetoed are kept (all vetoed: the ones
+   Scored (below: its own frames + T at its end); the best B1 = 8 not vetoed are kept (all vetoed: the ones
    with the latest veto frame).
 2. Stage 2 (one member): from each kept end state (the world model's own end rows), each of 16 second moves
    (a fixed diverse core, moves.CORE_SECOND, plus the best-scoring first moves of this decision not in it),
@@ -15,47 +15,69 @@ Search, per decision (Planner.plan):
    are re-scored from the start with ALL ensemble members and the full safety check (plan.safety.check); the
    best is chosen, unless the switch rule below keeps the previous plan.
 
-Switch rule (hysteresis, Planner(hysteresis=...), agent.py --hysteresis): the shifted previous plan is kept
-unless the best other candidate beats it by more than a margin: `hysteresis` V units when not both are
-successes; SUCCESS_MARGIN frames of the goal touch when both are; a success always beats a non-success; a
-vetoed previous plan never blocks a switch; a previous plan whose soft risk is over the best's by more than
-RISK_SWITCH is dropped. hysteresis 0 (the default here): no rule, the best total is chosen (as before).
-Plan.switch records the outcome {kept, gain (best other minus previous: V units, or frames earlier), margin,
-unit, reason}. A kept plan is registered once: SurpriseTracker.add only for a plan not taken from the previous
-one (its predictions stay those of its adoption); FailureMemory.expect keeps the expectation of a move while
-the same move goes on (a kept plan's next move is expected when it becomes the first move).
+Switch rule (hysteresis, Planner(hysteresis=...), agent.py / plan/offline.py --hysteresis, frames, default
+HYSTERESIS_FRAMES = 3 there): the shifted previous plan is kept unless the best other candidate's estimate is lower
+by more than `hysteresis` frames (both successes: SUCCESS_MARGIN frames earlier at the goal); a success always
+beats a non-success; a vetoed previous plan never blocks a switch; a previous plan whose soft risk is over the
+best's by more than RISK_SWITCH is dropped. hysteresis 0 (the default here): no rule, the best total is chosen.
+Plan.switch records the outcome {kept, gain (frames), margin, unit "frames", reason}. A kept plan is registered
+once: SurpriseTracker.add only for a plan not taken from the previous one (its predictions stay those of its
+adoption); FailureMemory.expect keeps the expectation of a move while the same move goes on.
 A time budget (120 ms) gives stage 1 a deadline at 30% of it and stage 2 one at the budget minus the final
-stage's measured cost (a running average; at least 45% of the budget); a cut stage is recorded as cut
-(candidates and steps actually evaluated in Plan.counts), never passed off as complete, and its candidates are
-ranked on the frames they have. The final stage always runs to the horizon, so a decision can exceed the
-budget by what the final stage takes beyond its estimate. budget_ms=None: no deadlines, every stage runs
-complete (tests and offline checks whose result must not depend on the machine's load).
+stage's measured cost (a running average, completion included; at least 45% of the budget); a cut stage is
+recorded as cut (candidates and steps actually evaluated in Plan.counts), never passed off as complete, and its
+candidates are ranked on the frames they have. The final stage (and its completion) always runs to the end, so
+a decision can exceed the budget by what the final stage takes beyond its estimate. budget_ms=None: no
+deadlines, every stage runs complete (tests and offline checks whose result must not depend on the machine's
+load).
 
-Score of a candidate (higher is better; units of V, about tiles):
-- progress = V(start) - V(end) on the agent's current leg (ProgressField.leg_of(keys)). V(end) is V_support
-  where the end position is supported (plan/geometry.py: ground or wall), else V_air. An end with V = +inf
-  (a dead end) counts DEAD_END below the start. Final stage: the mean over members (each member's own end).
-- death: contact within the first 16 frames (plan.safety.VETO_FRAMES) in any member is a hard veto; contact
-  or near contact later is a soft risk in [0, 1] (safety's margin from the measured position error), charged
-  RISK_WEIGHT x risk.
-- uncertainty (final stage only): positive progress is multiplied by exp(-max(0, 2 x spread - 20) / 20), spread
-  = the members' position std at the end (units).
-- failure memory: FAIL_COST x the number of times this first move failed from this start cell (FailureMemory).
-total = progress credit - RISK_WEIGHT x risk - failure penalty; vetoed candidates sort below every other one, by
-their veto frame (later is better). No hand-tuned shaping (no hop, explore, stuck or tether terms).
+Score of a candidate: the estimated frames to reach the goal (lower is better; total = -estimate):
+  estimate = frames used + T(end) + RISK_FRAMES x soft risk + failure frames + point-of-no-return frames.
+- frames used: stage 1 its move's frames, stage 2 H (or the frames rolled before its deadline), final H, or
+  H + k with the airborne completion (below).
+- T(end): plan/progress.py's time field (frames to the goal on realpath's graph, measured frames per tile) at the
+  end on the agent's leg after the path's key pickups: T_support where the end is supported (Planner.support:
+  ground, or a wall while the downward speed is at most CLING_SPEED, measured inf), else T_rise / T_fall by the
+  end's vertical velocity (imagine's per-step vy). T = +inf (a dead end): T(start) + DEAD_END_FRAMES (DEAD_FAR
+  when the start is a dead end too). Final stage: the mean over members (each member's own end and leg).
+- death: contact within the first 16 frames (plan.safety.VETO_FRAMES) in any member is a hard veto; contact or near
+  contact later is a soft risk in [0, 1] (safety's margin from the measured position error), RISK_FRAMES each.
+- failure memory: FAIL_FRAMES x the times this first move failed from this start cell (FailureMemory).
+- point-of-no-return memory: deaths / (tries + 1) x max(T_support(spawn) - T(start), DEAD_END_FRAMES) for this
+  first move from this start cell (MoveMemory).
+The penalties are the former V-unit weights (RISK_WEIGHT, FAIL_COST, DEAD_END) x FX_GROUND frames per tile (on open
+ground 1 V unit is about 1 tile). Vetoed candidates sort below every other one, by their veto frame (later is
+better), then by estimate. Waiting costs its frames; no uncertainty factor (the members' end spread is logged:
+Plan.score["spread_end"]); no hand-tuned shaping.
+Airborne completion (final stage only, Planner.complete): a candidate lands when a majority of members are
+supported at H (each member's own end vy): estimate = H + mean T(end). Otherwise it is completed from the main
+member's (Planner.member) end row at H with three continuations, no jump: keep (the plan's last horizontal input
+held, with its run flag), neutral, reverse (after a plan ending without a horizontal input: neutral, left,
+right), up to COMPLETE_MAX = 90 frames in batches of COMPLETE_CHUNK, stopping when every row has landed or died.
+Landed: the first supported frame (the cling rule) or a goal touch (T = 0); died: a deadly contact by the same
+safety sweep (hazard boxes, remembered deaths, the level's edge) against the deadly boxes of those frames (the
+decision's inputs reach H + COMPLETE_MAX: Planner.future_frames; beyond what is given, the last frame's boxes).
+Score: the best continuation that lands before dying: H + k + T_support(landing); none lands: all died, soft risk
++1 and H + T_air(end); some still airborne after 90: H + 90 + their best T_air there. Deaths in completion are
+risk, never veto. Plan.completion records the chosen plan's (continuation, frames, x, y, on, died, path);
+counts["final"]["completions"] every candidate's, counts["final"]["safe_alternatives"] the other candidates not
+vetoed, with soft risk < SAFE_RISK, that land (majority supported, completion landed, or a success).
+Known limit (measured, 1-14): the world model's tile input pads outside the map with solid, so imagined bodies do
+not fall past the map's bottom edge (they hover about 6 units above it); a fall out of a level whose kill box is
+below the map is not seen by the safety check or the completion.
 
 Goal and key contact (every stage, every candidate; the final stage per member): the swept segment test of
 plan.safety.first_contact against the goal boxes and the next key's box (game.level.Level.goal_boxes /
 key_boxes, reach measured by contact_reach.py), on the candidate's judged frames.
 - Goal touched at frame t before any deadly contact of that path: a success, total = SUCCESS_SCORE - t (a tiny
-  tie-break by risk and failure penalty up to t). Every success ranks above every non-success, an earlier
+  tie-break, under one frame, by the penalty frames up to t). Every success ranks above every non-success, an earlier
   touch above a later one; frames after t count nothing (veto and risk are judged on frames 1..t only).
   Final stage: a success when a majority of members touch the goal safely, t = the (lower) median of their
   touch frames; otherwise the plan is scored as without contact.
 - Next key of the current leg touched at frame t (before any deadly contact): the path goes on with the next
-  leg (and may take the key after that), so progress = V(start, current leg) - V(end, leg after the pickups).
-  The legs are comparable: progress.ProgressField builds V_leg[j] = cost to key j + V_leg[j+1] at key j,
-  the cumulative cost to the goal through the remaining keys. Known limit: the lock tiles a key opens stay
+  leg (and may take the key after that), so T(end) is taken on the leg after the pickups. The legs are
+  comparable: progress.ProgressField builds T_leg[j] = T to key j + T_leg[j+1] at key j (as V), the frames to
+  the goal through the remaining keys. Known limit: the lock tiles a key opens stay
   closed in the imagined tile map (the world model's tile inputs and the support geometry) after the pickup.
 - The world model's finish head along the chosen path is logged (Plan.finish_model), never scored.
 Plans that touch no goal and no key score exactly as without contact.
@@ -616,6 +638,7 @@ class Planner:
         self.moves = MoveMemory() if isinstance(moves, str) and moves == "new" else moves
         self.last_stage1 = None                      # the last decision's stage-1 estimates (tests, offline checks)
         self._dead_t = DEAD_FAR                      # T charged for a dead end (set per decision from T(start))
+        self.last_final = self.last_completion = None    # the last decision's final stage / completion (checks)
         self.set_level(level, field, memory)
 
     @property
@@ -1116,6 +1139,8 @@ class Planner:
         best, switch = self.switch_rule(int(np.argmax(total3)), prev_idx, total3, succ3, tg3, saf, soft3)
         safe_alts = int(sum(1 for c in range(n3) if c != best and not saf.veto[c] and saf.soft_risk[c] < SAFE_RISK
                             and landing3[c]))
+        self.last_final = {"estimate": est3, "veto": saf.veto, "soft": soft3, "landing": landing3, "completion": comp_rec,
+                           "prev": prev_idx, "first": first_name, "best": best}     # offline checks (not logged)
         t3 = time.perf_counter()
         timing["final"] = 1000 * (t3 - t2)
         self.final_ms = 0.7 * self.final_ms + 0.3 * timing["final"]

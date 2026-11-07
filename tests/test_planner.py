@@ -625,3 +625,48 @@ def test_move_memory_penalty_changes_the_choice_and_failures_ignore_deaths(flat)
     assert "failed move" not in kinds and "point of no return" in kinds
     pl.moves.levels.clear()
     pl.new_wave()
+
+
+DATA_PIT = os.path.join(HERE, "runs", "plan_20261107-200300", "wm_data")
+
+
+@pytest.mark.skipif(not (os.path.exists(MODEL) and os.path.isdir(DATA_PIT)), reason="no model or the 1-14 pit run")
+@pytest.mark.xfail(strict=True, reason="the world model stops falling at the map's bottom edge (wm.features.LevelGeom "
+                                        "pads outside the map with solid): imagined bodies hover at y ~ -353 over the "
+                                        "pit instead of leaving the kill box at -368.6, so no continuation dies there")
+def test_completion_over_the_1_14_pit_sees_every_continuation_die():
+    """Wave 46 of the 1-14 pit run: the agent took off from the start floor at frame 404 and died out of the level
+    at frame 481. From its recorded state at frame 444 (over the pit, falling), every continuation of the
+    completion should leave the level (risk charged). Measured instead: keep and neutral hover at y ~ -353 for
+    all 90 frames, reverse reaches the pit's left wall at x ~ 6 (a wall recorded agents did wall-jump off: 30 of
+    2,691 bodies that reached the map's bottom edge came back)."""
+    import gzip
+    import torch
+    from mpc.future import FutureWorld
+    from plan.offline import build, waves_of
+    from plan.planner import future_inputs, state_row
+    from mpc.candidates import act
+    torch.set_num_threads(1)
+    lv, field, pl, ref, _, _ = build(DATA_PIT, "1-14", MODEL, None)
+    p = os.path.join(DATA_PIT, "wave_00045.npz")
+    meta = json.loads(str(np.load(p)["meta"]))
+    assert meta["level"] == "1-14" and int(meta["wave"]) == 46
+    rows = np.load(p)["rows"]
+    world = json.load(gzip.open(p[:-4] + "_world.json.gz", "rt", encoding="utf-8"))
+    fw = FutureWorld()
+    fw.new_level()
+    for w in ref:
+        fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), w.get("keep") or lv.hz_keep, None,
+                   16.667, lv.hz_grow)
+    fw.new_wave()
+    for w in world:
+        if w["f"] > 444:
+            break
+        fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), w.get("keep") or lv.hz_keep, None,
+                   16.667, lv.hz_grow)
+    r = rows[(rows["agent"] == 0) & (rows["frame"] == 444)][0]
+    assert r["x"] > 0 and r["y"] < -200                                # over the pit, past the floor's edge
+    worlds, frames, _ = future_inputs(fw, 444, pl.future_frames, 16.667, lv.name)
+    row = state_row(r["x"], r["y"], r["vx"], r["vy"], r["flags"], r["state"], r["keys"], r["held"])
+    (est, risk, rec, path), = pl.complete(row, np.array([act(1)]), np.array([0]), worlds, frames, 16.667, 0, 0)[0]
+    assert sorted(rec["died"]) == ["keep", "neutral", "reverse"] and risk == 1

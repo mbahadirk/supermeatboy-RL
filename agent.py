@@ -21,11 +21,17 @@ error tube (--tube) or its support, new danger on the remaining path, fewer than
 goal or key touch that did not happen; --triggers off: every --replan frames only, the old behaviour with
 --replan 2); each decision's triggers go into its plans.jsonl line ("trigger"). The real
 states are checked against earlier predictions (surprises) and against the moves' expected progress (failed
-moves). A death of a planned agent the geometry does not explain (plan.safety.explain_death) is remembered
-(plan.safety.DeathMemory, saved to --death-memory): the planner avoids that place at that wave frame from then on.
+moves). Plans are scored in estimated frames to the goal (plan/planner.py); --hysteresis is in frames (default 3);
+each decision's inputs reach H + the airborne completion's 90 frames. A death of a planned agent the geometry does
+not explain (plan.safety.explain_death) is remembered (plan.safety.DeathMemory, saved to --death-memory): the
+planner avoids that place at that wave frame from then on. Every death of a planned agent (explained or not)
+charges the move taken at its point of no return (the latest decision of the wave with a safe alternative;
+plan.planner.MoveMemory, per level in --move-memory, default smbrl/move_memory.json, saved at every wave end;
+none: off; held-out levels: nothing charged) and logs a "point of no return" event.
 
 Logs in runs/<name>/: plans.jsonl (one Plan.to_dict() per decision, with the level, wave and the real state),
-events.jsonl (surprises, deaths, failed moves, level / kill box / hazard / field messages, wave summaries),
+events.jsonl (surprises, deaths, failed moves, points of no return, level / kill box / hazard / field messages,
+wave summaries),
 states.jsonl (per frame: frame, wave, every planned agent's [i, x, y, vx, vy, status]), times.jsonl (every
 finish, planned and explore: level, wave, agent, source, frames, seconds, lock, time of day); --wm-collect:
 world-model data in runs/<name>/wm_data (shards' source: planner, explore or planner+explore, with agent_sources).
@@ -35,7 +41,8 @@ smbrl/best_times.json; the old best.json is not used); the [level] line and the 
 S in the game (focused) finishes the level the game's way and writes the planned agents' best for it as the
 level's time (the game keeps it only if better than its record); 999.99 without one. The save file
 (UserData/savegame.dat next to the game) is copied to smbrl/backups/save_<date-time>/ before the first write.
-In the game (unless --no-overlay): the first planned agent's chosen path (green), predicted landings (yellow),
+In the game (unless --no-overlay): the first planned agent's chosen path (green), its airborne completion (fainter
+green, dashed) with its landing (yellow), predicted landings (yellow),
 wall jumps (cyan), where it touches the princess (pink) or picks a key (gold), and the top rejected
 alternatives (faint red when vetoed, grey otherwise).
 Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
