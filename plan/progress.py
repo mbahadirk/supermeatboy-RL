@@ -313,7 +313,11 @@ class ProgressField:
         """V at points (game units): V_support where `supported` is True, else V_air, on leg `leg` (an int or
         one per point; clamped to the last leg). A point inside a wall takes its best open neighbour of the
         3 x 3 around it (not diagonally through a wall corner) plus the distance to that cell's centre, in
-        tiles. +inf outside the map and where the goal cannot be reached."""
+        tiles. A point in the OPEN half of a half-block cell (a wall cell of the field; orientation as
+        plan.geometry.half_normal decodes it) takes only the neighbours on its open side: the cell that side
+        faces and the two diagonal ones beside it (not through a wall corner), plus the distance; never a
+        neighbour across the solid half (a body standing on a floor of half blocks is not valued by the cell
+        below the floor). +inf outside the map and where the goal cannot be reached."""
         xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
         shape = np.broadcast(xs, ys).shape
         xs, ys = np.broadcast_to(xs, shape).ravel(), np.broadcast_to(ys, shape).ravel()
@@ -342,10 +346,15 @@ class ProgressField:
         if solid.any():
             k = np.nonzero(solid)[0]
             ck, rk, xk, yk = c0[k], r0[k], xs[k], ys[k]
+            # half blocks: the direction (nx, ny) to the solid half; a point on the other side is in the open half
+            nx, ny = self._half_n
+            nx, ny = nx[rk, ck], ny[rk, ck]
+            u, v = (xk - self.ox) / TILE - ck - 0.5, (yk - self.oy) / TILE - rk - 0.5
+            open_half = self.pl.cls["half"][rk, ck] & (nx * u + ny * v < 0)
             best = np.full(len(k), np.inf)
             for dc, dr in DIRS:
                 c, r = ck + dc, rk + dr
-                ok = free(c, r)
+                ok = free(c, r) & (~open_half | (dc * nx + dr * ny < 0))     # open half: its open side only
                 if dc and dr:                                  # not diagonally through a wall corner
                     ok &= free(c, rk) | free(ck, r)
                 v = np.full(len(k), np.inf)
@@ -355,6 +364,14 @@ class ProgressField:
                 best = np.minimum(best, v + np.hypot(xk - cx, yk - cy) / TILE)
             out[k] = best
         return out.reshape(shape)
+
+    @property
+    def _half_n(self):
+        """plan.geometry.half_normal of the level's tile words, once."""
+        if getattr(self, "_half_n_cache", None) is None:
+            from plan.geometry import half_normal
+            self._half_n_cache = tuple(a.astype(np.int64) for a in half_normal(self.pl.words))
+        return self._half_n_cache
 
     def summary(self) -> str:
         return (f"{self.label}, {self.n_legs} leg(s); route cost {self.route_cost:.1f}; "

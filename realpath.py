@@ -135,6 +135,7 @@ class Planner:
         cells off screen (outside the camera-bounds kill box, game.level.Level.outside_cells): closed in every
         mode like the bottom row, but not a surface to stand on or push against (they are death, not walls)."""
         self.cls = tile_classes(words)
+        self.words = np.asarray(words, np.uint32)                  # the tile words (shape decodes read them)
         k = self.cls
         self.ox, self.oy = ox, oy
         self.H, self.W = words.shape

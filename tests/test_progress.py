@@ -129,3 +129,28 @@ def test_recorded_level_spawn_value_is_the_planner_route_cost():
         want = path_cost(cells, lay["cost"], lay["support"]) if cells else np.inf
         got = pf.V_support[0, st[1], st[0]]
         assert (np.isinf(want) and np.isinf(got)) or got == pytest.approx(want, abs=1e-6)
+
+
+def test_a_point_on_a_half_block_floor_takes_its_open_side():
+    """A floor of lower-half blocks (row 5, cols 5-30) over a room, with a hole at col 4; the goal below. A
+    body standing on that floor (centre in the cells' open upper half) is valued by the cell above it, never by
+    the cell below the floor; a point inside a full block keeps the best open neighbour of its 3 x 3."""
+    w = np.zeros((H, W), np.uint32)
+    w[0:2, :] = 1
+    w[5, 5:31] = 1 | (1 << 18) | (2 << 12)              # half blocks, rotated 180: the lower half is solid
+    w[2:12, 31] = 1                                      # a wall right of the floor
+    pf = ProgressField(w, 0.0, 0.0, at(10, 6), [at(20, 2)], [], [], [], [], [])
+    assert pf.found_route
+    cols = np.arange(5, 31)
+    on = pf.values((cols + 0.5) * T, np.full(len(cols), 5 * T + 16.0))           # standing: centre 6 above
+    up = pf.V_support[0, 6]                             # the open side: row 6, the cell above and its diagonals
+    want = np.minimum.reduce([up[cols] + 0.7, up[cols - 1] + np.hypot(1, 0.7), up[cols + 1] + np.hypot(1, 0.7)])
+    assert np.allclose(on, want)
+    below = pf.V_support[0, 4, cols]
+    assert (on > below + 1).all()                       # the old rule took the cell below the floor
+    assert np.all(np.diff(on) > 0)                      # rising away from the hole at col 4
+    # inside a full block (the wall at col 31): the best open neighbour, as before
+    v = pf.values([31.5 * T], [3.5 * T])[0]
+    nb = min(pf.V_support[0, r, c] + np.hypot(31.5 - c - 0.5, 3.5 - r - 0.5) for r in (2, 3, 4) for c in (30, 32)
+             if np.isfinite(pf.V_support[0, r, c]))
+    assert v == pytest.approx(nb)
