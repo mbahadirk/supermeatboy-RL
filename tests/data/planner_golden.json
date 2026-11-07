@@ -362,18 +362,18 @@
      {
       "moves": [
        "run R 16f",
-       "run-jump R hold 3"
+       "run-jump R hold 6 after 8f"
       ],
-      "total": -188.0,
-      "progress": 12.0,
+      "total": -186.0,
+      "progress": 14.0,
       "stage": "final",
-      "reason": "estimate 188 vs 184 frames",
+      "reason": "estimate 186 vs 184 frames",
       "vetoed": false
      },
      {
       "moves": [
        "run R 16f",
-       "run-jump R hold 6 after 8f"
+       "run-jump R hold 3"
       ],
       "total": -188.0,
       "progress": 12.0,

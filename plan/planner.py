@@ -944,7 +944,7 @@ class Planner:
                    "on": on[i] if ok else ("air" if not risk else None), "died": died,
                    "hits": {names[j]: hit[j] for j in idx if state[j] == 3}}
             res.append((float(est), risk, rec, [[float(a), float(b)] for a, b in zip(xs[i, :kk + 1], ys[i, :kk + 1])]))
-        self.completion_clipped = int(clipped.sum())
+        self.completion_clipped = getattr(self, "completion_clipped", 0) + int(clipped.sum())
         self.last_completion = {"frames": done, "rows": n, "flying_at_end": int((state == 0).sum()),
                                 "xs": xs, "ys": ys, "names": names,
                                 "states": state.copy(), "at": at.copy()}
@@ -1103,7 +1103,7 @@ class Planner:
 
         # ---- final: re-score with all members and the full check -------------------------------------------
         prev = self.prev.get(agent)
-        prev_idx = -1
+        prev_idx, shift = -1, 0
         if prev is not None and 0 < frame - prev.frame < H:
             shift = frame - prev.frame
             segs = [(nm, max(0, a - shift), b - shift) for nm, a, b in prev.segments if b - shift > 0 and nm != "pad"]
@@ -1119,31 +1119,41 @@ class Planner:
                 prev_idx = len(final) - 1
         n3 = len(final)
         acts3 = np.stack([a for _, a in final])
-        out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds, **ck)
+        # the shifted previous plan is judged on its own remaining frames 1..H - shift: the frames after them are
+        # its last action held, never planned (re-scoring them made kept plans look worse: risk in frames 41-48)
+        upto3 = np.full(n3, H, np.int64)
+        if prev_idx >= 0:
+            upto3[prev_idx] = H - shift
+        own = upto3 < H
+        out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds,
+                       keep_rows=bool(own.any()), **ck)
         E = out3["x"].shape[0]
+        ar3 = np.arange(n3)
         fr3 = _near_frames(frames[:H + 1], out3["x"], out3["y"])
         saf = S.check(out3["x"], out3["y"], fr3, self.bounds, self.floor)
-        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], None, saf.sweep.contact_frame, leg)
+        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], upto3 if own.any() else None,
+                                              saf.sweep.contact_frame, leg)
         n_goal = (tg_e > 0).sum(0)                                   # members touching the goal safely
         succ3 = 2 * n_goal > E
         tg3 = np.full(n3, -1, np.int64)
         for c in np.nonzero(succ3)[0]:
             ts = np.sort(tg_e[tg_e[:, c] > 0, c])
             tg3[c] = ts[(len(ts) - 1) // 2]                          # median (the lower one of an even count)
-        if succ3.any():                                              # successes: judged on frames 1..t only
-            vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, np.where(succ3, tg3, H))
-            saf = replace(saf, veto=np.where(succ3, vv, saf.veto), veto_frame=np.where(succ3, vfr, saf.veto_frame),
-                          veto_kind=np.where(succ3, vkd, saf.veto_kind),
-                          veto_id=[vid[c] if succ3[c] else saf.veto_id[c] for c in range(n3)],
-                          soft_risk=np.where(succ3, vsoft, saf.soft_risk),
-                          soft_frame=np.where(succ3, vsf, saf.soft_frame))
-        xe, ye, vye = out3["x"][:, :, H], out3["y"][:, :, H], out3["vy"][:, :, H]
+        judge = succ3 | own                                          # successes: frames 1..t; the previous plan: its own
+        if judge.any():
+            vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, np.where(succ3, tg3, upto3))
+            saf = replace(saf, veto=np.where(judge, vv, saf.veto), veto_frame=np.where(judge, vfr, saf.veto_frame),
+                          veto_kind=np.where(judge, vkd, saf.veto_kind),
+                          veto_id=[vid[c] if judge[c] else saf.veto_id[c] for c in range(n3)],
+                          soft_risk=np.where(judge, vsoft, saf.soft_risk),
+                          soft_frame=np.where(judge, vsf, saf.soft_frame))
+        xe, ye, vye = out3["x"][:, ar3, upto3], out3["y"][:, ar3, upto3], out3["vy"][:, ar3, upto3]
         tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, keys, legs_e, vye)      # (E, n3), each member's own leg
         vend_e = self.value(xe, ye, keys, legs_e, vye)[0]                         # V: display only
-        lands = 2 * sup_e.sum(0) > E                                 # a majority of members supported at H
+        lands = 2 * sup_e.sum(0) > E                                 # a majority of members supported at the end
         tend3 = self._tt(tend_e).mean(0)
-        base3 = H + tend3                                            # frames used + T at the end
-        frames_used = np.full(n3, H, np.int64)
+        base3 = upto3 + tend3                                        # frames used + T at the end
+        frames_used = upto3.copy()
         t_end3 = tend3.copy()
         comp_risk = np.zeros(n3)
         comp_rec, comp_path = [None] * n3, [None] * n3
@@ -1151,15 +1161,17 @@ class Planner:
         need = np.nonzero(~lands & ~succ3 & ~saf.veto)[0] if self.complete_max > 0 else np.zeros(0, np.int64)
         rolled = 0
         self.completion_clipped = 0
-        if len(need):
-            mi = min(self.member, E - 1)
-            res, rolled = self.complete(out3["last"][mi, need], acts3[need, H - 1], legs_e[mi, need], worlds,
-                                        frames, dt_ms, keys, H)
-            for c, (est, risk, rec, path) in zip(need, res):
-                base3[c] = H + est
+        mi = min(self.member, E - 1)
+        for at in np.unique(upto3[need]):                            # one batch per end frame (H; the previous plan's)
+            cs = need[upto3[need] == at]
+            rows_at = out3["last"][mi, cs] if at == H else out3["rows"][mi, cs, at]
+            res, r_ = self.complete(rows_at, acts3[cs, at - 1], legs_e[mi, cs], worlds, frames, dt_ms, keys, int(at))
+            rolled += r_
+            for c, (est, risk, rec, path) in zip(cs, res):
+                base3[c] = at + est
                 comp_risk[c], comp_rec[c], comp_path[c] = risk, rec, path
                 k = rec["frames"] if rec["frames"] is not None else 0
-                frames_used[c] = H + k
+                frames_used[c] = at + k
                 t_end3[c] = est - k
         timing["completion"] = 1000 * (time.perf_counter() - tc)
         first_name = [next((nm for nm, a, b in segs if nm != "pad"), "pad") for segs, _ in final]
@@ -1178,7 +1190,8 @@ class Planner:
         self.last_final = {"estimate": est3, "veto": saf.veto, "soft": soft3, "landing": landing3, "completion": comp_rec,
                            "prev": prev_idx, "first": first_name, "best": best, "t_end": t_end3,
                            "frames_used": frames_used, "risk": risk3, "fail": fail3, "death": death3, "lands": lands,
-                           "sup_e": sup_e, "tend_e": tend_e, "end_xy": (xe, ye), "end_vy": vye}  # offline checks
+                           "sup_e": sup_e, "tend_e": tend_e, "end_xy": (xe, ye), "end_vy": vye,
+                           "soft_frame": saf.soft_frame, "comp_risk": comp_risk}  # offline checks
         t3 = time.perf_counter()
         timing["final"] = 1000 * (t3 - t2)
         self.final_ms = 0.7 * self.final_ms + 0.3 * timing["final"]
