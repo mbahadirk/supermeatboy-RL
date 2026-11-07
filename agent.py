@@ -72,7 +72,8 @@ from mpc.future import FutureWorld                                       # noqa:
 from plan import safety as S                                             # noqa: E402
 from plan.commit import Committer, REPLAN_DEFAULT, TUBE_DEFAULT, kind_of  # noqa: E402
 from plan.moves import LIBRARY, MAX_LEN                                  # noqa: E402
-from plan.planner import Planner, future_inputs, state_row              # noqa: E402
+from plan.planner import (HYSTERESIS_FRAMES, MoveMemory, Planner, future_inputs,   # noqa: E402
+                          state_row)
 from plan.progress import ProgressField                                  # noqa: E402
 from viz import telemetry as T                                           # noqa: E402
 from wm.rollout import next_held                                         # noqa: E402
@@ -83,6 +84,7 @@ MAX_AGENTS = 200                 # realgame.py: the game's 40 spare Meat Boys, m
 GAME_POOL = 40
 DEFAULT_MODEL = os.path.join("runs", "wm_locked", "wm_model.pt")
 DEFAULT_DEATHS = os.path.join(HERE, "death_memory.json")
+DEFAULT_MOVES = os.path.join(HERE, "move_memory.json")
 DEFAULT_BEST = os.path.join(HERE, "best_times.json")
 BACKUPS = os.path.join(HERE, "backups")         # S: the game's save is copied here once per run before a time write
 SAVE_FILE = os.path.join("UserData", "savegame.dat")   # next to the game's executable
@@ -98,6 +100,7 @@ NOOP = [0, 0, 0, 0]
 COL_PLAN, COL_LAND, COL_WALL = 0xE020E040, 0xF0FFE020, 0xF020E0FF
 COL_ALT_VETO, COL_ALT = 0x60FF4040, 0x50B0B0B0
 COL_GOAL, COL_KEY = 0xF0FF78B9, 0xF0FFE628      # where the plan touches the princess / picks a key
+COL_COMP = 0x9020E040                             # the airborne completion after the plan (fainter, dashed)
 OVERLAY_ALTS, PLAN_STEP, ALT_STEP = 3, 3, 4
 
 
@@ -167,9 +170,10 @@ def _sub(pts, step: int) -> list:
 
 
 def overlay_payload(plan) -> list:
-    """realgame.js 'path' payload [{pts, col, w}] for one plan: the top rejected alternatives faintly (red when
-    vetoed, grey otherwise), the chosen path (green), landings (yellow) and wall jumps (cyan) as dots, and where
-    it touches the princess (pink) or picks a key (gold) as larger dots."""
+    """realgame.js 'path' payload [{pts, col, w, dash}] for one plan: the top rejected alternatives faintly (red
+    when vetoed, grey otherwise), the chosen path (green), its airborne completion (Plan.completion: fainter
+    green, dashed) with its landing, landings (yellow) and wall jumps (cyan) as dots, and where it touches the
+    princess (pink) or picks a key (gold) as larger dots."""
     if plan is None:
         return []
     out = []
@@ -178,6 +182,11 @@ def overlay_payload(plan) -> list:
             out.append({"pts": _sub(a["path"], ALT_STEP), "col": COL_ALT_VETO if a.get("vetoed") else COL_ALT,
                         "w": 1})
     out.append({"pts": _sub(plan.path, PLAN_STEP), "col": COL_PLAN, "w": 3})
+    comp = getattr(plan, "completion", None)
+    if comp and len(comp.get("path") or []) >= 2:
+        out.append({"pts": _sub(comp["path"], PLAN_STEP), "col": COL_COMP, "w": 2, "dash": True})
+        if comp.get("on") in ("ground", "wall", "goal"):
+            out.append({"pts": [[round(comp["x"], 1), round(comp["y"], 1)]], "col": COL_LAND, "w": 4})
     for p in plan.landings[:4]:
         out.append({"pts": [[round(p["x"], 1), round(p["y"], 1)]], "col": COL_LAND, "w": 4})
     for p in plan.wall_jumps[:4]:
@@ -380,6 +389,8 @@ class Runner:
             self.model_path = path
         self.deaths_path = args.death_memory
         self.deaths = S.DeathMemory.load(self.deaths_path)
+        mm = getattr(args, "move_memory", DEFAULT_MOVES)
+        self.moves = None if mm is None or str(mm).lower() == "none" else MoveMemory.load(mm)
         self.f_plans = open(os.path.join(self.run_dir, "plans.jsonl"), "a", encoding="utf-8")
         self.f_events = open(os.path.join(self.run_dir, "events.jsonl"), "a", encoding="utf-8")
         self.f_states = open(os.path.join(self.run_dir, "states.jsonl"), "a", encoding="utf-8")
@@ -461,7 +472,8 @@ class Runner:
         self.st = {"finished": 0, "died": 0, "explained": 0, "unexplained": 0, "estimated": 0, "memory": 0,
                    "surprise_pos": 0, "surprise_death": 0, "decisions": 0, "ms": [], "cut1": 0, "cut2": 0,
                    "failed": 0, "errors": 0, "ex_finished": 0, "ex_died": 0, "triggers": {}, "gaps": [],
-                   "agent_frames": 0, "check_s": 0.0, "switched": 0, "kept": 0, "clipped": 0}
+                   "agent_frames": 0, "check_s": 0.0, "switched": 0, "kept": 0, "clipped": 0, "pnr": 0,
+                   "pnr_none": 0, "completed": 0}
         self.fin = {"planned": [], "explore": []}     # this wave's finish times (s)
         self.new_best = False
 
@@ -554,12 +566,14 @@ class Runner:
         if self.model is not None:
             if self.planner is None:
                 self.planner = Planner(self.model, lv, field, budget_ms=self.args.budget_ms,
-                                       hysteresis=self.args.hysteresis)
+                                       hysteresis=self.args.hysteresis, moves=self.moves)
             elif self.planner_level is not lv:
                 self.planner.set_level(lv, field)
             else:
-                self.planner.field = field
+                self.planner.set_field(field)
                 self.planner.bounds = S.level_bounds(lv)
+            if self.moves is not None:
+                self.moves.learn = not self.protected      # held-out levels: no charges, no tries
             self.planner_level = lv
         self.field_built, self.field_dirty = True, False
         dt = time.time() - t
@@ -678,8 +692,8 @@ class Runner:
             self.st["agent_frames"] += len(live_plan)
             self.st["check_s"] += time.perf_counter() - t_chk
         fboxes = fut.get("fb")                      # computed for a check or a decision: telemetry reuses it
-        if need:
-            fboxes_now()
+        if need:                                    # decisions: inputs to H + the airborne completion's frames
+            fut["w"], fut["fb"], _ = future_inputs(self.fw, frame, pl.future_frames, dt, lv.name, self.deaths)
             worlds, fboxes = fut["w"], fut["fb"]
             for i, trig in need.items():
                 s = states[i]
@@ -749,6 +763,7 @@ class Runner:
         self.last_decision[plan.agent] = plan.frame
         st["ms"].append(plan.timing.get("total", 0.0))
         st["clipped"] += int((getattr(plan, "model_clipped", None) or 0) > 0)
+        st["completed"] += int(getattr(plan, "completion", None) is not None)
         c = plan.counts
         if c.get("stage1", {}).get("steps", MAX_LEN) < MAX_LEN:
             st["cut1"] += 1
@@ -766,9 +781,9 @@ class Runner:
             self.tel.send(T.plan_message(self.level.name, self.wave_no, d))
         self.cost.go(prev)
 
-    def observe(self, i, frame, x, y, keys, dead):
-        """Planner.observe: surprises and failed moves, counted and logged."""
-        for ev in self.planner.observe(i, frame, x, y, keys, dead):
+    def observe(self, i, frame, x, y, keys, dead, cause=None):
+        """Planner.observe: surprises, failed moves and (deaths) the point of no return, counted and logged."""
+        for ev in self.planner.observe(i, frame, x, y, keys, dead, cause=cause):
             k = ev.get("kind")
             if k == "position":
                 self.st["surprise_pos"] += 1
@@ -776,6 +791,8 @@ class Runner:
                 self.st["surprise_death"] += 1
             elif k == "failed move":
                 self.st["failed"] += 1
+            elif k == "point of no return":
+                self.st["pnr" if ev.get("charged") else "pnr_none"] += 1
             self.event(k, ev.get("frame", frame), **{a: b for a, b in ev.items() if a not in ("kind", "frame")})
 
     def on_death(self, i, frame, xy0, xy1, keys, rec, extra_boxes, estimated: bool):
@@ -809,7 +826,7 @@ class Runner:
         self.st["explained" if explained else "unexplained"] += 1
         self.st["estimated"] += int(estimated)
         if self.planner is not None:
-            self.observe(i, frame, x1, y1, keys, dead=True)
+            self.observe(i, frame, x1, y1, keys, dead=True, cause=cause if explained else "unexplained")
         self.event("death", frame, agent=i, x=x1, y=y1, explained=explained, cause=cause if explained else "none",
                    estimated=estimated, memory_added=added)
         if not explained:
@@ -972,6 +989,9 @@ class Runner:
                 + (f", {np.median(ms):.0f}/{np.percentile(ms, 95):.0f} ms (median/95%)" if ms is not None else "")
                 + f" | {commit_text(com, st['triggers'])}"
                 + f" | cut short: stage 1 {st['cut1']}, stage 2 {st['cut2']} | failed moves {st['failed']}"
+                + (f" | points of no return charged {st['pnr']}, none found {st['pnr_none']}"
+                   if st["pnr"] + st["pnr_none"] else "")
+                + f" | chosen plans completed {st['completed']}"
                 + (f" | explore {st['ex_finished']}/{self.n_explore} finished"
                    + (f" (fastest {fin_x:.2f} s)" if fin_x is not None else "") + f", {st['ex_died']} died"
                    if self.n_explore else "")
@@ -989,6 +1009,11 @@ class Runner:
                    finish_s=fin_p, explore_finish_s=fin_x, best_s=float(best_p["seconds"]) if best_p else None,
                    new_best=self.new_best, lock=self.lock)
         self.fw.new_wave()
+        if self.moves is not None and self.moves.dirty:
+            try:
+                self.moves.save()
+            except OSError as e:
+                print(f"[moves] could not save {self.moves.path}: {e}", flush=True)
         if self.planner is not None:
             if self.commit.on:
                 self.commit.tube.add(self.planner.surprise.err)     # the run's followed errors, for the tube
@@ -1180,9 +1205,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--tube", type=float, default=TUBE_DEFAULT,
                     help=f"replan when the real position is off the committed plan's prediction by more than this x "
                          f"the 90%% error of followed predictions at that horizon (default {TUBE_DEFAULT:g})")
-    ap.add_argument("--hysteresis", type=float, default=0.5,
-                    help="keep the committed plan unless another beats it by more than this (V units, about tiles; "
-                         "successes: 3 frames earlier at the goal); 0 = always the best score (default 0.5)")
+    ap.add_argument("--hysteresis", type=float, default=HYSTERESIS_FRAMES,
+                    help="keep the committed plan unless another's estimated frames to the goal are lower by more "
+                         "than this (frames; successes: 3 frames earlier at the goal); 0 = always the best score "
+                         f"(default {HYSTERESIS_FRAMES:g})")
     ap.add_argument("--triggers", choices=("on", "off"), default="on",
                     help="replan on triggers (start, interval, move end, surprise, support, danger, short, missed: "
                          "plan/commit.py) or only every --replan frames (off) (default on)")
@@ -1196,6 +1222,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--death-memory", default=DEFAULT_DEATHS,
                     help="unexplained deaths remembered as hazards (loaded at start, saved on every new one; "
                          "default smbrl/death_memory.json)")
+    ap.add_argument("--move-memory", default=DEFAULT_MOVES,
+                    help="deaths charged to the move taken at the point of no return, per level (plan/planner.py "
+                         "MoveMemory; loaded at start, a malformed file stops the start; saved at every wave end; "
+                         "default smbrl/move_memory.json; none: no point-of-no-return charging)")
     ap.add_argument("--best-times", default=DEFAULT_BEST,
                     help="best finish times per level (default smbrl/best_times.json; time-step lock on only)")
     ap.add_argument("--threads", type=int, default=2, help="torch threads for the world model (default 2)")

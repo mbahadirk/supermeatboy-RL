@@ -475,3 +475,19 @@ def test_frame_message_shrinks_under_the_limit():
     data = T.Telemetry(None).fit(m)
     assert data is not None and len(data) <= T.MAX_BYTES
     assert T.decode(data)["hazards"]
+
+
+def test_overlay_draws_the_completion_dashed_with_its_landing():
+    from types import SimpleNamespace
+    import agent
+    path = [[float(k), 0.0] for k in range(49)]
+    comp = {"continuation": "keep", "frames": 6, "x": 60.0, "y": -10.0, "on": "ground", "died": [],
+            "path": [[48.0 + 2 * k, -k * 1.5] for k in range(7)]}
+    p = SimpleNamespace(alternatives=[], path=path, landings=[], wall_jumps=[], key_touches=[], goal_touch=None,
+                        completion=comp)
+    out = agent.overlay_payload(p)
+    dashed = [o for o in out if o.get("dash")]
+    assert len(dashed) == 1 and dashed[0]["col"] == agent.COL_COMP and dashed[0]["pts"][0] == [48.0, 0.0]
+    assert any(o["col"] == agent.COL_LAND and o["pts"] == [[60.0, -10.0]] for o in out)
+    p.completion = dict(comp, on=None, frames=None)                  # every continuation died: no landing dot
+    assert not any(o["col"] == agent.COL_LAND for o in agent.overlay_payload(p))
