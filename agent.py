@@ -30,7 +30,8 @@ states.jsonl (per frame: frame, wave, every planned agent's [i, x, y, vx, vy, st
 finish, planned and explore: level, wave, agent, source, frames, seconds, lock, time of day); --wm-collect:
 world-model data in runs/<name>/wm_data (shards' source: planner, explore or planner+explore, with agent_sources).
 Best finish times per level (planned and explore apart, time-step lock on only): --best-times (default
-smbrl/best_times.json; the old best.json is not used); the [level] line shows the planned agents' best.
+smbrl/best_times.json; the old best.json is not used); the [level] line and the game's timer sign
+("BEST x.xx", at the level start and on every new best) show the planned agents' best.
 S in the game (focused) finishes the level the game's way and writes the planned agents' best for it as the
 level's time (the game keeps it only if better than its record); 999.99 without one. The save file
 (UserData/savegame.dat next to the game) is copied to smbrl/backups/save_<date-time>/ before the first write.
@@ -498,6 +499,19 @@ class Runner:
             self.track_hazards(boxes, [lv.hz_ids[k] for k in kept])
             self.build_field("level start")
         self.send_level()
+        self.post_best(lv.name)
+
+    def post_best(self, level):
+        """The planned agents' best for the level (best_times.json, lock-on times only) on the game's timer sign
+        (realgame.js 'best': it only changes the sign's text, "BEST x.xx"); nothing without one (realgame.js
+        resets the sign to "BEST --.--" at every level load)."""
+        b = self.best.best(level, "planned") if level else None
+        if self.script is None or not b or b.get("seconds") is None:
+            return
+        try:
+            self.script.post({"type": "best", "payload": float(b["seconds"])})
+        except Exception:
+            pass
 
     def track_hazards(self, boxes: list, ids: list):
         """As realgame.Trainer.track_hazards: each level piece's start box and every place a moving one was seen
@@ -825,6 +839,8 @@ class Runner:
                                                "wave": self.wave_no, "agent": int(i), "date": rec["time"]})
         if planned:
             self.new_best |= new
+            if new:
+                self.post_best(lv)
             best = self.best.best(lv, "planned") if lv is not None else None
             self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds,
                        dt_ms=rec["dt_ms"], lock=self.lock, best=float(best["seconds"]) if best else None,

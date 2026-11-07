@@ -339,6 +339,8 @@ def test_finish_times_and_best_times(tmp_path, capsys):
     sent = [T.decode(d) for d in tel.out]
     assert [m["seconds"] for m in sent if m["t"] == "event" and m["kind"] == "finish"] == [0.167, 0.25, 0.133]
     assert f"[level] {LEVEL}: " in out and "no agent best yet" in out
+    # the timer sign: nothing at the level start (no best yet), then each new planned best
+    assert [p["payload"] for p in r.script.posts if p["type"] == "best"] == [pytest.approx(0.167), pytest.approx(0.133)]
     # the viewer, live: the runner's own datagrams (a fake telemetry stream) reach its info panel
     from viz import viewer as V
     src = V.LiveSource(bind=False)
@@ -361,6 +363,7 @@ def test_finish_times_and_best_times(tmp_path, capsys):
                  words.astype("<u4").tobytes())
     r.close()
     assert f"agent best {b[LEVEL]['planned']['seconds']:.2f} s;" in capsys.readouterr().out
+    assert [p for p in r.script.posts if p["type"] == "best"] == [{"type": "best", "payload": pytest.approx(0.133)}]
 
 
 def test_best_times_file(tmp_path, capsys):
@@ -430,6 +433,11 @@ def test_realgame_js_writes_the_sent_time():
     src = open(os.path.join(HERE, "realgame.js"), encoding="utf-8").read()
     assert "hud.add(0x384).writeFloat(finishTime)" in src and "writeFloat(999.99)" not in src
     assert "finishTime = typeof t === 'number' && t > 0 && t < 999.99 ? t : 999.99;" in src
+    # the 'best' message only changes the timer sign's text: its hook rewrites the format and the number of the
+    # set-text call for the sign's text object, and writes nothing else (no record, no hud field)
+    hook = src[src.index("Interceptor.attach(img(0x45c220)"):src.index("let completeFrames")]
+    assert "TIMER_TEXT" in hook and "a[1] = fmtBest" in hook and "writeDouble(best)" in hook
+    assert "hud" not in hook and "0x384" not in hook and hook.count("write") == 1
 
 
 def test_telemetry_udp_roundtrip_and_never_blocks():
