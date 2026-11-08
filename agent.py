@@ -59,7 +59,8 @@ a random action; new per wave, logged in events.jsonl and the shard meta "pertur
 agent finished or died, or 1 s after the demo's actions ran out (plan.demos.DemoPlay.end_frame: copies left
 standing count as done; why "demo done"), or at --wave-seconds (raised to the demo + 2 s). Each wave checks that agent 0 finished at the demo's
 frame (+-1) and warns when it did not (the demo is not reproducible, e.g. recorded unlocked). Held-out levels,
-SUSPICIOUS inventory entries and another level loaded in the game are refused. Run folder runs/demo_<level>_<time>;
+the levels the user excluded (plan.demos.USER_EXCLUDED: 1-16, 4-6), SUSPICIOUS inventory entries and another level
+loaded in the game are refused. Run folder runs/demo_<level>_<time>;
 --wm-collect shards have source "demo" (agent 0) / "demo-noisy" (the copies), as agent_sources. Overlay: the
 demo's path in white (recorded positions, else agent 0's path as it plays). No best times are offered.
     python smbrl/agent.py --demo-level 1-12 --wm-collect

@@ -10,7 +10,10 @@ gravity), per situation (ground / air / wall), how sure the model is versus how 
 
 --demos runs/demos/recorded.json (plan.demos recorded) --demo-share 0.2: the PPO agents' best finishes found in
 the given wm_data folders are oversampled to about that share of the training samples (the real share is
-printed); demo rows of held-out waves stay held out, held-out levels stay out.
+printed); demo rows of held-out waves stay held out, held-out levels stay out. Replay folders given as data
+(agent.py --demo: runs/demo_<level>_*/wm_data) add their shards' "demo" agents (meta agent_sources) as demo rows.
+Demos the user excluded (plan.demos.USER_EXCLUDED: 1-16, 4-6) are never used: their replay folders are dropped from
+the data and their recorded.json entries skipped (the levels' other rows stay).
 """
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ from wm.features import build, BIN_NAMES, RES_SCALE, EVENTS   # noqa: E402
 from wm.model import WorldModel                           # noqa: E402
 from wm.buffer import eval_levels, shard_files            # noqa: E402
 from wm.features import demo_key                          # noqa: E402
+from plan.demos import excluded_demo_folder, user_excluded  # noqa: E402
 from shutdown import immediate                            # noqa: E402
 
 GROUPS = ["ground", "air", "wall"]
@@ -113,8 +117,11 @@ def load_demos(path: str, data: list) -> dict:
     with open(path, encoding="utf-8") as f:
         recs = json.load(f)
     keys = {demo_key(d) for d in data}
-    out, skipped = {}, 0
+    out, skipped, excl = {}, 0, 0
     for r in recs:
+        if user_excluded(r.get("level")):
+            excl += 1
+            continue
         k = demo_key(r["wm_data"])
         if k not in keys:
             skipped += 1
@@ -125,8 +132,51 @@ def load_demos(path: str, data: list) -> dict:
             continue
         out.setdefault(k, {}).setdefault(names.index(r["shard"]), []).append(
             (int(r["agent"]), int(r["frames"][0]), int(r["frames"][1])))
-    print(f"demos: {len(recs) - skipped} of {len(recs)} in the given folders" +
-          (f" ({skipped} skipped: folder not given or shard missing)" if skipped else ""), flush=True)
+    print(f"demos: {len(recs) - skipped - excl} of {len(recs)} in the given folders" +
+          (f" ({skipped} skipped: folder not given or shard missing)" if skipped else "") +
+          (f" ({excl} user-excluded)" if excl else ""), flush=True)
+    return out
+
+
+def drop_excluded(data: list) -> list:
+    """The data folders without the replay folders of user-excluded demos (plan.demos.USER_EXCLUDED)."""
+    keep = []
+    for d in data:
+        why = excluded_demo_folder(d)
+        if why:
+            print(f"skipped {d}: {why}", flush=True)
+        else:
+            keep.append(d)
+    return keep
+
+
+def replay_demos(data: list) -> dict:
+    """The "demo" agents (meta agent_sources) of every shard in replay folders (agent.py --demo), in load_demos'
+    form: {demo_key(folder): {shard index: [(agent, 0, last frame)]}}."""
+    import json
+    out = {}
+    for d in data:
+        if excluded_demo_folder(d) or not os.path.basename(os.path.dirname(os.path.normpath(d))).startswith("demo_"):
+            continue
+        for k, p in enumerate(shard_files(d)):
+            z = np.load(p)
+            meta = json.loads(str(z["meta"]))
+            if meta.get("source") not in ("demo", "demo+demo-noisy"):
+                continue
+            for ag in (meta.get("agent_sources") or {}).get("demo", [0]):
+                out.setdefault(demo_key(d), {}).setdefault(k, []).append((int(ag), 0, 10 ** 9))
+    return out
+
+
+def all_demos(path: str | None, data: list) -> dict:
+    """recorded.json demos (load_demos) plus the replay folders' demo agents (replay_demos)."""
+    out = load_demos(path, data) if path else {}
+    rep = replay_demos(data)
+    for k, sh in rep.items():
+        for i, v in sh.items():
+            out.setdefault(k, {}).setdefault(i, []).extend(v)
+    if rep:
+        print(f"demos: {sum(len(v) for v in rep.values())} replay shards in {len(rep)} demo folders", flush=True)
     return out
 
 
@@ -199,6 +249,7 @@ def main():
     ap.add_argument("--sc-share", type=float, default=0.35,
                     help="self-correction samples as a share of the real ones (more: better far ahead, worse next step)")
     args = ap.parse_args()
+    args.data = drop_excluded(args.data)
     immediate()
     torch.set_num_threads(args.threads)
     out = args.out or os.path.join(HERE, "runs", "wm_" + time.strftime("%Y%m%d-%H%M%S"))
@@ -208,7 +259,7 @@ def main():
     held = eval_levels()
     d = build(args.data, levels=args.levels, max_samples=args.max_samples, log=lambda *a: None, seed=args.seed,
               frac=args.sample_frac, exclude=held, step=args.step,
-              demos=load_demos(args.demos, args.data) if args.demos else None)
+              demos=all_demos(args.demos, args.data) if args.demos else None)
     res_scale = RES_SCALE
     if args.step > 1:                        # targets in unit scale: the corrections' spread over full chains
         full = d["full"]

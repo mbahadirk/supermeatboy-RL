@@ -202,3 +202,39 @@ def test_demo_wave_ends_when_every_agent_is_done_and_cut_waves_are_kept(tmp_path
     assert len(transitions(got[1][1])["truncated_rows"]) == 3          # the cut agents' last rows: cut by time
     d = build([os.path.join(r.run_dir, "wm_data")], log=lambda *a: None)
     assert len(d["X"]) > 0
+
+
+def test_user_excluded_demos_are_refused_and_skipped(tmp_path, capsys):
+    """1-16 and 4-6 (plan.demos.USER_EXCLUDED): refused for replay, out of recorded.json, their replay folders and
+    demo rows skipped by wm.train; another level's replay folder adds its demo agent's rows."""
+    from wm import train as W
+    from wm.buffer import Collector
+    assert set(D.USER_EXCLUDED) == {"1-16", "4-6"}
+    for lv in ("1-16", "4-6"):
+        es = _entries(tmp_path, level=lv)
+        es[0]["verdict"] = "USER_EXCLUDED"
+        with pytest.raises(SystemExit, match="user excluded"):
+            D.resolve_demo(level=lv, entries=es)
+        with pytest.raises(SystemExit, match="user excluded"):
+            D.resolve_demo(best=es[1]["best"], entries=es)          # an old inventory's REPLAYABLE entry too
+        es[0].update(wm_data="runs/x/wm_data", shard="wave_00000.npz", agent=0, frame_range=[0, 9], run="x")
+        es[0]["verdict"] = "VALID_RECORDED"
+        assert D.recorded(es[:1]) == []
+    runs = tmp_path / "runs"
+    dirs = {}
+    for name in ("demo_1-16_20261108-161241", "demo_4-6_20261108-161242", "demo_1-12_20261108-161243"):
+        d = runs / name / "wm_data"
+        c = Collector(str(d), source="demo+demo-noisy")
+        c.meta_extra = {"agent_sources": {"demo": [0], "demo-noisy": [1]}}
+        c.level_name = name.split("_")[1]
+        c.agents(1, 0, [[0, 0, 0, 0, 0, 0, 0, 0]] * 2, [True, True], [0, 0], [1, 1], [0.0, 0.0])
+        c.wave_end(1, {"why": "demo done", "frame": 1})
+        dirs[name] = str(d)
+    data = W.drop_excluded(list(dirs.values()))
+    assert data == [dirs["demo_1-12_20261108-161243"]]
+    assert "user excluded" in capsys.readouterr().out
+    assert W.replay_demos(list(dirs.values())) == {W.demo_key(data[0]): {0: [(0, 0, 10 ** 9)]}}
+    rec = tmp_path / "recorded.json"
+    rec.write_text(json.dumps([{"wm_data": data[0], "shard": "wave_00000.npz", "agent": 1, "frames": [0, 0],
+                                "level": "1-16"}]))
+    assert W.load_demos(str(rec), data) == {}                         # a 1-16 record is skipped

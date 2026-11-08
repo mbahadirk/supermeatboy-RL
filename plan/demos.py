@@ -14,6 +14,9 @@ the agent's status-2 row is at frame len(actions)). Verdicts:
   <level>_model.pt and finishes the level the game's way), a finish away from the goal box, a teleport, frames
   far below every other run's finish on that level, or anything that cannot be checked.
 - HELD_OUT: a held-out level (eval_levels.json), never used.
+- USER_EXCLUDED: a level the user excluded (USER_EXCLUDED below, with the reason): never replayed (agent.py
+  --demo / --demo-level refuse), not in recorded.json, and wm.train skips its replay folders (runs/demo_<level>_*)
+  and its demo rows. Nothing is deleted.
 
 Lock evidence: the world frames' time step in the run's wm_data (16.667 ms every frame: locked); else runs
 started before the lock existed (commit 154f3fb, 2026-11-02 16:51) were unlocked; else unknown.
@@ -59,6 +62,25 @@ R_TELEPORT = "teleport (jump over 2 tiles or missing frames)"
 R_FAR_BELOW = "frames far below every other run's finish"
 R_NO_ACTIONS = "no actions"
 R_NO_GOAL_DATA = "no goal data (cannot check the goal touch)"
+# levels whose demos the user excluded (2026-11-08), with the reason
+USER_EXCLUDED = {"1-16": "user excluded: very slow, would teach unwanted movement",
+                 "4-6": "user excluded: finished through a bug, it cannot finish now"}
+_DEMO_RUN = re.compile(r"^demo_(.+)_\d{8}-\d{6}$")
+
+
+def user_excluded(level) -> str | None:
+    """The reason the user excluded this level's demos, or None."""
+    return USER_EXCLUDED.get(level)
+
+
+def excluded_demo_folder(path: str) -> str | None:
+    """A replay folder (runs/demo_<level>_<time>, or its wm_data) of a user-excluded level: the reason, else None."""
+    parts = os.path.normpath(path).split(os.sep)
+    for name in reversed(parts[-2:]):
+        m = _DEMO_RUN.match(name)
+        if m:
+            return user_excluded(m.group(1))
+    return None
 
 
 def _rel(p: str) -> str:
@@ -169,6 +191,9 @@ def inventory(runs_dir: str = RUNS) -> list:
         if e["level"] in held:
             e["verdict"], e["reasons"] = "HELD_OUT", [R_HELD]
             continue
+        if user_excluded(e["level"]):
+            e["verdict"], e["reasons"] = "USER_EXCLUDED", [user_excluded(e["level"])]
+            continue
         others = [o["frames"] for o in entries if o["level"] == e["level"] and o is not e and o["frames"]]
         if not e["frames"]:
             e["reasons"].append(R_NO_ACTIONS)
@@ -193,7 +218,7 @@ def _level_key(lv: str):
 
 
 def table(entries: list) -> str:
-    verdicts = ["VALID_RECORDED", "REPLAYABLE", "SUSPICIOUS", "HELD_OUT"]
+    verdicts = ["VALID_RECORDED", "REPLAYABLE", "SUSPICIOUS", "HELD_OUT", "USER_EXCLUDED"]
     lines = [f"{'level':6} {'best valid s':>12}  " + "  ".join(f"{v[:5]:>5}" for v in verdicts)]
     for lv in sorted({e["level"] for e in entries}, key=_level_key):
         es = [e for e in entries if e["level"] == lv]
@@ -227,7 +252,7 @@ def recorded(entries: list) -> list:
     """Where each VALID_RECORDED demo's rows are (no rows copied)."""
     return [{"wm_data": e["wm_data"], "shard": e["shard"], "agent": e["agent"], "frames": e["frame_range"],
              "level": e["level"], "seconds": e["seconds"], "run": e["run"]}
-            for e in entries if e["verdict"] == "VALID_RECORDED"]
+            for e in entries if e["verdict"] == "VALID_RECORDED" and not user_excluded(e["level"])]
 
 
 # ---- replay (agent.py --demo) -------------------------------------------------------------------------------
@@ -245,7 +270,8 @@ def _norm(p: str) -> str:
 
 def resolve_demo(best: str | None = None, level: str | None = None, entries: list | None = None) -> dict:
     """The demo to replay: a best.json path (--demo) or the fastest non-suspicious one of a level (--demo-level).
-    Refused (SystemExit) for held-out levels, SUSPICIOUS entries and best.json files the inventory does not know.
+    Refused (SystemExit) for held-out levels, user-excluded levels (USER_EXCLUDED), SUSPICIOUS entries and best.json
+    files the inventory does not know.
     Returns {level, seconds, actions, best, entry, path (recorded positions, [] without rows)}."""
     held = eval_levels()
     if entries is None:
@@ -256,6 +282,8 @@ def resolve_demo(best: str | None = None, level: str | None = None, entries: lis
     if level is not None:
         if level in held:
             raise SystemExit(f"{level} is a held-out level: demos there are never used")
+        if user_excluded(level):
+            raise SystemExit(f"{level}: {user_excluded(level)}")
         e = best_for_level(level, entries)
         if e is None:
             raise SystemExit(f"no non-suspicious demo for {level} in the inventory")
@@ -265,6 +293,8 @@ def resolve_demo(best: str | None = None, level: str | None = None, entries: lis
             raise SystemExit(f"{best} is not in the demo inventory (run  python -m plan.demos inventory)")
     if e["level"] in held or e["verdict"] == "HELD_OUT":
         raise SystemExit(f"{e['level']} is a held-out level: demos there are never used")
+    if user_excluded(e["level"]) or e["verdict"] == "USER_EXCLUDED":
+        raise SystemExit(f"{e['level']}: {user_excluded(e['level']) or 'user excluded'}")
     if e["verdict"] not in REPLAY_OK:
         raise SystemExit(f"{e['best']} is {e['verdict']}: " + "; ".join(e["reasons"]))
     with open(_norm(e["best"]), encoding="utf-8") as f:
