@@ -144,10 +144,15 @@ def eval_levels() -> set:
         return set(json.load(f).get("held_out", []))
 
 
+def shard_files(d: str) -> list:
+    """A wm_data folder's shard files in reading order: a shard's index here is its rows' "wave" (load_shards)."""
+    return sorted(glob.glob(os.path.join(d, "wave_*.npz")))
+
+
 def load_shards(d: str, level: str | None = None):
     """(meta, rows, world frames) of every shard in a wm_data folder (optionally one level only), one at a
     time (a long run does not fit in memory at once)."""
-    for k, p in enumerate(sorted(glob.glob(os.path.join(d, "wave_*.npz")))):
+    for k, p in enumerate(shard_files(d)):
         z = np.load(p)
         meta = json.loads(str(z["meta"]))
         if level and meta.get("level") != level:

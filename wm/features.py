@@ -23,6 +23,7 @@ reward of the step (/5).
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 
@@ -291,18 +292,28 @@ def group_of(s) -> np.ndarray:
     return np.where(wall, 2, np.where(air, 1, 0)).astype(np.int8)
 
 
-def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=None, exclude=(), step: int = 1) -> dict:
+def demo_key(d: str) -> str:
+    """A wm_data folder's identity for demo lookup (relative paths from the smbrl folder)."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.normcase(os.path.normpath(d if os.path.isabs(d) else os.path.join(here, d)))
+
+
+def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=None, exclude=(), step: int = 1,
+          demos: dict | None = None) -> dict:
     """Features, targets and baselines of every transition in these wm_data folders. frac: keep this share of
     each wave's transitions (all deaths and finishes) before the inputs are built, for runs too long to
     featurize whole. exclude: levels left out (the held-out ones). step k > 1: samples of a step-k model
     (wm.buffer.chains: k frames, the k actions, the summed dt, events of any of the frames; "full" False where a
     death / finish cut the chain short; the targets' continuous part in game units minus the prior, / RES_SCALE
-    as for step 1: wm.train rescales it to the model's res_scale)."""
+    as for step 1: wm.train rescales it to the model's res_scale). demos: {normalized folder (demo_key):
+    {shard index: [(agent, first frame, last frame)]}}: those agents' transitions are marked in "demo" and kept by
+    frac and max_samples (wm.train --demos)."""
     rng_f = np.random.default_rng(seed + 1)
-    X, YC, YB, YS, YR, G, SH, LV, BC, BG, RAW, PR, FU = [], [], [], [], [], [], [], [], [], [], [], [], []
+    X, YC, YB, YS, YR, G, SH, LV, BC, BG, RAW, PR, FU, DM = [], [], [], [], [], [], [], [], [], [], [], [], [], []
     shard_no = 0
     for d in dirs:
         geoms = {}
+        dem = (demos or {}).get(demo_key(d), {})
         for meta, rows, world in load_shards(d):
             lv = meta.get("level")
             shard_no += 1
@@ -326,9 +337,12 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
                 tr = transitions(rows)
                 s, s2, a, r = tr["s"], tr["s2"], tr["a"], tr["r"]
                 ext = None
+            is_demo = np.zeros(len(s), bool)
+            for ag, f0, f1 in (dem.get(int(rows["wave"][0]), []) if len(rows) else []):
+                is_demo |= (s["agent"] == ag) & (s["frame"] >= f0) & (s["frame"] <= f1)
             if frac is not None and frac < 1.0 and len(s):
-                k = (s2["status"] != 0) | (rng_f.random(len(s)) < frac)
-                s, s2, a, r = s[k], s2[k], a[k], r[k]
+                k = (s2["status"] != 0) | (rng_f.random(len(s)) < frac) | is_demo
+                s, s2, a, r, is_demo = s[k], s2[k], a[k], r[k], is_demo[k]
                 if ext is not None:
                     ext = {kk: v[k] for kk, v in ext.items()}
             if not len(s):
@@ -367,6 +381,7 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
                 YC.append(yc); YB.append(yb); YS.append(ys_); YR.append(yr)
                 G.append(group_of(s[m]))
                 SH.append(np.full(len(m), shard_no, np.int32))
+                DM.append(is_demo[m])
                 LV.append(np.array([lv] * len(m)))
                 bc, bg = baselines(s[m], dt)
                 BC.append(bc.astype(np.float32)); BG.append(bg.astype(np.float32))
@@ -379,10 +394,11 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
            "level": np.concatenate(LV), "base_const": np.concatenate(BC), "base_grav": np.concatenate(BG),
            "raw": np.concatenate(RAW).astype(np.float32), "prior": np.concatenate(PR)}
     out["full"] = np.concatenate(FU) if FU else np.ones(len(out["X"]), bool)
+    out["demo"] = np.concatenate(DM)
     n = len(out["X"])
     if max_samples and n > max_samples:        # keep every rare event (deaths, finishes), sample the rest
         rng = np.random.default_rng(seed)
-        rare = (out["yb"][:, EVENTS["death"]] > 0) | (out["yb"][:, EVENTS["finish"]] > 0)
+        rare = (out["yb"][:, EVENTS["death"]] > 0) | (out["yb"][:, EVENTS["finish"]] > 0) | out["demo"]
         idx = np.concatenate([np.nonzero(rare)[0],
                               rng.choice(np.nonzero(~rare)[0], max_samples - int(rare.sum()), replace=False)])
         idx.sort()

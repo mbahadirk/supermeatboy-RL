@@ -7,6 +7,10 @@ training run in the game next to it keeps its speed. Every 5th recorded wave is 
 the report: position / velocity errors against two simple guesses (same velocity; same velocity with
 gravity), per situation (ground / air / wall), how sure the model is versus how wrong it is, and the events
 (landing, death, finish, blocked, flags, movement state). Writes wm_model.pt and wm_report.md to --out.
+
+--demos runs/demos/recorded.json (plan.demos recorded) --demo-share 0.2: the PPO agents' best finishes found in
+the given wm_data folders are oversampled to about that share of the training samples (the real share is
+printed); demo rows of held-out waves stay held out, held-out levels stay out.
 """
 from __future__ import annotations
 
@@ -24,7 +28,8 @@ if HERE not in sys.path:
 
 from wm.features import build, BIN_NAMES, RES_SCALE, EVENTS   # noqa: E402
 from wm.model import WorldModel                           # noqa: E402
-from wm.buffer import eval_levels                         # noqa: E402
+from wm.buffer import eval_levels, shard_files            # noqa: E402
+from wm.features import demo_key                          # noqa: E402
 from shutdown import immediate                            # noqa: E402
 
 GROUPS = ["ground", "air", "wall"]
@@ -101,6 +106,41 @@ def report(model, d: dict, idx: np.ndarray) -> str:
     return "\n".join(lines)
 
 
+def load_demos(path: str, data: list) -> dict:
+    """recorded.json -> {demo_key(folder): {shard index: [(agent, first frame, last frame)]}} for the folders in
+    data (demos in other folders are reported and skipped)."""
+    import json
+    with open(path, encoding="utf-8") as f:
+        recs = json.load(f)
+    keys = {demo_key(d) for d in data}
+    out, skipped = {}, 0
+    for r in recs:
+        k = demo_key(r["wm_data"])
+        if k not in keys:
+            skipped += 1
+            continue
+        names = [os.path.basename(p) for p in shard_files(k)]
+        if r["shard"] not in names:
+            skipped += 1
+            continue
+        out.setdefault(k, {}).setdefault(names.index(r["shard"]), []).append(
+            (int(r["agent"]), int(r["frames"][0]), int(r["frames"][1])))
+    print(f"demos: {len(recs) - skipped} of {len(recs)} in the given folders" +
+          (f" ({skipped} skipped: folder not given or shard missing)" if skipped else ""), flush=True)
+    return out
+
+
+def demo_oversample(tr_idx: np.ndarray, demo: np.ndarray, share: float) -> tuple[np.ndarray, float]:
+    """Training indices with the demo ones repeated so they make about `share` of them, and the real share."""
+    d = tr_idx[demo[tr_idx]]
+    if not len(d) or share <= 0:
+        return tr_idx, len(d) / max(1, len(tr_idx))
+    rest = len(tr_idx) - len(d)
+    reps = max(1, int(round(share * rest / ((1 - share) * len(d))))) if share < 1 else 1
+    idx = np.concatenate([tr_idx[~demo[tr_idx]], np.tile(d, reps)])
+    return idx, reps * len(d) / len(idx)
+
+
 def fit(model, ts: dict, d: dict, va_idx, epochs: int, lr: float, batch: int, t0: float):
     """Train on the arrays in ts; held-out loss on d[va_idx] after each epoch."""
     n = len(ts["X"])
@@ -149,6 +189,8 @@ def main():
     ap.add_argument("--threads", type=int, default=4, help="CPU threads (leave some for the game)")
     ap.add_argument("--step", type=int, default=1,
                     help="frames per model step (default 1; 4: one step predicts 4 frames from the 4 actions)")
+    ap.add_argument("--demos", default=None, help="recorded.json of demo trajectories (plan.demos recorded)")
+    ap.add_argument("--demo-share", type=float, default=0.2, help="demo rows' share of the training samples")
     ap.add_argument("--init", default=None, help="start from this wm_model.pt (then --epochs is not used)")
     ap.add_argument("--self-correct", type=int, default=0, metavar="K",
                     help="then train on the model's own K-step rollouts (wm/selfcorrect.py)")
@@ -165,7 +207,8 @@ def main():
     t0 = time.time()
     held = eval_levels()
     d = build(args.data, levels=args.levels, max_samples=args.max_samples, log=lambda *a: None, seed=args.seed,
-              frac=args.sample_frac, exclude=held, step=args.step)
+              frac=args.sample_frac, exclude=held, step=args.step,
+              demos=load_demos(args.demos, args.data) if args.demos else None)
     res_scale = RES_SCALE
     if args.step > 1:                        # targets in unit scale: the corrections' spread over full chains
         full = d["full"]
@@ -197,7 +240,13 @@ def main():
         pw = np.where(np.isin(np.arange(len(BIN_NAMES)), list(EVENTS.values())),
                       np.clip((1 - pos) / np.maximum(pos, 1e-6), 1, 50), 1)
         model.pos_weight.copy_(torch.as_tensor(pw, dtype=torch.float32))
-    train_set = {k: d[k][tr_idx] for k in ("X", "yc", "yb", "ys", "yr") + (("wc",) if "wc" in d else ())}
+    fit_idx = tr_idx
+    if args.demos:
+        fit_idx, real = demo_oversample(tr_idx, d["demo"], args.demo_share)
+        print(f"demos: {int(d['demo'][tr_idx].sum())} training / {int(d['demo'][va_idx].sum())} held-out demo "
+              f"transitions; oversampled to {real:.1%} of {len(fit_idx)} training samples "
+              f"(asked {args.demo_share:.0%})", flush=True)
+    train_set = {k: d[k][fit_idx] for k in ("X", "yc", "yb", "ys", "yr") + (("wc",) if "wc" in d else ())}
     if not args.init:
         fit(model, train_set, d, va_idx, args.epochs, 1e-3, args.batch, t0)
     if args.self_correct:                    # then on its own rollouts (wm/selfcorrect.py)
@@ -215,6 +264,7 @@ def main():
 
     info = {"data": args.data, "levels": sorted(set(d["level"])), "train": int(len(tr_idx)), "held_out": int(len(va_idx)),
             "eval_levels_excluded": sorted(held), "sample_frac": args.sample_frac,
+            "demos": args.demos, "demo_share": args.demo_share if args.demos else None,
             "hidden": model.hidden, "layers": model.layers, "step": model.step}
     model.save(os.path.join(out, "wm_model.pt"), info)
     text = "# World model: one-step accuracy\n\n" + \
