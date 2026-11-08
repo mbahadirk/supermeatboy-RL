@@ -25,6 +25,7 @@ if HERE not in sys.path:
 from wm.features import build, BIN_NAMES, RES_SCALE, EVENTS   # noqa: E402
 from wm.model import WorldModel                           # noqa: E402
 from wm.buffer import eval_levels                         # noqa: E402
+from shutdown import immediate                            # noqa: E402
 
 GROUPS = ["ground", "air", "wall"]
 
@@ -149,6 +150,7 @@ def main():
     ap.add_argument("--sc-share", type=float, default=0.35,
                     help="self-correction samples as a share of the real ones (more: better far ahead, worse next step)")
     args = ap.parse_args()
+    immediate()
     torch.set_num_threads(args.threads)
     out = args.out or os.path.join(HERE, "runs", "wm_" + time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(out, exist_ok=True)

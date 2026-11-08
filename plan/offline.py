@@ -34,6 +34,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from mpc.future import FutureWorld                                        # noqa: E402
+from shutdown import immediate                                            # noqa: E402
 from plan.measure_progress import level_from_data, planner_inputs          # noqa: E402
 from plan.planner import HYSTERESIS_FRAMES, Planner, future_inputs, state_row   # noqa: E402
 from plan.progress import ProgressField                                    # noqa: E402
@@ -228,6 +229,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", default=None, help="write every Plan.to_dict() here (one JSON line each)")
     args = ap.parse_args()
+    immediate()
     torch.set_num_threads(args.threads)
     if args.closed_loop:
         out = []

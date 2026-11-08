@@ -64,6 +64,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from viz import telemetry as T                                            # noqa: E402
+from shutdown import immediate                                            # noqa: E402
 from plan.explain import HORIZONS, ERR90_AT, SURPRISE_FACTOR             # noqa: E402
 
 RUNS = os.path.join(HERE, "runs")
@@ -1513,6 +1514,7 @@ class App:
     def run(self):
         pg = self.pg
         pg.init()
+        immediate()          # after pg.init: SDL turns Ctrl+C into a window-close event the loop may not see
         screen = pg.display.set_mode(self.size, pg.RESIZABLE)
         pg.display.set_caption("Super Meat Boy planner - " + ("replay " + self.src.name if self.replay else "live"))
         clock = pg.time.Clock()

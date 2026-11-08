@@ -54,7 +54,8 @@ Per wave, after the summary line, a [cost] line (FrameCost): ms per frame (mean,
 observing (surprises, failed moves, deaths), on the explore agents, world-model data, telemetry, file logging, the
 overlay, the level's live state, the rest, and waiting for the game (from the reply to the next frame message),
 plus the game speed (game seconds per wall-clock second); the same numbers go into the wave event.
-Stop: Ctrl+C or a file runs/<name>/STOP (the characters are handed back to the game).
+Stop: Ctrl+C or a file runs/<name>/STOP (the characters are handed back to the game, then the process exits).
+A second Ctrl+C, or no clean stop within 10 s, unloads the script and exits at once (shutdown.py).
 """
 from __future__ import annotations
 
@@ -82,6 +83,7 @@ from plan.moves import LIBRARY, MAX_LEN                                  # noqa:
 from plan.planner import (HYSTERESIS_FRAMES, MoveMemory, Planner, future_inputs,   # noqa: E402
                           state_row)
 from plan.progress import ProgressField                                  # noqa: E402
+from shutdown import Shutdown, bounded                                   # noqa: E402
 from viz import telemetry as T                                           # noqa: E402
 from wm.rollout import next_held                                         # noqa: E402
 
@@ -1137,7 +1139,6 @@ class Runner:
 
     def run(self):
         import frida
-        import signal
         other = other_runners()
         if other:
             raise SystemExit(f"another realgame.py / agent.py is already attached to the game (pid "
@@ -1150,6 +1151,8 @@ class Runner:
                "lock_step": True}
         with open(JS, encoding="utf-8") as f:
             src = f.read().replace("__CONFIG__", json.dumps(cfg))
+        # first Ctrl+C: the clean stop below; second Ctrl+C or no clean stop after 10 s: unload, leave at once
+        sd = Shutdown(force=lambda: self.script is not None and self.script.unload()).install()
         try:
             session = frida.attach(GAME_EXE)
         except frida.ProcessNotFoundError:
@@ -1159,43 +1162,41 @@ class Runner:
         self.script.load()
         print(f"attached: {self.n_plan} planned + {self.n_explore} explore agents, waves of {self.args.wave_seconds:g}s, "
               f"replan every {self.replan} frames" + (f" or on a trigger (tube x{self.args.tube:g})" if self.commit.on
-                                                       else " (triggers off)") + ", budget {self.args.budget_ms:g} ms"
+                                                       else " (triggers off)") + f", budget {self.args.budget_ms:g} ms"
               + (f", model {self.model_path}" if self.model is not None else "")
               + f", death memory {self.deaths_path} ({len(self.deaths)} entries); logs in {self.run_dir}; "
                 f"Ctrl+C to stop", flush=True)
         stop_file = os.path.join(self.run_dir, "STOP")   # create it to stop a background run safely
         if os.path.exists(stop_file):
             os.remove(stop_file)
-        # Ctrl+C only asks for a stop: a second Ctrl+C in the middle of stopping must not leave the game waiting
-        want_stop = threading.Event()
-
-        def on_sigint(*_):
-            if not want_stop.is_set():
-                print("stopping (handing the characters back; Ctrl+C again is ignored)...", flush=True)
-            want_stop.set()
-        old_sigint = signal.signal(signal.SIGINT, on_sigint)
+        code = 0
         try:
-            while not os.path.exists(stop_file) and not want_stop.is_set() and not self.stopping:
+            while not os.path.exists(stop_file) and not sd.requested.is_set() and not self.stopping:
                 time.sleep(0.5)
             if os.path.exists(stop_file):
                 os.remove(stop_file)
-        finally:
-            # stop through the next frame reply: the game thread is never left waiting for an answer
-            self.stopping = True
-            if not self.stopped.wait(3.0):
-                try:   # no frames are coming (menu / level change): nothing is waiting, RPC is safe
-                    self.script.exports_sync.shutdown()
-                except Exception:
-                    pass
-            time.sleep(0.2)
-            try:
-                self.script.unload()
-            except Exception:
-                pass
-            session.detach()
-            self.close()
-            signal.signal(signal.SIGINT, old_sigint)
-            print(f"logs in {self.run_dir}; death memory {self.deaths_path} ({len(self.deaths)} entries)", flush=True)
+        except BaseException:
+            import traceback
+            traceback.print_exc()
+            code = 1
+        sd.request()                                  # the watchdog covers the clean stop from here
+        self.stopping = True
+        clean_stop(self.script, session, self.stopped, self.close)
+        print(f"logs in {self.run_dir}; death memory {self.deaths_path} ({len(self.deaths)} entries)", flush=True)
+        sd.finish(code)
+
+
+def clean_stop(script, session, stopped: threading.Event, close, wait_s: float = 3.0):
+    """Stop through the next frame reply (the game thread is never left waiting for an answer), then unload the
+    script (its hooks go and a waiting game thread is released; the time-step lock bytes are put back by the
+    shutdown export, not by unload), detach and close the logs. Every Frida call is bounded: at most ~8 s."""
+    if not stopped.wait(wait_s):
+        # no frames are coming (menu / level change): nothing is waiting, the RPC is safe
+        bounded(lambda: script.exports_sync.shutdown(), 1.5)
+    time.sleep(0.2)
+    bounded(script.unload, 2.0)
+    bounded(session.detach, 1.5)
+    close()
 
 
 def build_parser() -> argparse.ArgumentParser:
