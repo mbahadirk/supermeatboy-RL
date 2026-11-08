@@ -1,4 +1,4 @@
-"""The planning agent's decision: beam search over named move primitives (plan/moves.py), the world model for
+﻿"""The planning agent's decision: beam search over named move primitives (plan/moves.py), the world model for
 movement, geometric safety for death, the progress field for progress, and a Plan that records what it
 predicts and why it was chosen (plan/explain.py). No policy network, no PPO, no learned value.
 
@@ -34,16 +34,22 @@ library and the golden tests). The 5 members are copies of the same physics pred
 
 Search, per decision (Planner.plan):
 1. Stage 1 (one ensemble member): every library move (73, 8 to 24 frames; rolled out as one batch to 24
-   frames with its last action held, and judged on its own frames) plus the safety check of those frames.
-   Scored (below: its own frames + T at its end); the best B1 = 8 not vetoed are kept (all vetoed: the ones
-   with the latest veto frame).
+   frames with its last action held) plus the safety check of its own frames (veto and soft risk). Every move
+   is ranked at the same end frame (24: the batch's length; goal and key contact over those frames): its
+   estimate is 24 + T there, so a short move is followed by its held last action, not credited for stopping
+   early. The best B1 = 8 not vetoed are kept (all vetoed: the ones with the latest veto frame).
 2. Stage 2 (one member): from each kept end state (the world model's own end rows), each of 16 second moves
    (a fixed diverse core, moves.CORE_SECOND, plus the best-scoring first moves of this decision not in it),
    padded to the horizon H = 48 (last action held, jump released). Only the continuation is rolled out (the
    prefix is shared); hazards for the model inputs at each candidate's own time (offset rows).
 3. Final: the top S = 16 full sequences and the previous plan shifted by the frames played (always included)
    are re-scored from the start with ALL ensemble members and the full safety check (plan.safety.check); the
-   best is chosen, unless the switch rule below keeps the previous plan.
+   best is chosen, unless the switch rule below keeps the previous plan. One window for all: every candidate,
+   the shifted previous plan included, ends at H (its unplanned tail is the pad: last action held, jump
+   released) for T(end), the completion and goal / key contact; veto and soft risk count its planned frames
+   only (pads excluded; the previous plan: its remaining planned frames; never fewer than VETO_FRAMES), so the
+   never-planned tail adds no re-score noise. (Judging the kept plan on H - shift frames instead made standing
+   still cheaper by construction: frames + T(end) over a shorter window.)
 
 Switch rule (hysteresis, Planner(hysteresis=...), agent.py / plan/offline.py --hysteresis, frames, default
 HYSTERESIS_FRAMES = 16 there, from closed loops): the shifted previous plan is kept unless the best other candidate's estimate is lower
@@ -66,8 +72,8 @@ Score of a candidate: the estimated frames to reach the goal (lower is better; t
   DEATH_FRAMES = max(T_support(spawn) - T(start), DEAD_END_FRAMES): one death costs the progress it throws away
   (at least a dead end's charge), the same everywhere: soft risk, a completion where every continuation dies, and
   the point-of-no-return memory.
-- frames used: stage 1 its move's frames, stage 2 H (or the frames rolled before its deadline), final H, or
-  H + k with the airborne completion (below).
+- frames used: stage 1 the common end (24, or the frames rolled before its deadline), stage 2 H (or the frames
+  rolled before its deadline), final H, or H + k with the airborne completion (below).
 - T(end): plan/progress.py's time field (frames to the goal on realpath's graph, measured frames per tile) at the
   end on the agent's leg after the path's key pickups: T_support where the end is supported (Planner.support:
   ground, or a wall while the downward speed is at most CLING_SPEED, measured inf), else T_rise / T_fall by the
@@ -1109,22 +1115,23 @@ class Planner:
                        deadline=None if self.budget is None else t0 + STAGE1_SHARE * self.budget / 1000.0,
                        keep_rows=True, **ck)
         steps1 = out1["steps"]                       # model steps (columns); f frames each
-        up1 = np.minimum(self.lib_end, steps1 * f)   # frames judged (a step-f model: the next step boundary)
+        up1 = np.minimum(self.lib_end, steps1 * f)   # the move's frames (a step-f model: the next step boundary)
         uc1 = up1 // f
+        end1 = steps1 * f                            # one end frame for every move (rolled to the same length)
         fr1 = _near_frames(_cols(frames, steps1 + 1, f), out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1])
         sw1 = S.sweep(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], fr1, self.bounds, self.floor, f)
-        tg1, legs1, _ = self._contacts(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], up1,
-                                       sw1.contact_frame, leg)
+        tg1, legs1, _ = self._contacts(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1],
+                                       None, sw1.contact_frame, leg)
         tg1, legs1 = tg1[0], legs1[0]
         succ1 = tg1 > 0
+        # veto and soft risk on the move's own frames (or up to its goal touch); the estimate at the common end
         veto1, vf1, vk1, vid1, soft1, sf1 = _verdict(sw1, np.where(succ1, np.minimum(up1, tg1), up1))
-        ar1 = np.arange(n1)
-        xe1, ye1, vye1 = out1["x"][0, ar1, uc1], out1["y"][0, ar1, uc1], out1["vy"][0, ar1, uc1]
+        xe1, ye1, vye1 = out1["x"][0, :, steps1], out1["y"][0, :, steps1], out1["vy"][0, :, steps1]
         tend1 = ends_time(xe1, ye1, vye1, legs1)
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
         death1 = np.array([death_of(m.name) for m in self.lib])
         pen1 = scale * soft1 + fail1 + death1
-        est1 = up1 + self._tt(tend1) + pen1
+        est1 = end1 + self._tt(tend1) + pen1
         score1 = np.where(veto1, vetoed_total(vf1, est1), -est1)
         score1 = np.where(succ1, success_total(tg1, pen1), score1)
         order1 = np.argsort(-score1, kind="stable")
@@ -1285,42 +1292,40 @@ class Planner:
                 prev_idx = len(final) - 1
         n3 = len(final)
         acts3 = np.stack([a for _, a in final])
-        # the shifted previous plan is judged on its own remaining frames 1..H - shift: the frames after them are
-        # its last action held, never planned (re-scoring them made kept plans look worse: risk in frames 41-48)
-        upto3 = np.full(n3, H, np.int64)
-        if prev_idx >= 0:
-            upto3[prev_idx] = -(-(H - shift) // f) * f              # a step-f model: the next step boundary
-        own = upto3 < H
-        uc3 = upto3 // f
-        out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds,
-                       keep_rows=bool(own.any()), **ck)
+        # every candidate, the shifted previous plan included, is judged at the same end frame H (its unplanned
+        # tail is the pad: last action held, jump released): estimates of one stage compare over one window.
+        # Veto and soft risk count its planned frames only (pads excluded; the previous plan: its remaining
+        # planned frames), so the never-planned tail adds no re-score noise; the veto window 1..VETO_FRAMES is
+        # always judged (a plan whose moves have run out is still checked for imminent contact).
+        planned3 = np.array([max((b for nm, a, b in segs if nm != "pad"), default=0) for segs, _ in final], np.int64)
+        planned3 = np.minimum(np.maximum(-(-planned3 // f) * f, S.VETO_FRAMES), H)   # step-f model: step boundary
+        out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds, **ck)
         E = out3["x"].shape[0]
-        ar3 = np.arange(n3)
         fr3 = _near_frames(_cols(frames, Hc + 1, f), out3["x"], out3["y"])
         saf = S.check(out3["x"], out3["y"], fr3, self.bounds, self.floor, f)
-        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], upto3 if own.any() else None,
-                                              saf.sweep.contact_frame, leg)
+        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], None, saf.sweep.contact_frame, leg)
         n_goal = (tg_e > 0).sum(0)                                   # members touching the goal safely
         succ3 = 2 * n_goal > E
         tg3 = np.full(n3, -1, np.int64)
         for c in np.nonzero(succ3)[0]:
             ts = np.sort(tg_e[tg_e[:, c] > 0, c])
             tg3[c] = ts[(len(ts) - 1) // 2]                          # median (the lower one of an even count)
-        judge = succ3 | own                                          # successes: frames 1..t; the previous plan: its own
+        win3 = np.where(succ3, tg3, planned3)                        # successes: frames 1..t; others: planned frames
+        judge = win3 < H
         if judge.any():
-            vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, np.where(succ3, tg3, upto3))
+            vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3)
             saf = replace(saf, veto=np.where(judge, vv, saf.veto), veto_frame=np.where(judge, vfr, saf.veto_frame),
                           veto_kind=np.where(judge, vkd, saf.veto_kind),
                           veto_id=[vid[c] if judge[c] else saf.veto_id[c] for c in range(n3)],
                           soft_risk=np.where(judge, vsoft, saf.soft_risk),
                           soft_frame=np.where(judge, vsf, saf.soft_frame))
-        xe, ye, vye = out3["x"][:, ar3, uc3], out3["y"][:, ar3, uc3], out3["vy"][:, ar3, uc3]
+        xe, ye, vye = out3["x"][:, :, Hc], out3["y"][:, :, Hc], out3["vy"][:, :, Hc]
         tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, keys, legs_e, vye)      # (E, n3), each member's own leg
         vend_e = self.value(xe, ye, keys, legs_e, vye)[0]                         # V: display only
-        lands = 2 * sup_e.sum(0) > E                                 # a majority of members supported at the end
+        lands = 2 * sup_e.sum(0) > E                                 # a majority of members supported at H
         tend3 = self._tt(tend_e).mean(0)
-        base3 = upto3 + tend3                                        # frames used + T at the end
-        frames_used = upto3.copy()
+        base3 = H + tend3                                            # frames used + T at the end
+        frames_used = np.full(n3, H, np.int64)
         t_end3 = tend3.copy()
         comp_risk = np.zeros(n3)
         comp_rec, comp_path = [None] * n3, [None] * n3
@@ -1328,17 +1333,15 @@ class Planner:
         need = np.nonzero(~lands & ~succ3 & ~saf.veto)[0] if self.complete_max > 0 else np.zeros(0, np.int64)
         rolled = 0
         self.completion_clipped = 0
-        mi = min(self.member, E - 1)
-        for at in np.unique(upto3[need]):                            # one batch per end frame (H; the previous plan's)
-            cs = need[upto3[need] == at]
-            rows_at = out3["last"][mi, cs] if at == H else out3["rows"][mi, cs, at // f]
-            res, r_ = self.complete(rows_at, acts3[cs, at - 1], legs_e[mi, cs], worlds, frames, dt_ms, keys, int(at))
-            rolled += r_
-            for c, (est, risk, rec, path) in zip(cs, res):
-                base3[c] = at + est
+        if len(need):
+            mi = min(self.member, E - 1)
+            res, rolled = self.complete(out3["last"][mi, need], acts3[need, H - 1], legs_e[mi, need], worlds,
+                                        frames, dt_ms, keys, H)
+            for c, (est, risk, rec, path) in zip(need, res):
+                base3[c] = H + est
                 comp_risk[c], comp_rec[c], comp_path[c] = risk, rec, path
                 k = rec["frames"] if rec["frames"] is not None else 0
-                frames_used[c] = at + k
+                frames_used[c] = H + k
                 t_end3[c] = est - k
         timing["completion"] = 1000 * (time.perf_counter() - tc)
         first_name = [next((nm for nm, a, b in segs if nm != "pad"), "pad") for segs, _ in final]

@@ -1,4 +1,4 @@
-"""Checks for the beam planner (plan/planner.py), its move library, support geometry and explanations. No game;
+﻿"""Checks for the beam planner (plan/planner.py), its move library, support geometry and explanations. No game;
 the world model and recorded data are used when present (skipped otherwise)."""
 import json
 import os
@@ -545,8 +545,8 @@ def test_cling_rule_fast_falls_are_not_support(monkeypatch):
 @needs_model
 def test_completion_lands_on_the_floor_and_waiting_costs_frames(flat):
     """An airborne end above the floor is completed until it lands (frames, on the ground, T there); a higher
-    start lands later and its estimate is higher by those frames. Waiting: the stage-1 estimates of the wait
-    moves (the body stays put, T at the end the same) differ by their lengths."""
+    start lands later and its estimate is higher by those frames. Waiting: every stage-1 move is ranked at one
+    common end frame, so the wait moves (the same held action) have the same estimate; their own frames differ."""
     from plan.planner import continuations, state_row
     from mpc.candidates import act
     lv, pl = flat
@@ -564,8 +564,7 @@ def test_completion_lands_on_the_floor_and_waiting_costs_frames(flat):
     pl.plan(standing(), 0, worlds, frames)
     st = pl.last_stage1
     i8, i16 = st["names"].index("wait 8f"), st["names"].index("wait 16f")
-    if abs(st["t_end"][i8] - st["t_end"][i16]) < 1e-6:                # the model kept the body in the same spot
-        assert st["estimate"][i16] - st["estimate"][i8] == pytest.approx(8.0)
+    assert st["estimate"][i16] == pytest.approx(st["estimate"][i8])
     assert st["frames"][i16] - st["frames"][i8] == 8
 
 
