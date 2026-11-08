@@ -1,4 +1,5 @@
 """Checks for the geometric safety check (plan/safety.py), no game or data needed."""
+import math
 import os
 import sys
 from types import SimpleNamespace
@@ -126,13 +127,41 @@ def test_death_memory_window_and_round_trip(tmp_path):
 
 def test_explain_death_uses_hazards_shots_and_bounds():
     rec = {"hz": [[200.0, 200.0, 20.0, 20.0, 1.0, 1.0, 0.0]], "sh": [[7, 400.0, 200.0, 5.0]]}
-    keep, grow = [True], [(0.0, 0.0)]
-    assert S.explain_death(LV, rec, keep, grow, 150, 200, 185, 200)          # into the piece
-    assert S.explain_death(LV, rec, keep, grow, 380, 200, 392, 200)          # into the shot
-    assert S.explain_death(LV, rec, keep, grow, 5, 200, -15, 200)            # out of the level
-    assert not S.explain_death(LV, rec, keep, grow, 600, 200, 610, 200)
-    assert not S.explain_death(LV, rec, [False], grow, 150, 200, 185, 200)   # decoration does not kill
-    assert S.explain_death(LV, rec, keep, [(20.0, 0.0)], 150, 200, 165, 200)  # kill reach grown by 20
+    keep = [True]
+    assert S.explain_death(LV, rec, keep, 150, 200, 185, 200)          # into the piece (no shapes: its size box)
+    assert S.explain_death(LV, rec, keep, 380, 200, 392, 200)          # into the shot
+    assert S.explain_death(LV, rec, keep, 5, 200, -15, 200)            # out of the level
+    assert not S.explain_death(LV, rec, keep, 600, 200, 610, 200)
+    assert not S.explain_death(LV, rec, [False], 150, 200, 185, 200)   # decoration does not kill
+
+
+def test_kill_shapes_decide_what_kills():
+    # a saw piece at (200, 200) whose circle (r 20) is 90 units below it now, and a piece with no shape now
+    rec = {"hz": [[200.0, 200.0, 50.0, 50.0, 0.6, 0.6, 0.0, [[1, 200.0, 110.0, 20.0, 20.0, 0]]],
+                  [300.0, 200.0, 30.0, 30.0, 1.0, 1.0, 0.0, []]]}
+    assert not S.explain_death(LV, rec, [True, True], 200, 200, 200, 205)   # the piece's own place: nothing there
+    assert S.explain_death(LV, rec, [True, True], 200, 140, 200, 135.5)     # within r + BODY of the circle
+    assert not S.explain_death(LV, rec, [True, True], 200, 140, 200, 136.5)
+    assert not S.explain_death(LV, rec, [True, True], 300, 200, 300, 205)   # no shape: decoration now
+    assert S.explain_death(LV, rec, [False, True], 200, 140, 200, 130)      # the name rule does not overrule shapes
+
+
+def test_kill_shape_boxes_and_ids():
+    from game.level import box_base, box_ids, hazard_boxes, shape_box
+    assert shape_box([1, 5.0, 6.0, 20.0, 20.0, 0]) == (5.0, 6.0, 20.0, 20.0, 0.0)
+    assert shape_box([2, 0.0, 0.0, 10.0, 4.0, 0.0]) == (0.0, 0.0, 10.0, 4.0, 0.0)
+    b = shape_box([2, 0.0, 0.0, 10.0, 4.0, math.pi / 4])   # the body's box reaches 6 sqrt 2 along a 45 degree box's axes
+    assert b[2] == pytest.approx(10.0 + 6.0 * math.sqrt(2) - 6.0) and b[3] == pytest.approx(4.0 + 6.0 * math.sqrt(2) - 6.0)
+    hz = [[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, [[1, 1.0, 1.0, 7.0, 7.0, 0], [2, 9.0, 9.0, 2.0, 3.0, 0.0]]],
+          [5.0, 5.0, 1.0, 1.0, 1.0, 1.0, 0.0, []],
+          [8.0, 8.0, 4.0, 2.0, 1.0, 1.0, 0.0, [[1, 8.0, 8.0, 3.0, 3.0, 0]]]]
+    boxes, kept = hazard_boxes(hz)
+    assert kept == [0, 0, 2] and boxes[1] == (9.0, 9.0, 2.0, 3.0, 0.0)
+    ids = box_ids(kept, ["a", "b", "c"])
+    assert ids == ["a", "a#1", "c"] and [box_base(i) for i in ids] == ["a", "a", "c"]
+    assert box_ids(kept) == ["h0", "h0#1", "h2"]
+    fb = S.frame_boxes(hz, sh=[[3, 0.0, 0.0, 2.0]])
+    assert fb.ids == ["h0", "h0#1", "h2", "shot3"] and len(set(fb.ids)) == len(fb.ids)
 
 
 def test_first_contact_goal_and_key_boxes():

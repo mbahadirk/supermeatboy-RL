@@ -1,5 +1,5 @@
 """How close Meat Boy's centre must come to the goal (the princess) and to a key to touch it, measured from
-recorded play (wm_data), as hazard_reach.py measures the kill reach of hazards.
+recorded play (wm_data).
 
 Contact convention (the same as plan/safety.py for hazards): a box (x, y, half w, half h, angle) is touched
 when the agent's centre comes within BODY (realpath.BODY, 6 units) of it. A reach (rx, ry) is how far from

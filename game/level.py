@@ -2,7 +2,7 @@
 live from the game's changes, goals, spawn, keys, locks, portals, fans, orbs, moving platforms, sealed pockets,
 the agents' cell codes and surface codes, the lethal pieces as rotated boxes, and which extracted level file the
 game shows. Moved out of realgame.py (the PPO trainer), which re-exports every name here, so the planner can use
-it without importing the trainer. Needs the smbrl folder on sys.path (realpath, hazard_reach, contact_reach)."""
+it without importing the trainer. Needs the smbrl folder on sys.path (realpath, contact_reach)."""
 from __future__ import annotations
 
 import math
@@ -13,8 +13,7 @@ from collections import deque
 
 import numpy as np
 
-from realpath import box_distance, tile_classes
-import hazard_reach
+from realpath import BODY, box_distance, tile_classes
 import contact_reach
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the smbrl folder (tools/, imported/)
@@ -66,7 +65,9 @@ def tile_solid(words: np.ndarray) -> np.ndarray:
 
 
 # pieces with no type-table row that are only decoration (the game's "no row = lethal" rule would make them
-# hazards): names from the level's palette (tools/smbl_extract.py; imported files, personal use)
+# hazards): names from the level's palette (tools/smbl_extract.py; imported files, personal use). Only for
+# what the game's kill shapes do not decide: the world model's inputs (trained with this rule) and hazard
+# rows recorded before realgame.js sent the shapes (hazard_boxes); a piece's measured shapes decide the rest
 DECOR = ("particle", "smoke", "quake", "portal", "sign", "bosspos", "square", "circle", "xxxxx", "poof",
          "flap", "blablabla", "bip", "temp", "explosion", "warp", "pickup", "ghost", "break")   # not "Symbol 111": needles
 _names_cache: dict = {}
@@ -361,8 +362,7 @@ class Level:
 
     def set_lethal(self, types: list, ids=None):
         nm = lambda t: (self.names[t].lower() if self.names and 0 <= t < len(self.names) else None)
-        self.hz_keep = [not (nm(t) and nm(t).startswith(DECOR)) for t in types]
-        self.hz_grow = hazard_reach.growth([nm(t) for t in types])   # measured kill reach (hazard_reach.py)
+        self.hz_keep = [not (nm(t) and nm(t).startswith(DECOR)) for t in types]   # see DECOR
         self.hz_ids = list(ids) if ids is not None else [str(k) for k in range(len(types))]
 
     def _lock_groups(self) -> list[list[int]]:
@@ -496,24 +496,61 @@ class Level:
         return g
 
 
-def hazard_boxes(hz: list, keep=None, grow=None) -> tuple[list, list]:
-    """Lethal pieces [x, y, size w, size h, scale x, scale y, angle] (realgame.js; size from the game's
-    FUN_004ca860 at scale 1) as rotated boxes (x, y, half w, half h, angle). keep: which ones are real hazards
-    (not decoration). grow: per piece (x, y) added to the half sizes, how much further than the body size the
-    piece really kills (hazard_reach.py, measured from deaths; Level.hz_grow). Returns the boxes and the
-    indices of the entries kept."""
+def shape_box(s) -> tuple:
+    """One kill shape of a piece as the game tests it (realgame.js killShapes: [1, x, y, r, r, 0] a circle,
+    [2, x, y, half w, half h, angle] a turned box, both against Meat Boy's axis-aligned box of half size BODY) as
+    a box in the contact convention (x, y, half w, half h, angle): the centre dies within BODY of it.
+    A circle: its bounding square (covers the circle grown by the body's box for r >= BODY). A turned box: its
+    half sizes grow by how much further the body's box reaches along the box's axes than BODY
+    (BODY (|cos| + |sin|) - BODY: 0 when upright, 2.5 units at 45 degrees), so its sides are exact."""
+    kind, x, y, a, b, ang = s[:6]
+    if int(kind) == 1:
+        return (float(x), float(y), float(a), float(a), 0.0)
+    e = BODY * (abs(math.cos(ang)) + abs(math.sin(ang))) - BODY
+    return (float(x), float(y), float(a) + e, float(b) + e, float(ang))
+
+
+def hazard_boxes(hz: list, keep=None) -> tuple[list, list]:
+    """Lethal pieces (realgame.js hazards rows) as the boxes that kill (x, y, half w, half h, angle) and, per
+    box, the index of its piece (a piece can have several boxes, or none now).
+
+    A row [x, y, size w, size h, scale x, scale y, angle, shapes] has the game's own kill shapes (shape_box);
+    [] = this piece kills nothing at the moment (decoration, or a phase of its animation without a shape).
+    Rows without shapes (recorded before the shapes were sent, or None: not measured) fall back to the piece's
+    size box from FUN_004ca860 at its scale, with keep (Level.hz_keep: not decoration) deciding which count."""
     out, kept = [], []
     for k, h in enumerate(hz):
+        if len(h) > 7 and h[7] is not None:
+            for s in h[7]:
+                out.append(shape_box(s))
+                kept.append(k)
+            continue
         if keep is not None and k < len(keep) and not keep[k]:
             continue
-        x, y, w, hgt, sx, sy, ang = h
+        x, y, w, hgt, sx, sy, ang = h[:7]
         sx, sy = abs(sx or 1.0), abs(sy or 1.0)
         if w <= 0 and hgt <= 0:
             w = hgt = 24.0
-        gx, gy = grow[k] if grow is not None and k < len(grow) else (0.0, 0.0)
-        out.append((x, y, 0.5 * w * sx + gx, 0.5 * hgt * sy + gy, ang))
+        out.append((x, y, 0.5 * w * sx, 0.5 * hgt * sy, ang))
         kept.append(k)
     return out, kept
+
+
+def box_ids(kept: list, names=None, prefix: str = "h") -> list[str]:
+    """A stable, unique id per box of hazard_boxes: its piece's name (names[k], else prefix + k), and for a
+    piece's second, third ... box that name + "#1", "#2" ... (box_base gives the piece's name back)."""
+    out, seen = [], {}
+    for k in kept:
+        base = str(names[k]) if names is not None and k < len(names) else f"{prefix}{k}"
+        j = seen.get(k, 0)
+        seen[k] = j + 1
+        out.append(base if j == 0 else f"{base}#{j}")
+    return out
+
+
+def box_base(box_id: str) -> str:
+    """The piece's name of a box_ids id."""
+    return str(box_id).split("#", 1)[0]
 
 
 def identify_level(info: dict, tiles: bytes) -> str | None:

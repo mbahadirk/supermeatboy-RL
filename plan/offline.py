@@ -94,7 +94,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
     com = Committer(replan, tube, triggers, step=planner.f)
     fw = FutureWorld()
     fw.new_level()
-    keep, grow = lv.hz_keep, lv.hz_grow
+    keep = lv.hz_keep
     dt_of = lambda w: float(w.get("dt") or 16.667)
 
     def feed(w):
@@ -102,7 +102,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
         if w.get("keep") is not None:
             keep = w["keep"]
         fans = w["fx"].get("fans", []) if w.get("fx") else None
-        fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), keep, fans, dt_of(w), grow)
+        fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), keep, fans, dt_of(w))
     for w in ref_world:
         feed(w)
     fw.new_wave()
@@ -156,7 +156,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
                       keep_rows=True)
         s2 = out["rows"][0, :, 1].copy()
         x2, y2 = float(s2["x"][0]), float(s2["y"][0])
-        nxt = S.record_boxes(wf[f + 1], keep, grow)
+        nxt = S.record_boxes(wf[f + 1], keep)
         kind, _ = S.segment_contact([x], [y], [x2], [y2], nxt, planner.bounds)
         seg = (np.array([[[x, x2]]]), np.array([[[y, y2]]]))
         if kind[0] != S.KIND_NONE:
@@ -271,7 +271,7 @@ def main():
     print(f"{args.level}: V field {field.summary()}; setup {time.time() - t0:.1f} s; model {args.model}")
     fw = FutureWorld()
     fw.new_level()
-    keep, grow = lv.hz_keep, lv.hz_grow
+    keep = lv.hz_keep
     dt_of = lambda w: float(w.get("dt") or 16.667)
 
     def feed(w):
@@ -279,7 +279,7 @@ def main():
             nonlocal keep
             keep = w["keep"]
         fans = w["fx"].get("fans", []) if w.get("fx") else None
-        fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), keep, fans, dt_of(w), grow)
+        fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), keep, fans, dt_of(w))
     for w in ref_world:                                   # the earlier wave: the hazards' recording
         feed(w)
     fw.new_wave()

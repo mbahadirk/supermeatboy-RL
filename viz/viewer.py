@@ -17,7 +17,7 @@ from the run's death events (memory_added). Without wm_data the replay has no ha
 
 Drawn (map, y up): tiles (solid, special, gone), the kill box / alive box, goal and keys with the planner's
 contact region (outline: what counts as touching them), spawn; hazards now (red,
-rotated, already grown by their kill reach), predicted at +8 / +16 (faint outlines), remembered deaths
+rotated: the game's kill shapes), predicted at +8 / +16 (faint outlines), remembered deaths
 (purple); planned agents (white) and explore agents (small dim dots) with a velocity arrow (0.1 s); deaths
 (X: red unexplained, orange explained). For the selected agent: the chosen path (green; dashed and faded where
 the ensemble spread is over 20 units; the part already played thinner), its airborne completion (plans.jsonl
@@ -785,7 +785,7 @@ class ReplaySource:
         return out
 
     def boxes(self, seg: int, frame: int, level: str) -> list | None:
-        """Recorded hazard boxes (grown, telemetry rows) at a wave frame of a segment, None when not recorded."""
+        """Recorded hazard boxes (kill shapes, telemetry rows) at a wave frame of a segment, None when not recorded."""
         key = (seg, frame)
         if key in self._boxes_cache:
             return self._boxes_cache[key]
@@ -796,7 +796,7 @@ class ReplaySource:
             if lv is not None:
                 from plan.safety import record_boxes
                 rec, keep = recs[frame]
-                fb = record_boxes(rec, keep if keep is not None else lv.hz_keep, lv.hz_grow)
+                fb = record_boxes(rec, keep if keep is not None else lv.hz_keep)
                 out = T.box_rows(fb.boxes, fb.kind)
         if len(self._boxes_cache) > 4000:
             self._boxes_cache.clear()

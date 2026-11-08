@@ -82,7 +82,7 @@ import torch
 import torch.nn as nn
 
 from realpath import Planner, fitness, PATH_RGB
-from game.level import (Level, hazard_boxes, piece_names, DECOR, _names_cache, tile_solid,   # noqa: F401
+from game.level import (Level, box_base, box_ids, hazard_boxes, piece_names, DECOR, _names_cache, tile_solid,   # noqa: F401
                         identify_level, HZ, TILE, C_EMPTY, C_SOLID, C_HAZARD, C_GOAL, C_WIND, C_ORB, C_ACCEL,
                         C_PLATFORM, S_FLOOR, S_WALL, S_LEDGE, S_CEIL, S_CEIL_WALL, S_INSIDE, PLAT_HALF,
                         PLAT_STILL, SEALED_MAX, ACCEL_TILE)
@@ -427,13 +427,15 @@ class Trainer:
         self.visits = {}                   # 2x2-tile block -> agent visits on this level (exploration bonus)
         n = info["agents"]
         lv = self.level
-        decor = sum(1 for k in lv.hz_keep if not k)
-        grown = sorted({lv.names[t] for t, g, k in zip(info.get("lethalTypes", []), lv.hz_grow, lv.hz_keep)
-                        if k and (g[0] or g[1]) and lv.names and 0 <= t < len(lv.names)})
-        if grown:
-            print(f"[level] {info['name']}: measured kill reach used for {', '.join(grown)} (hazard_reach.json)", flush=True)
+        rows = info.get("hz", [])
+        if rows and all(len(h) > 7 and h[7] is not None for h in rows):   # the game's kill shapes decide
+            decor = sum(1 for h in rows if not h[7])
+            decor_why = "with no kill shape now"
+        else:
+            decor = sum(1 for k in lv.hz_keep if not k)
+            decor_why = "decoration"
         print(f"[level] {info['name']}: {lv.W}x{lv.H}, {len(lv.goals)} goal(s), {info['lethal']} lethal pieces"
-              + (f" ({decor} of them decoration)" if decor else "")
+              + (f" ({decor} of them {decor_why})" if decor else "")
               + (f", {len(lv.keys)} key(s)" if lv.keys else "") + (f", {len(lv.bandages)} bandage(s)" if lv.bandages else "")
               + (f", {int(lv.special.sum())} crumble/lock/switch tiles" if lv.special.any() else "")
               + (f", {len(lv.fans)} fan(s)" if lv.fans else "") + (f", {len(lv.orbs)} orb(s)" if lv.orbs else "")
@@ -449,8 +451,8 @@ class Trainer:
             print(f"[keys] {lv.name}: " + ", ".join(f"key {k + 1} opens {len(g)} lock tile(s)"
                                                    for k, g in enumerate(lv.lock_groups)), flush=True)
         if "hz" in info:                     # the game waits for this (no agent moves meanwhile)
-            self.boxes, kept = hazard_boxes(info["hz"], lv.hz_keep, lv.hz_grow)
-            self.track_hazards(self.boxes, [lv.hz_ids[k] for k in kept])
+            self.boxes, kept = hazard_boxes(info["hz"], lv.hz_keep)
+            self.track_hazards(self.boxes, box_ids(kept, lv.hz_ids))
             self.build_paths(reset=False)
 
     def assign_paths(self, n: int) -> list[int]:
@@ -547,8 +549,8 @@ class Trainer:
             if lv.hz_changes <= 5:
                 print(f"[hazards] {lv.name}: pieces came or went, {before} -> {len(lv.hz_ids)} lethal "
                       f"(frame {m['frame']})", flush=True)
-        boxes, kept = hazard_boxes(m["hz"], lv.hz_keep, lv.hz_grow)
-        ids = [lv.hz_ids[k] if k < len(lv.hz_ids) else str(k) for k in kept]
+        boxes, kept = hazard_boxes(m["hz"], lv.hz_keep)
+        ids = box_ids(kept, lv.hz_ids, prefix="")
         for sid, x, y, rad in m.get("sh", []):   # flying shots (seen by the agents, not planned around)
             boxes.append((x, y, rad, rad, 0.0))
             ids.append(f"shot{sid}")
@@ -569,7 +571,7 @@ class Trainer:
             self.wm.frame(m, list(lv.hz_ids), list(lv.hz_keep))
             self.wm.char(m["frame"], data)
         if self.mpc:
-            self.mpc.frame(m, list(lv.hz_keep), list(lv.hz_grow))
+            self.mpc.frame(m, list(lv.hz_keep))
         moving = np.hypot(self.hz_vel[:, 0], self.hz_vel[:, 1]) > 8.0 if len(pos) else np.zeros(0, bool)
         if not self.paths_built:             # (normally built when the level info came)
             self.build_paths(reset=m["frame"] != 0)
@@ -881,17 +883,17 @@ class Trainer:
             self.hz_start = {}
         level_ids = self.level.hz_level_ids if self.level is not None else set()
         for b, hid in zip(boxes, ids):
-            if hid not in level_ids:
+            if box_base(hid) not in level_ids:
                 continue
             if hid not in self.hz_start:
                 self.hz_start[hid] = b
                 continue
             x, y, hw, hh, a = b
-            x0, y0, _, _, a0 = self.hz_start[hid]
-            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05:
+            x0, y0, hw0, hh0, a0 = self.hz_start[hid]
+            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05 or abs(hw - hw0) > 1 or abs(hh - hh0) > 1:
                 if hid not in self.moving:
                     self.moving.add(hid)
-                    self.sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw, hh, round(a0, 1)))
+                    self.sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw0, hh0, round(a0, 1)))
                 key = (round(x / 4) * 4, round(y / 4) * 4, hw, hh, round(a, 1))
                 if key not in self.sweep:
                     self.sweep.add(key)

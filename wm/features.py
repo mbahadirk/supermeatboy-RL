@@ -116,12 +116,15 @@ class LevelGeom:
 
 
 def hazard_boxes(hz: list, keep=None) -> np.ndarray:
-    """realgame.hazard_boxes: [x, y, size w, size h, scale x, scale y, angle] -> (x, y, half w, half h, angle)."""
+    """The model's hazard inputs, as it was trained: each piece's own box [x, y, size w, size h, scale x,
+    scale y, angle] (the first 7 fields of a realgame.js hazards row) -> (x, y, half w, half h, angle), with
+    keep (game.level.Level.hz_keep) dropping decoration. Not what kills: game.level.hazard_boxes reads the
+    rows' kill shapes for that."""
     out = []
     for k, h in enumerate(hz):
         if keep is not None and k < len(keep) and not keep[k]:
             continue
-        x, y, w, hgt, sx, sy, ang = h
+        x, y, w, hgt, sx, sy, ang = h[:7]
         sx, sy = abs(sx or 1.0), abs(sy or 1.0)
         if w <= 0 and hgt <= 0:
             w = hgt = 24.0

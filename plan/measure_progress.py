@@ -35,7 +35,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from game.level import Level, hazard_boxes                        # noqa: E402
+from game.level import Level, box_base, box_ids, hazard_boxes                        # noqa: E402
 from realpath import Planner                                       # noqa: E402
 from plan.progress import ProgressField, measure_build             # noqa: E402
 from wm.buffer import load_level, STATUS_FINISHED                  # noqa: E402
@@ -72,22 +72,22 @@ def planner_inputs(lv: Level, world: list) -> dict:
         if rec.get("pf"):
             lv.set_platforms(rec["pf"])
         hz = rec.get("hz", [])
-        boxes, kept = hazard_boxes(hz, keep, lv.hz_grow)
-        bid = [str(ids[k]) if ids is not None and k < len(ids) else str(k) for k in kept]
+        boxes, kept = hazard_boxes(hz, keep)
+        bid = box_ids(kept, ids, prefix="")
         if level_ids is None:
             level_ids = {str(ids[k]) if ids is not None and k < len(ids) else str(k) for k in range(len(hz))}
         for b, hid in zip(boxes, bid):
-            if hid not in level_ids:
+            if box_base(hid) not in level_ids:
                 continue
             if hid not in start:
                 start[hid] = b
                 continue
             x, y, hw, hh, a = b
-            x0, y0, _, _, a0 = start[hid]
-            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05:
+            x0, y0, hw0, hh0, a0 = start[hid]
+            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05 or abs(hw - hw0) > 1 or abs(hh - hh0) > 1:
                 if hid not in moving:
                     moving.add(hid)
-                    sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw, hh, round(a0, 1)))
+                    sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw0, hh0, round(a0, 1)))
                 sweep.add((round(x / 4) * 4, round(y / 4) * 4, hw, hh, round(a, 1)))
     static = [b for hid, b in start.items() if hid not in moving]
     seeds = [lv.spawn] + list(lv.goals) + list(lv.keys) + list(lv.bandages) + [p for pr in lv.portals for p in pr]

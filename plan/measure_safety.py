@@ -21,7 +21,6 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-import hazard_reach                                                   # noqa: E402
 from game.level import Level, TILE                                    # noqa: E402
 from plan import safety as S                                          # noqa: E402
 from wm.buffer import load_level, load_shards, transitions, STATUS_ALIVE, STATUS_DEAD   # noqa: E402
@@ -74,7 +73,7 @@ def measure(dirs: list, log=print) -> dict:
             fr = s2["frame"]
             order = np.argsort(fr, kind="stable")
             s, s2, dead, fr = s[order], s2[order], dead[order], fr[order]
-            keep, grow = lv.hz_keep, lv.hz_grow
+            keep = lv.hz_keep
             wf = sorted(world, key=lambda w: w["f"])
             wi = 0
             ufr, start = np.unique(fr, return_index=True)
@@ -90,7 +89,7 @@ def measure(dirs: list, log=print) -> dict:
                 x0, y0 = s["x"][a:b].astype(np.float64), s["y"][a:b].astype(np.float64)
                 x1, y1 = s2["x"][a:b].astype(np.float64), s2["y"][a:b].astype(np.float64)
                 dm = dead[a:b]
-                fb = S.record_boxes(rec, keep, grow)
+                fb = S.record_boxes(rec, keep)
                 if dm.any():
                     st["deaths"] += int(dm.sum())
                     if rec is None:
@@ -131,7 +130,7 @@ def report(per: dict, dirs: list, seconds: float) -> str:
              f"Data: {len(dirs)} wm_data folders ({', '.join(os.path.relpath(d, HERE) for d in dirs)}); "
              f"{seconds / 60:.1f} min.", "",
              "- **explained**: the move into the death position touches a hazard or shot of the death frame "
-             "(swept, BODY contact, grown boxes) or leaves the level.",
+             "(swept, BODY contact, the game's kill shapes) or leaves the level.",
              "- **end point**: the death position alone touches; **swept only**: only the segment does.",
              f"- **survivors flagged**: a random {SURVIVOR_SAMPLE:.0%} of the transitions that lived; end point "
              "in contact with a box, or out of the level (counted apart).", "",
@@ -160,8 +159,16 @@ def report(per: dict, dirs: list, seconds: float) -> str:
     return "\n".join(lines) + "\n"
 
 
+def all_data() -> list[str]:
+    """Every recorded world-model data folder under runs/ (PPO and planner runs)."""
+    import glob
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return sorted(d for d in glob.glob(os.path.join(here, "runs", "*", "wm_data*"))
+                  if glob.glob(os.path.join(d, "wave_*.npz")))
+
+
 def main():
-    dirs = sys.argv[1:] or hazard_reach.all_data()
+    dirs = sys.argv[1:] or all_data()
     missing = [d for d in dirs if not os.path.isdir(d)]
     if missing:
         raise SystemExit(f"not a folder: {', '.join(missing)}")

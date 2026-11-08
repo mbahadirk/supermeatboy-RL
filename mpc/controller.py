@@ -73,9 +73,9 @@ class MPC:
         st, self.stats = self.stats, self._new_stats()
         return st
 
-    def frame(self, m: dict, keep, grow=None):
-        """Every frame before planning: tile changes, the level's moving parts, the time step. grow: per piece,
-        its measured extra kill reach (realgame.Level.hz_grow) for the hazard check (not the model inputs)."""
+    def frame(self, m: dict, keep):
+        """Every frame before planning: tile changes, the level's moving parts, the time step. keep: per piece,
+        not decoration (Level.hz_keep: the model inputs, and rows without kill shapes)."""
         if self.geom is None:
             return
         for idx, word in m.get("tc") or []:
@@ -86,7 +86,7 @@ class MPC:
             self.dt_warned = True
             print(f"[mpc] the game's time step changed: {self.dt:.2f} -> {dt:.2f} ms (is the step lock off?)", flush=True)
         self.dt = dt
-        self.future.observe(m["frame"], m.get("hz", []), m.get("pf"), m.get("sh", []), keep, fans, dt, grow)
+        self.future.observe(m["frame"], m.get("hz", []), m.get("pf"), m.get("sh", []), keep, fans, dt)
 
     # ---- one decision --------------------------------------------------------------------------------
     def plan(self, agent: int, s: list, held: int, frame: int, route, reached, lv, probs=None, value_fn=None,
@@ -104,7 +104,7 @@ class MPC:
         worlds, check, recorded = self.future.worlds(frame, H, dt)
         x0, y0 = float(s[0]), float(s[1])
         reach = REACH * H * dt / 1000.0
-        check = [(b[_near(b, x0, y0, reach)], r[_near(b, x0, y0, reach)]) for b, r in check]
+        check = [(b[_near(b, x0, y0, reach)], r[_near(b, x0, y0, reach)]) for b, r, _ in check]
         # the model sees the 3 nearest hazards and anything 300+ units away as "far" (wm.features): hazards
         # that cannot come that close during the plan are left out of its inputs (the 3 nearest always stay)
         worlds = [replace(w, boxes=w.boxes[_relevant(w.boxes, x0, y0, reach + HAZ_FAR)]) for w in worlds]

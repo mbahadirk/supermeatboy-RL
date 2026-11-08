@@ -229,17 +229,13 @@ def test_later_death_beats_sooner_death():
     assert sc["total"][1] > sc["total"][0] + 5.0 and sc["death_step"][1] == -1
 
 
-def test_hazard_boxes_grow_by_measured_reach():
+def test_hazard_boxes_rows_without_kill_shapes_use_the_size_box():
     import realgame
-    import hazard_reach
-    hz = [[0.0, 0.0, 20.0, 10.0, 1.0, 1.0, 0.0], [50.0, 0.0, 20.0, 10.0, 1.0, 1.0, 0.0]]
-    plain, _ = realgame.hazard_boxes(hz, [True, True])
-    grown, _ = realgame.hazard_boxes(hz, [True, True], [(4.0, 10.0), (0.0, 0.0)])
-    assert plain[0][2:4] == (10.0, 5.0) and grown[0][2:4] == (14.0, 15.0) and grown[1] == plain[1]
-    g = hazard_reach.growth(["lava", "no such piece", None])
-    assert g[1] == (0.0, 0.0) and g[2] == (0.0, 0.0)                 # unknown kinds: the old 6-unit margin
-    if "lava" in hazard_reach.load():
-        assert g[0][0] > 0 and g[0][1] > 0
+    hz = [[0.0, 0.0, 20.0, 10.0, 1.0, 1.0, 0.0], [50.0, 0.0, 20.0, 10.0, 0.5, 2.0, 0.3, None]]
+    boxes, kept = realgame.hazard_boxes(hz, [True, True])
+    assert boxes[0] == (0.0, 0.0, 10.0, 5.0, 0.0) and boxes[1] == (50.0, 0.0, 5.0, 10.0, 0.3) and kept == [0, 1]
+    boxes, kept = realgame.hazard_boxes(hz, [False, True])          # decoration (by name) only without shapes
+    assert kept == [1]
 
 
 @need_data
@@ -253,3 +249,30 @@ def test_outside_the_level_is_deadly_in_the_agents_map():
     K = rg.K
     patch = o[10:10 + (2 * K + 1) ** 2].reshape(2 * K + 1, 2 * K + 1)
     assert (patch[:, :K] == rg.C_HAZARD).all()               # every column left of the map
+
+
+def _saw_row(cy):
+    """A piece that stays at (0, 100) while its circle (r 20) moves: realgame.js hazards row with kill shapes."""
+    return [0.0, 100.0, 50.0, 50.0, 0.6, 0.6, 0.0, [[1, 0.0, cy, 20.0, 20.0, 0]]]
+
+
+def test_future_follows_the_kill_shapes_not_the_piece():
+    from mpc.future import FutureWorld, REC_RADIUS
+    fw = FutureWorld()
+    for f in range(10):                                  # the recording: the circle falls 2 units a frame
+        fw.observe(f, [_saw_row(100.0 - 2 * f)], None, [], [True], None, 16.667)
+    fw.new_wave()
+    fw.observe(0, [_saw_row(100.0)], None, [], [True], None, 16.667)
+    fw.observe(1, [_saw_row(98.0)], None, [], [True], None, 16.667)
+    worlds, check, recorded = fw.worlds(1, 3, 16.667)
+    assert recorded == 3 and fw.trusted
+    b, r, ids = check[0]                                 # frame 2: the recorded circle, as its bounding square
+    assert tuple(b[0]) == (0.0, 96.0, 20.0, 20.0, 0.0) and r[0] == REC_RADIUS and ids == ["h0"]
+    assert tuple(worlds[0].boxes[0][:2]) == (0.0, 100.0)  # the model inputs keep the piece's own box
+    fw.observe(2, [_saw_row(80.0)], None, [], [True], None, 16.667)   # the piece is where recorded, its shape not
+    assert not fw.trusted
+    fw2 = FutureWorld()                                  # no recording: the shape's own velocity
+    fw2.observe(0, [_saw_row(100.0)], None, [], [True], None, 10.0)
+    fw2.observe(1, [_saw_row(99.0)], None, [], [True], None, 10.0)
+    _, check, recorded = fw2.worlds(1, 2, 10.0)
+    assert recorded == 0 and check[1][0][0][1] == pytest.approx(97.0) and check[1][1][0] > 0

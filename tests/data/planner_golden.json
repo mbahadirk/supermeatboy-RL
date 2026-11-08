@@ -1319,22 +1319,22 @@
      "frames_used": 48,
      "t_start": 189.09999999999997,
      "t_end": 162.89399999999998,
-     "estimate": 226.2251556009018,
-     "risk_frames": 15.331155600901813,
+     "estimate": 210.89399999999998,
+     "risk_frames": 0.0,
      "failure_frames": 0.0,
      "death_frames": 0.0,
-     "total": -226.2251556009018,
+     "total": -210.89399999999998,
      "completion": null,
      "landing": true,
      "spread_end": 14.541905652195643
     },
-    "v_start": 55.093607692702584,
-    "v_end": 46.2462988861607,
+    "v_start": 50.39116892978619,
+    "v_end": 41.54386012324431,
     "dead_end_members": 0,
     "leg": 0,
     "veto": null,
-    "soft_risk": 0.030662311201803627,
-    "soft_frame": 35,
+    "soft_risk": 0.0,
+    "soft_frame": -1,
     "end_supported": false,
     "first_move_frames": 16,
     "alternatives": [
@@ -1346,7 +1346,7 @@
       "total": -234.73999999999995,
       "progress": -45.639999999999986,
       "stage": "final",
-      "reason": "estimate 235 vs 226 frames",
+      "reason": "estimate 235 vs 211 frames",
       "vetoed": false
      },
      {
@@ -1354,10 +1354,10 @@
        "jump up hold 6",
        "run-jump R hold 15"
       ],
-      "total": -241.44841052790565,
-      "progress": -52.348410527905685,
+      "total": -236.14999999999995,
+      "progress": -47.04999999999998,
       "stage": "final",
-      "reason": "estimate 241 vs 226 frames",
+      "reason": "estimate 236 vs 211 frames",
       "vetoed": false
      },
      {
@@ -1368,7 +1368,7 @@
       "total": -243.27199999999993,
       "progress": -54.17199999999997,
       "stage": "final",
-      "reason": "no progress (T 189 -> 195 frames; estimate 243 vs 226)",
+      "reason": "no progress (T 189 -> 195 frames; estimate 243 vs 211)",
       "vetoed": false
      },
      {
@@ -1379,7 +1379,7 @@
       "total": -244.14999999999995,
       "progress": -55.04999999999998,
       "stage": "final",
-      "reason": "estimate 244 vs 226 frames",
+      "reason": "estimate 244 vs 211 frames",
       "vetoed": false
      },
      {
@@ -1390,7 +1390,7 @@
       "total": -247.50999999999996,
       "progress": -58.41,
       "stage": "final",
-      "reason": "no progress (T 189 -> 200 frames; estimate 248 vs 226)",
+      "reason": "no progress (T 189 -> 200 frames; estimate 248 vs 211)",
       "vetoed": false
      }
     ],
@@ -1439,9 +1439,9 @@
       "goal": 0,
       "start_in_goal": false,
       "clipped": 0,
-      "landing": 10,
-      "completed": 6,
-      "completion_rows_frames": 360,
+      "landing": 8,
+      "completed": 8,
+      "completion_rows_frames": 520,
       "completion_clipped": 0,
       "completion_inputs": 93,
       "safe_alternatives": 15,
@@ -1467,8 +1467,20 @@
        },
        {
         "continuation": "keep",
+        "frames": 13,
+        "on": "ground",
+        "died": []
+       },
+       {
+        "continuation": "keep",
         "frames": 20,
         "on": "wall",
+        "died": []
+       },
+       {
+        "continuation": "keep",
+        "frames": 14,
+        "on": "ground",
         "died": []
        },
        null,
@@ -1489,9 +1501,7 @@
         "frames": 0,
         "on": "wall",
         "died": []
-       },
-       null,
-       null
+       }
       ]
      }
     },
@@ -1590,8 +1600,8 @@
      "landing": true,
      "spread_end": 34.207997301843356
     },
-    "v_start": 60.62914159863532,
-    "v_end": 50.694827023584565,
+    "v_start": 55.92670283571893,
+    "v_end": 45.99238826066817,
     "dead_end_members": 0,
     "leg": 0,
     "veto": null,
@@ -1840,22 +1850,22 @@
      "frames_used": 48,
      "t_start": 189.09999999999997,
      "t_end": 164.98999999999998,
-     "estimate": 213.33683319063186,
-     "risk_frames": 0.34683319063189,
+     "estimate": 212.98999999999998,
+     "risk_frames": 0.0,
      "failure_frames": 0.0,
      "death_frames": 0.0,
-     "total": -213.33683319063186,
+     "total": -212.98999999999998,
      "completion": 0,
      "landing": true,
      "spread_end": 11.88417359291986
     },
-    "v_start": 55.093607692702584,
-    "v_end": 46.11492803626223,
+    "v_start": 50.39116892978619,
+    "v_end": 41.41248927334583,
     "dead_end_members": 0,
     "leg": 0,
     "veto": null,
-    "soft_risk": 0.00069366638126378,
-    "soft_frame": 34,
+    "soft_risk": 0.0,
+    "soft_frame": -1,
     "end_supported": false,
     "first_move_frames": 16,
     "alternatives": [
@@ -1868,17 +1878,6 @@
       "progress": -45.639999999999986,
       "stage": "final",
       "reason": "estimate 235 vs 213 frames",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "jump up hold 6",
-       "run-jump R hold 15"
-      ],
-      "total": -236.14999999999995,
-      "progress": -47.04999999999998,
-      "stage": "final",
-      "reason": "estimate 236 vs 213 frames",
       "vetoed": false
      },
      {
@@ -1910,6 +1909,17 @@
       ],
       "total": -247.55199999999996,
       "progress": -58.452,
+      "stage": "final",
+      "reason": "no progress (T 189 -> 200 frames; estimate 248 vs 213)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "wait 8f",
+       "run-jump L hold 15 after 4f"
+      ],
+      "total": -248.16799999999998,
+      "progress": -59.06800000000001,
       "stage": "final",
       "reason": "no progress (T 189 -> 200 frames; estimate 248 vs 213)",
       "vetoed": false
@@ -1960,10 +1970,10 @@
       "goal": 0,
       "start_in_goal": false,
       "clipped": 16,
-      "landing": 10,
-      "completed": 6,
-      "completion_rows_frames": 350,
-      "completion_clipped": 8,
+      "landing": 9,
+      "completed": 7,
+      "completion_rows_frames": 440,
+      "completion_clipped": 7,
       "completion_inputs": 93,
       "safe_alternatives": 15,
       "completions": [
@@ -1974,15 +1984,15 @@
         "died": []
        },
        {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "wall",
-        "died": []
-       },
-       {
         "continuation": "neutral",
         "frames": 11,
         "on": "ground",
+        "died": []
+       },
+       {
+        "continuation": "keep",
+        "frames": 0,
+        "on": "wall",
         "died": []
        },
        {
@@ -1997,22 +2007,27 @@
         "on": "ground",
         "died": []
        },
-       null,
-       null,
-       null,
-       null,
-       null,
-       null,
-       null,
-       null,
-       null,
-       null,
        {
         "continuation": "keep",
-        "frames": 12,
-        "on": "wall",
+        "frames": 13,
+        "on": "ground",
         "died": []
-       }
+       },
+       {
+        "continuation": "keep",
+        "frames": 14,
+        "on": "ground",
+        "died": []
+       },
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null
       ]
      }
     },
@@ -2111,8 +2126,8 @@
      "landing": true,
      "spread_end": 34.207997301843356
     },
-    "v_start": 60.62914159863532,
-    "v_end": 50.694827023584565,
+    "v_start": 55.92670283571893,
+    "v_end": 45.99238826066817,
     "dead_end_members": 0,
     "leg": 0,
     "veto": null,

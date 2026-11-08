@@ -303,6 +303,82 @@ function buildLethal(w) {
     if (fl === null || (fl & 1)) lethal.push(pc);
   }
   lethalSize = lethal.map(pc => old.get(pc.toString()) || pieceSize(w, pc));
+  rd(() => Memory.copy(KILL_SHAPE, w.add(0x70).readPointer(), 0xa0));   // this level's animation library (+0x20)
+}
+
+// ---- kill regions: what the game's narrow phase really tests ----------------------------------------
+// FUN_004cd350 (the pieces check) copies each lethal piece into the world's scratch shape [world+0x70]
+// (0x4cd745..0x4cd7cb: +0x14..+0x20 -> +0x24..+0x30; scale +0x24/+0x28 times the flips of +0x10 bits 10-11
+// (FUN_004976c0: 1 -> x, 2 -> y, 3 -> both) -> +0x34; angle +0x2c -> +0x3c and +0x40; type -> +0x10; animation
+// time +0x38 + +0x30 -> +0x4c; +0x34 -> +0x60) and calls FUN_0045a0e0(shape, character box). That builds the
+// piece's matrix (FUN_00494b20: scale + rotation, translation = position) and asks the type's animation
+// (library [shape+0x20]+0x30, vtable 0x6b7474, +0xc = FUN_0045ad90 -> FUN_0045a990) at that time: a Flash-like
+// timeline (+0x10 loop flag, +0x18 length s, +0x24 layers {keyframes: length, start, tween flag, 0x98-byte
+// children}) whose active children are composed (FUN_0045a1b0: position, scale, rotation, pivot, tweened to the
+// next keyframe) and recursed into. A child with collision kind +0x84 = 1 / 2 ends in FUN_0045b160 (sprite
+// entries, vtable 0x6b745c; the other entry class, 0x6b7448, never collides), which builds
+//   kind 1: a circle at the matrix's translation, radius |max(w, h) x max(scale x, scale y)| (entry +0xc/+0x10,
+//           scale from FUN_004952f0) -> {flags 0x11, r +4, centre +8/+0xc}, tested at 0x45b225;
+//   kind 2: a box of half size |w x scale x x 0.5|, |h x scale y x 0.5|, turned with the matrix
+//           (FUN_00475e30: axis 0 +0x44/+0x54, centre +0x50/+0x60, half sizes +0x84/+0x88), tested at 0x45b39a,
+// each through FUN_00476720 against the character's box (an OBB of half size 6). The shapes move inside the
+// animation while the piece stays put: on 1-14 the "movin" saws keep +0x14/+0x18 and their circle (r 20.35 at
+// scale 0.6) travels 93.6 units over the 2.667 s loop; the "particle" pieces only follow the saws and test no
+// shape at all. The wave reset (FUN_004d2060) sets every piece's +0x30 to 0, so the same wave frame has the
+// same shapes in every wave.
+// So the shapes are read from the game itself: a private copy of the scratch shape (game memory is never
+// written), filled as above, goes through FUN_0045a0e0 against a copy of a real character box moved far away
+// (no test can succeed, so every active shape is tested), and the two test sites record what they are given.
+// killShapes must run inside a replaced function (here: the update, Interceptor.replace): called from an
+// Interceptor.attach callback, Frida does not run the test sites' listeners and every piece reads as empty.
+const NARROW = new NativeFunction(img(0x45a0e0), 'int', ['pointer', 'pointer'], 'thiscall');
+const KILL_SHAPE = Memory.alloc(0x100), FAR_BOX = Memory.alloc(0x100);
+const KILL_MAX = 32;                               // shapes per piece (more are dropped)
+let killGot = null, killTid = -1, killReady = false, killErr = 0;
+const r2 = v => Math.round(v * 100) / 100;
+function killErrMsg(e) { if (killErr++ < 3) send({ ev: 'debug', msg: 'kill shapes: ' + e.message }); }
+Interceptor.attach(img(0x45b225), function () {      // circle: [esp] = {flags, r, centre x, centre y}
+  if (killGot === null || this.threadId !== killTid || killGot.length >= KILL_MAX) return;
+  try {
+    const s = this.context.esp.readPointer(), r = r2(s.add(4).readFloat());
+    killGot.push([1, r2(s.add(8).readFloat()), r2(s.add(12).readFloat()), r, r, 0]);
+  } catch (e) { killErrMsg(e); }
+});
+Interceptor.attach(img(0x45b39a), function () {      // box: eax = the OBB
+  if (killGot === null || this.threadId !== killTid || killGot.length >= KILL_MAX) return;
+  try {
+    const s = this.context.eax;
+    killGot.push([2, r2(s.add(0x50).readFloat()), r2(s.add(0x60).readFloat()), r2(s.add(0x84).readFloat()),
+                  r2(s.add(0x88).readFloat()),
+                  Math.round(Math.atan2(s.add(0x54).readFloat(), s.add(0x44).readFloat()) * 1000) / 1000]);
+  } catch (e) { killErrMsg(e); }
+});
+let boxHook = Interceptor.attach(img(0x4cd350), { onEnter(a) {   // a real character box (args[1], else char+0x44)
+  if (killReady) return;
+  try {
+    const bx = a[1].isNull() ? a[0].add(0x44).readPointer() : a[1];
+    if ((bx.readU32() & 0xf) !== 0) return;          // an OBB (Bounds type 0), as the characters' boxes are
+    Memory.copy(FAR_BOX, bx, 0xa0);
+    for (const o of [0x10, 0x20, 0x50, 0x60]) FAR_BOX.add(o).writeFloat(1e7);   // matrix and centre copies
+    killReady = true;
+  } catch (e) { killErrMsg(e); }
+} });
+function killShapes(pc) {   // the piece's shapes now: [[1, x, y, r, r, 0] | [2, x, y, half w, half h, angle]], null unknown
+  if (!killReady) return null;
+  if (boxHook) { boxHook.detach(); boxHook = null; }
+  try {
+    const S = KILL_SHAPE, u = (pc.add(0x10).readU16() >> 10) & 3, a = pc.add(0x2c).readFloat();
+    for (const o of [0, 4, 8, 12]) S.add(0x24 + o).writeU32(pc.add(0x14 + o).readU32());
+    S.add(0x34).writeFloat(pc.add(0x24).readFloat() * (u === 1 || u === 3 ? -1 : 1));
+    S.add(0x38).writeFloat(pc.add(0x28).readFloat() * (u >= 2 ? -1 : 1));
+    S.add(0x3c).writeFloat(a); S.add(0x40).writeFloat(a);
+    S.add(0x10).writeU32(pc.add(0x10).readU16() & 0xff);
+    S.add(0x4c).writeFloat(pc.add(0x38).readFloat() + pc.add(0x30).readFloat());
+    S.add(0x60).writeU32(pc.add(0x34).readU32());
+    killGot = []; killTid = Process.getCurrentThreadId();
+    NARROW(S, FAR_BOX);
+    return killGot;
+  } catch (e) { killErrMsg(e); return null; } finally { killGot = null; }
 }
 // pieces can be added or removed while the level runs (shots): the list is checked every frame
 let pieceSig = '';
@@ -310,10 +386,12 @@ function sig(all) { return all.length + ':' + (all.length ? all[0] + ',' + all[a
 function lethalInfo() {   // types and ids (addresses) of the lethal pieces, in the order hazards() lists them
   return { types: lethal.map(pc => pc.add(0x10).readU16() & 0xff), ids: lethal.map(pc => pc.toString()) };
 }
-function hazards() {                    // [x, y, size w, size h, scale x, scale y, angle] per lethal piece, now
+// per lethal piece, now: [x, y, size w, size h, scale x, scale y, angle, kill shapes] (the piece itself, size
+// from FUN_004ca860 at scale 1: the world model's inputs; then what kills: killShapes, [] = nothing now)
+function hazards() {
   return lethal.map((pc, k) => [pc.add(0x14).readFloat(), pc.add(0x18).readFloat(), lethalSize[k][0],
                                 lethalSize[k][1], pc.add(0x24).readFloat(), pc.add(0x28).readFloat(),
-                                pc.add(0x2c).readFloat()]);
+                                pc.add(0x2c).readFloat(), killShapes(pc)]);
 }
 // Shots (thrown saws, missiles): not pieces. Each shooter / launcher is an entity in the world's array
 // (u16 count +0x2c30, pointer +0x2c40, 0x9d4 bytes each; +0 its piece, +0x14 kind) with 10 shot slots of

@@ -20,8 +20,8 @@ library and the golden tests). The 5 members are copies of the same physics pred
   its best (shifted by the frames since) joins the final stage. It stays valid while the final stage finds no
   veto and soft risk <= 0.05 on it.
 - NORMAL (member 1, green): stages 1 and 2 below, every decision (Planner.member = 1).
-- REFLEX (member 2, red): when the commit "danger" trigger fired (plan(danger=True)) or a deadly box (kill reach
-  included) is within REFLEX_NEAR = 40 units (2 tiles) of the current plan's path in the next 16 frames: the
+- REFLEX (member 2, red): when the commit "danger" trigger fired (plan(danger=True)) or a deadly box (a kill
+  shape) is within REFLEX_NEAR = 40 units (2 tiles) of the current plan's path in the next 16 frames: the
   library moves of at most 16 frames with member 2, the least risk (a veto counts 1, else early_risk: frames
   1..16 by the soft rule), then the best estimate. Its plan is re-scored in the final stage for the record but
   chosen only by its override: whenever the chosen plan has a veto or any early risk in its first 16 frames.
@@ -211,7 +211,7 @@ LONG_EVERY = 32                              # frames: a long-safe plan older th
 LONG_RISK = 0.05                             # soft risk at most this (and no veto) for a long-safe plan
 REFLEX_MAX = 16                              # frames: reflex library moves of at most this
 REFLEX_WINDOW = 16                           # frames of the current plan's path checked for a near hazard
-REFLEX_NEAR = 40.0                           # units beyond the kill reach (2 tiles): a hazard this near is danger
+REFLEX_NEAR = 40.0                           # units beyond a deadly box (2 tiles): a hazard this near is danger
 EXPLORE_EVERY = 16                           # frames between an explore agent's decisions
 CONTACT_EPS = 0.01                           # units: a body put back to contact is this clear of the solid
 
@@ -414,23 +414,17 @@ def _model_boxes(boxes: np.ndarray, x, y) -> np.ndarray:
 # ---- hazards per future frame ---------------------------------------------------------------------------
 def future_inputs(future, frame: int, H: int, dt_ms: float, level_name: str | None = None, deaths=None):
     """From an mpc.future.FutureWorld that observed this frame: the model inputs per step (H World, index k =
-    frame + k) and the deadly boxes per frame (H + 1 plan.safety.FrameBoxes, index 0 unused) with their
-    measured kill reach and the future's uncertainty radius, flying shots, and remembered deaths (a
+    frame + k) and the deadly boxes per frame (H + 1 plan.safety.FrameBoxes, index 0 unused): the game's kill
+    shapes with the future's uncertainty radius, flying shots, and remembered deaths (a
     plan.safety.DeathMemory) at their wave frames. Also how many steps came from the recording."""
     worlds, check, recorded = future.worlds(frame, H, dt_ms)
-    _, hz0, _, sh0, _ = future.last
-    keep = future.keep
-    ids_h = [f"h{k}" for k in range(len(hz0)) if keep is None or k >= len(keep) or keep[k]]
-    ids_s = [f"shot{s[0]}" for s in sh0]
     frames = [None]
-    for k, (b, r) in enumerate(check, start=1):
+    for k, (b, r, ids) in enumerate(check, start=1):
         b = np.asarray(b, np.float64).reshape(-1, 5).copy()
         if len(b):
             b[:, 2:4] += np.asarray(r, np.float64)[:, None]
-        n_sh = len(ids_s) if len(b) >= len(ids_s) else 0
-        nh = len(b) - n_sh
-        ids = (ids_h[:nh] if len(ids_h) >= nh else [f"h{j}" for j in range(nh)]) + ids_s[:n_sh]
-        kind = [S.KIND_HAZARD] * nh + [S.KIND_SHOT] * n_sh
+        ids = list(ids)
+        kind = [S.KIND_SHOT if i.startswith("shot") else S.KIND_HAZARD for i in ids]
         if deaths is not None and level_name is not None:
             mem = deaths.boxes(level_name, frame + k)
             if len(mem):
@@ -1532,7 +1526,7 @@ class Planner:
         return (cands[b][0], acts[b], float(est2[b]), float(j2["soft"][b])), cnt
 
     def _danger_near(self, agent: int, frame: int, x0: float, y0: float, frames) -> bool:
-        """REFLEX's trigger besides the commit "danger" one: a deadly box (its measured kill reach included)
+        """REFLEX's trigger besides the commit "danger" one: a deadly box (a kill shape, game.level.hazard_boxes)
         within REFLEX_NEAR units of the current plan's path (its own predicted path, shifted to now; without
         one, the agent's position) in the next REFLEX_WINDOW frames."""
         prev = self.prev.get(agent)

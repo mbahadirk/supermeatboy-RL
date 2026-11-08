@@ -99,14 +99,13 @@ def cases(tol="default"):
         lv3, field, pl3, ref_world, rows, world = build(DATA_113, "1-13", MODEL, NO_DEADLINE, tol)
         fw = FutureWorld()
         for w in ref_world:
-            fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), lv3.hz_keep, None, 16.667, lv3.hz_grow)
+            fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), lv3.hz_keep, None, 16.667)
         fw.new_wave()
         fs = sorted(w["f"] for w in world)
         for f in (fs[200], fs[400]):
             for w in world:
                 if w["f"] <= f and w["f"] not in fw.cur:
-                    fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), lv3.hz_keep, None, 16.667,
-                               lv3.hz_grow)
+                    fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), lv3.hz_keep, None, 16.667)
             r = [r for r in rows if r["frame"] == f and r["status"] == 0][0]
             worlds, frames, _ = future_inputs(fw, f, pl3.future_frames, 16.667, lv3.name)
             pl3.prev = {}

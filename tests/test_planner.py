@@ -386,12 +386,12 @@ def test_plan_on_a_recorded_state():
     lv, field, pl, ref_world, rows, world = build(DATA_113, "1-13", MODEL, 120.0)
     fw = FutureWorld()
     for w in ref_world:
-        fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), lv.hz_keep, None, 16.667, lv.hz_grow)
+        fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), lv.hz_keep, None, 16.667)
     fw.new_wave()
     f = sorted(w["f"] for w in world)[200]
     for w in world:
         if w["f"] <= f:
-            fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), lv.hz_keep, None, 16.667, lv.hz_grow)
+            fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), lv.hz_keep, None, 16.667)
     r = [r for r in rows if r["frame"] == f and r["status"] == 0][0]
     worlds, frames, recorded = future_inputs(fw, f, pl.H, 16.667, lv.name)
     assert len(frames) == pl.H + 1 and recorded > 0
@@ -650,13 +650,13 @@ def test_completion_over_the_1_14_pit_sees_every_continuation_die():
     fw.new_level()
     for w in ref:
         fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), w.get("keep") or lv.hz_keep, None,
-                   16.667, lv.hz_grow)
+                   16.667)
     fw.new_wave()
     for w in world:
         if w["f"] > 444:
             break
         fw.observe(w["f"], w.get("hz", []), w.get("pf"), w.get("sh", []), w.get("keep") or lv.hz_keep, None,
-                   16.667, lv.hz_grow)
+                   16.667)
     r = rows[(rows["agent"] == 0) & (rows["frame"] == 444)][0]
     assert r["x"] > 0 and r["y"] < -200                                # over the pit, past the floor's edge
     worlds, frames, _ = future_inputs(fw, 444, pl.future_frames, 16.667, lv.name)

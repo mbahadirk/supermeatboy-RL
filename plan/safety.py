@@ -1,8 +1,8 @@
 """Geometric safety of imagined trajectories: the planner's death check instead of the world model's learned
 death output (PLAN_PLANNER_AGENT.md, "Decisions after review", item 1).
 
-Hazards per frame are the lethal pieces as boxes grown by their measured kill reach (game.level.hazard_boxes,
-hazard_reach.json), plus flying shots as boxes (x, y, rad, rad, 0) as realgame.Trainer.on_frame builds them,
+Hazards per frame are the lethal pieces' kill shapes as the game's narrow phase tests them, as boxes
+(game.level.hazard_boxes: realgame.js killShapes, which move inside a piece's animation), plus flying shots as boxes (x, y, rad, rad, 0) as realgame.Trainer.on_frame builds them,
 plus remembered deaths the geometry did not explain (DeathMemory). Contact is the agents' map rule: the
 agent's centre within BODY (realpath.BODY) of a box. Leaving the level is the realgame.js rule (outOfLevel):
 outside the level's camera-bounds kill box (Level.kill_box), or without one past the map edges.
@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from realpath import BODY
-from game.level import OUT_BOTTOM, OUT_SIDE, alive_box, hazard_boxes   # noqa: F401 (OUT_*: fallback rule)
+from game.level import OUT_BOTTOM, OUT_SIDE, alive_box, box_ids, hazard_boxes   # noqa: F401 (OUT_*: fallback rule)
 from wm.features import box_distances
 
 VETO_FRAMES = 16            # contact in frames 1..VETO_FRAMES vetoes the candidate
@@ -67,13 +67,13 @@ class FrameBoxes:
         return len(self.ids)
 
 
-def frame_boxes(hz, keep=None, grow=None, sh=(), memory=None, hz_ids=None) -> FrameBoxes:
-    """One frame's deadly boxes: lethal pieces hz (realgame.js rows, grown by `grow`, decoration dropped by
-    `keep`: game.level.hazard_boxes), flying shots sh [sid, x, y, rad], and remembered deaths `memory` (M, 5)
-    (DeathMemory.boxes). hz_ids: names of the hz rows (default "h<index>")."""
-    boxes, kept = hazard_boxes(hz or [], keep, grow)
+def frame_boxes(hz, keep=None, sh=(), memory=None, hz_ids=None) -> FrameBoxes:
+    """One frame's deadly boxes: lethal pieces hz (realgame.js rows: their kill shapes, game.level.hazard_boxes;
+    keep only for rows without shapes), flying shots sh [sid, x, y, rad], and remembered deaths `memory` (M, 5)
+    (DeathMemory.boxes). hz_ids: names of the hz rows (default "h<index>"; game.level.box_ids)."""
+    boxes, kept = hazard_boxes(hz or [], keep)
     kind = [KIND_HAZARD] * len(boxes)
-    ids = [str(hz_ids[k]) if hz_ids is not None and k < len(hz_ids) else f"h{k}" for k in kept]
+    ids = box_ids(kept, hz_ids)
     for sid, x, y, rad in sh or ():
         boxes.append((x, y, rad, rad, 0.0))
         kind.append(KIND_SHOT)
@@ -86,9 +86,9 @@ def frame_boxes(hz, keep=None, grow=None, sh=(), memory=None, hz_ids=None) -> Fr
     return FrameBoxes(np.asarray(boxes, np.float64).reshape(-1, 5), np.asarray(kind, np.int8), ids)
 
 
-def record_boxes(rec: dict, keep=None, grow=None, memory=None) -> FrameBoxes:
+def record_boxes(rec: dict, keep=None, memory=None) -> FrameBoxes:
     """frame_boxes of a recorded world frame (wm_data *_world.json.gz) or a live frame message."""
-    return frame_boxes((rec or {}).get("hz", []), keep, grow, (rec or {}).get("sh", []), memory)
+    return frame_boxes((rec or {}).get("hz", []), keep, (rec or {}).get("sh", []), memory)
 
 
 # ---- level bounds ---------------------------------------------------------------------------------------
@@ -151,10 +151,10 @@ def segment_contact(x0, y0, x1, y1, fb: FrameBoxes, bounds=None):
     return kind, box
 
 
-def explain_death(lv, frame_record: dict, keep, grow, x0, y0, x1, y1) -> bool:
+def explain_death(lv, frame_record: dict, keep, x0, y0, x1, y1) -> bool:
     """Does the geometry explain a real death: the move from the previous position (x0, y0) to the death
     position (x1, y1) against the hazards and shots of the death frame, or leaving the level."""
-    kind, _ = segment_contact([x0], [y0], [x1], [y1], record_boxes(frame_record, keep, grow), level_bounds(lv))
+    kind, _ = segment_contact([x0], [y0], [x1], [y1], record_boxes(frame_record, keep), level_bounds(lv))
     return bool(kind[0] != KIND_NONE)
 
 
@@ -390,7 +390,12 @@ def check(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Safety:
 class DeathMemory:
     """Real deaths the geometry did not explain, as (level, wave frame, x, y). Waves repeat exactly (time-step
     lock), so each becomes a hazard box (half size DEATH_HALF, centred on the death point) for wave frames
-    within WINDOW of the recorded one."""
+    within WINDOW of the recorded one.
+
+    The window stays short on purpose: repeated deaths at one place at other wave frames came from kill shapes
+    moving inside a piece's animation (1-14's saws), which the hazard rows now carry for every frame; the wave
+    reset restarts those animations, so a remembered death is a fact about its own wave frame only. A longer
+    window would block the place at times it is safe."""
 
     def __init__(self, entries=()):
         self.entries: list[tuple[str, int, float, float]] = []

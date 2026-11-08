@@ -20,8 +20,8 @@ Coordinates and units (all messages)
   row 0 is the BOTTOM row.
 - Speeds in units per second. Frames are the game's wave frames (60 per second, the time step is locked),
   counted from 0 at each wave start. Angles in radians.
-- A box is [x, y, hw, hh, angle, kind]: centre, half width, half height (already grown by the measured kill
-  reach of its kind, hazard_reach.json, and for future boxes also by the future's uncertainty radius), the
+- A box is [x, y, hw, hh, angle, kind]: centre, half width, half height (a kill shape the game's narrow phase
+  tests, game.level.shape_box, and for future boxes grown by the future's uncertainty radius), the
   rotation (a point p is inside when |u| <= hw and |v| <= hh with u = dx cos a + dy sin a,
   v = -dx sin a + dy cos a, d = p - centre), and what it is: 0 lethal piece, 1 flying shot, 3 remembered death
   (plan/safety.py DeathMemory). The agent's centre dies when it comes within BODY = 6 units of a box
@@ -57,7 +57,7 @@ Message types
              airborne-ish, 0x200 on a wall), "state": int (movement state), "keys": int (bit k = key k),
              "action": int (index into ACTIONS (left, right, jump, run): 0 none, 1 L, 2 R, 3 jump, 4 L+jump,
              5 R+jump, 6 R+run, 7 R+jump+run, 8 L+run, 9 L+jump+run) or -1 (none: dead / finished)}, ...],
- "hazards": [box, ...] (the deadly boxes now: lethal pieces and shots, grown),
+ "hazards": [box, ...] (the deadly boxes now: the lethal pieces' kill shapes and shots),
  "future": {"8": [box, ...], "16": [box, ...]} (the deadly boxes the planner expects 8 and 16 frames ahead,
            including remembered deaths active then; {} when there is no prediction),
  "memory": [box, ...] (remembered deaths active at this frame, kind 3)}

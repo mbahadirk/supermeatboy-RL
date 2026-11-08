@@ -15,7 +15,7 @@ World model: runs/wm_step4 by default (4 frames per model step; --model runs/wm_
 one). Planning modes (plan/planner.py): long-safe (member 0), normal (member 1), reflex (member 2, also on the
 commit "danger" trigger); agent 0's chosen path is drawn in the game in its mode's colour (MODE_COL).
 
-Per level: game.level.Level (with the camera-bounds kill box), hazard boxes with their measured kill reach,
+Per level: game.level.Level (with the camera-bounds kill box), hazard boxes from the game's kill shapes,
 sealed pockets, the progress field V (plan/progress.py, cells outside the kill box closed), mpc.future.FutureWorld
 (where the moving parts will be) and the beam planner. V is rebuilt between waves when moving hazards are seen
 in new places, the kill box changes or a platform reaches new cells (at most FIELD_REBUILDS times per level).
@@ -101,7 +101,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from game.level import Level, hazard_boxes, identify_level, HZ          # noqa: E402
+from game.level import Level, box_base, box_ids, hazard_boxes, identify_level, HZ          # noqa: E402
 from mpc.candidates import ACTIONS                                       # noqa: E402
 from mpc.future import FutureWorld                                       # noqa: E402
 from plan import safety as S                                             # noqa: E402
@@ -577,8 +577,8 @@ class Runner:
                    protected=self.protected, agents=info["agents"])
         self.new_wave(info["agents"])
         if "hz" in info:                       # the game waits for the 'go' (no agent moves meanwhile)
-            boxes, kept = hazard_boxes(info["hz"], lv.hz_keep, lv.hz_grow)
-            self.track_hazards(boxes, [lv.hz_ids[k] for k in kept])
+            boxes, kept = hazard_boxes(info["hz"], lv.hz_keep)
+            self.track_hazards(boxes, box_ids(kept, lv.hz_ids))
             self.build_field("level start")
         self.send_level()
         self.post_best(lv.name)
@@ -602,17 +602,17 @@ class Runner:
             self.hz_start = {}
         level_ids = self.level.hz_level_ids
         for b, hid in zip(boxes, ids):
-            if hid not in level_ids:
+            if box_base(hid) not in level_ids:
                 continue
             if hid not in self.hz_start:
                 self.hz_start[hid] = b
                 continue
             x, y, hw, hh, a = b
-            x0, y0, _, _, a0 = self.hz_start[hid]
-            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05:
+            x0, y0, hw0, hh0, a0 = self.hz_start[hid]
+            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05 or abs(hw - hw0) > 1 or abs(hh - hh0) > 1:
                 if hid not in self.moving:
                     self.moving.add(hid)
-                    self.sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw, hh, round(a0, 1)))
+                    self.sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw0, hh0, round(a0, 1)))
                 key = (round(x / 4) * 4, round(y / 4) * 4, hw, hh, round(a, 1))
                 if key not in self.sweep:
                     self.sweep.add(key)
@@ -697,15 +697,15 @@ class Runner:
                 print(f"[hazards] {lv.name}: pieces came or went, {before} -> {len(lv.hz_ids)} lethal (frame {frame})",
                       flush=True)
                 self.event("hazards", frame, before=before, after=len(lv.hz_ids))
-        boxes, kept = hazard_boxes(m.get("hz", []), lv.hz_keep, lv.hz_grow)
-        ids = [lv.hz_ids[k] if k < len(lv.hz_ids) else str(k) for k in kept]
+        boxes, kept = hazard_boxes(m.get("hz", []), lv.hz_keep)
+        ids = box_ids(kept, lv.hz_ids, prefix="")
         self.track_hazards(boxes, ids)
         if not self.field_built:
             self.build_field("first frame")
             pl = self.planner
         dt = float(m.get("dt") or 16.667)
         self.dt_ms = dt
-        self.fw.observe(frame, m.get("hz", []), m.get("pf"), m.get("sh", []), lv.hz_keep, lv.fans, dt, lv.hz_grow)
+        self.fw.observe(frame, m.get("hz", []), m.get("pf"), m.get("sh", []), lv.hz_keep, lv.fans, dt)
         if self.wm and not self.protected:
             C.go("wm_data")
             self.wm.frame(m, list(lv.hz_ids), list(lv.hz_keep))
@@ -887,8 +887,8 @@ class Runner:
         lv = self.level
         x1, y1 = xy1
         x0, y0 = xy0 if xy0 is not None else xy1
-        explained = bool(S.explain_death(lv, rec or {}, lv.hz_keep, lv.hz_grow, x0, y0, x1, y1))
-        fb = S.record_boxes(rec or {}, lv.hz_keep, lv.hz_grow)
+        explained = bool(S.explain_death(lv, rec or {}, lv.hz_keep, x0, y0, x1, y1))
+        fb = S.record_boxes(rec or {}, lv.hz_keep)
         kind, box = S.segment_contact([x0], [y0], [x1], [y1], fb, S.level_bounds(lv))
         cause = S.KIND_NAMES[int(kind[0])] + (f" {fb.ids[int(box[0])]}" if box[0] >= 0 else "")
         if not explained and extra_boxes is not None and len(extra_boxes):   # wave-end deaths: also the predicted

@@ -63,7 +63,8 @@ Labels used here:
 - Up to 200 real Meat Boys play a level in waves; PPO learns from all of them.
   - Finished levels: 1-1 to 1-10, 1-12, 1-13, 1-16, 2-1, 2-2, 2-9, 3-3, 3-4, 4-4, 4-6.
 - The game's time step is locked (16.7 ms every step), so physics no longer depends on Python's speed.
-- **Hazards on the map** use a measured kill reach per piece type, so lava and fire no longer leave open gaps.
+- **Hazards on the map** are the kill shapes the game itself tests each frame (section 5.2), so moving shapes
+  inside a still piece (1-14's saws) are seen.
 - **Leaving the level** kills an agent (since 2a08582, verified only by data analysis).
 - **The latest run on 4-6:** route progress rose to 96–99% within 15 minutes and 4-6 was finished for the
   first time (12.97 s).
@@ -100,7 +101,7 @@ the layer on top of it are in use.
 | 2. In-game arena (SB3 policy driving copies in the game) | `ingame.py`, `ingame_arena.js` (`train.py --game`) | **old, unused** |
 | 3. Real-game PPO trainer | `realgame.py`, `realgame.js`, `realpath.py`, `monitor.py` | **live** |
 | 3b. Unused dashboard | `realgame_hud.py` | imported by nothing |
-| 4. World model + planner | `wm/`, `mpc/`, `hazard_reach.py`, `hazard_reach.json`, `eval_levels.json`, `tests/test_mpc.py` | live, switched off by default (`--control ppo`) |
+| 4. World model + planner | `wm/`, `mpc/`, `eval_levels.json`, `tests/test_mpc.py` | live, switched off by default (`--control ppo`) |
 | Tools | `tools/smbl_extract.py` (level files: palette names), `tools/capture/*` (early RE capture scripts), `tools/extract_archive.py` | `smbl_extract.py` is used by `realgame.piece_names`; the rest are old |
 
 **Repository tangle:**
@@ -181,12 +182,12 @@ So Python's speed sets the game's speed.
 **Level** (`class Level`):
 - the live tile map;
 - goals, spawn, keys, bandages, portals, wind fans, orbs, platforms;
-- which lethal pieces are decoration (by palette name);
+- which lethal pieces are decoration by palette name (world-model inputs and old recordings only);
 - the walking distance to the goal (BFS).
 
 **Hazards** (`hazard_boxes`):
-- every lethal piece becomes a rotated box;
-- each box is grown by the measured kill reach of its kind (`hazard_reach.json`, section 5.2).
+- every lethal piece becomes the boxes of its kill shapes, as the game's narrow phase tests them now
+  (section 5.2); rows without shapes fall back to the piece's size box.
 
 **Map for the agents** (`grid_with_hazards`): cell codes for empty, solid, hazard, goal, wind, orb,
 accelerator and platform.
@@ -261,45 +262,31 @@ kept only if it goes a different way: fewer than `SAME_WAY` 4 tiles of overlap, 
 
 **Platforms.** Fixed platforms become walls; moving ones are "doors" that only the timed modes may cross.
 
-### 5.2 Hazard kill reach (`hazard_reach.py`, since c27ff6d)
+### 5.2 Hazard kill shapes (`realgame.js` killShapes; replaced `hazard_reach.py`)
 
 **Problem.**
-- The map treated a piece as deadly within 6 units of its box (Meat Boy's half size), for every kind.
-- Measured on 4-6, lava kills about 19 units above its strip and 40+ units past its ends. Fire falls kill
-  17 units above and below.
-- So the map showed open cells inside lava and fire, and routes went through them.
+- The map first treated a piece as deadly within 6 units of its size box, then grew each kind's box by a
+  reach measured from deaths (`hazard_reach.py`, c27ff6d to this change).
+- Neither is what the game tests. On 1-14 the "movin" saws never change their position: the saw moves inside
+  the piece's animation. 26 of 26 benchmark deaths there were unexplained.
 
-**Fix.**
-- Per kind of piece (its palette name), it measures how far beyond its box agents die (deaths are put on
-  the nearest real hazard), against how close survivors get.
-- A reach is accepted at the first of p90, p75 or p50 of the deaths that fewer than 1% of survivors fall
-  inside. It is never below 6, and kinds with too few deaths keep 6.
-- Boxes are grown by that reach in one place (`hazard_boxes`), so the agents' map, sealed pockets, routes,
-  monitor and the planner's hazard check all agree.
-- `python smbrl/hazard_reach.py --all` re-measures from every recorded run. It refuses missing folders,
-  never writes an empty table, and keeps kinds the new data does not cover.
+**Fix (measured live on 1-14).**
+- The pieces check (FUN_004cd350) calls FUN_0045a0e0, which plays the piece type's animation at the piece's
+  time (+0x30 + +0x38) and tests each child with a collision kind: a circle (radius max(w, h) x scale) or a
+  turned box (FUN_0045b160).
+- realgame.js runs that same call on a private copy of the scratch shape, against a far-away copy of a real
+  character box, and records every shape tested. Each hazards row gets the shapes as an eighth field.
+- `game.level.hazard_boxes` turns the shapes into boxes for the BODY contact rule. A piece with no shape now
+  kills nothing now (the "particle" pieces on 1-14).
+- The name rule (`DECOR`, `Level.hz_keep`) is left only for the world model's inputs and for rows recorded
+  before this change. Those old rows fall back to the size box, without the old measured reach.
 
-**Measured** (from about 18,000 recorded deaths):
-
-| Kind | Kill reach x / y (units beyond the box) |
-|---|---|
-| lava | 42.7 / 19.2 |
-| fire falls ("forest - river copy") | 6.0 / 16.6 |
-| saw | 8.6 / 8.4 |
-| ammo1 | 19.1 / 27.2 |
-| spinner2 | 6.0 / 60 (capped) |
-
-**Effect** (share of deaths that fall in cells the map marks deadly):
-
-| Level | Before | After |
-|---|---|---|
-| 4-6 | 51% | 67% |
-| 1-9 | 69% | 91% |
-
-Survivors in deadly cells stay below 0.2%.
-
-The deaths still left in open cells happen where survivors also pass often (flying shots, moving pieces):
-that is timing, not a deadly cell.
+**Measured.**
+- 1-14 saws: circles of r 20.35 (scale 0.6) and 16.96 (scale 0.5), travelling 93.6 / 78 units over the
+  2.667 s loop.
+- Benchmark `bench_20261108-194129`, 1-14: the deaths explained went from 0 / 26 to 26 / 26. The shapes were
+  rebuilt from a live phase table, because the wave reset sets +0x30 to 0. 1 of 9735 survivor positions
+  falls inside a box.
 
 ### 5.3 Moving hazards
 
@@ -774,7 +761,7 @@ This is a summary of the conversation history, for the next plan.
 | FINISH / SPEED phase | before / after the first finish on a level |
 | sweep | every position a moving hazard has been seen at |
 | sealed pocket | open cells nobody can get into, filled in as hazard or solid |
-| kill reach | how far beyond its box a piece kills, per kind (`hazard_reach.json`) |
+| kill shapes | the circles / turned boxes a piece's animation tests for a kill now (`realgame.js` killShapes) |
 | lock / time-step lock | the patch that makes the game always take its fixed 16.67 ms step |
 | world model | the learned predictor of the next state (`wm/`) |
 | MPC / planner | tries action sequences in the world model and plays the first action of the best (`mpc/`) |
@@ -784,10 +771,6 @@ This is a summary of the conversation history, for the next plan.
 
 ```bash
 python smbrl/realgame.py --agents 100 --end-after 5 --load smbrl/runs/real_20261103-012157 --wm-collect
-```
-
-```bash
-python smbrl/hazard_reach.py --all
 ```
 
 ```bash
