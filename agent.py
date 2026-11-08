@@ -387,7 +387,6 @@ class Runner:
             raise SystemExit(f"{self.n_total} agents: at most {MAX_AGENTS} (--agents + --explore)")
         self.pool = max(GAME_POOL, self.n_total)
         self.replan = max(1, int(args.replan))
-        self.commit = Committer(self.replan, args.tube, args.triggers == "on")
         self.model = None
         if self.n_plan:
             import torch
@@ -396,6 +395,8 @@ class Runner:
             path = args.model if os.path.exists(args.model) else os.path.join(HERE, args.model)
             self.model = WorldModel.load(path).eval()
             self.model_path = path
+        self.commit = Committer(self.replan, args.tube, args.triggers == "on",
+                                step=getattr(self.model, "step", 1) if self.model is not None else 1)
         self.deaths_path = args.death_memory
         self.deaths = S.DeathMemory.load(self.deaths_path)
         mm = getattr(args, "move_memory", DEFAULT_MOVES)

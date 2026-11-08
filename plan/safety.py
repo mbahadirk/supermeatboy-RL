@@ -168,7 +168,8 @@ class Sweep:
     ids / kinds (U,): every box seen over frames 1..K; clear_min / clear_frame (E, n, U): smallest clearance
     to each box over the trajectory and the frame of it (+inf / -1 for boxes absent then);
     out_min / out_frame (E, n): the same for the level's edge; step_clear (E, n, K): smallest clearance to
-    anything at each step (index k-1 = step k-1 -> k)."""
+    anything at each step (index k-1 = step k-1 -> k). step: frames per column (a step-k world model's
+    positions); every frame above (contact_frame, clear_frame, out_frame) is in frames (column x step)."""
     contact_frame: np.ndarray
     contact_kind: np.ndarray
     contact_box: np.ndarray
@@ -179,14 +180,20 @@ class Sweep:
     out_min: np.ndarray
     out_frame: np.ndarray
     step_clear: np.ndarray
+    step: int = 1
+
+    def frames_of(self) -> np.ndarray:
+        """The frame of each step_clear column (1..K x step)."""
+        return np.arange(1, self.step_clear.shape[2] + 1) * self.step
 
 
-def sweep(xs, ys, frames, bounds=None, floor=None) -> Sweep:
+def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Sweep:
     """xs, ys: (E, n, K+1) positions, frame 0 = now. frames: K+1 FrameBoxes (or None for none), frames[k] =
     the hazards at trajectory frame k (frames[0] is not used: the start is a fact). bounds: level_bounds(lv)
     for the out-of-level rule, or None. floor: a plan.geometry.Terrain (or None): a step ending on the padding
     below the map (Terrain.on_padding: the world model's false floor) has left the level too, a contact of kind
-    KIND_FLOOR (clearance -1 at that step: the same verdict and risk as the kill box)."""
+    KIND_FLOOR (clearance -1 at that step: the same verdict and risk as the kill box). step: frames per column
+    (frames[k] then holds the boxes of frame k x step; the segment test covers the motion between columns)."""
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
     E, n, K1 = xs.shape
     K = K1 - 1
@@ -241,18 +248,22 @@ def sweep(xs, ys, frames, bounds=None, floor=None) -> Sweep:
         if pad is not None:
             contact_kind[hit_out & pad] = KIND_FLOOR
     sh2, sh3 = (E, n), (E, n, -1)
+    if step != 1:                                       # columns -> frames (-1 stays -1)
+        for a in (contact_frame, clear_frame, out_frame):
+            a[a > 0] *= step
     return Sweep(contact_frame.reshape(sh2), contact_kind.reshape(sh2), contact_box.reshape(sh2), ids,
                  np.asarray(kinds, np.int8), clear_min.reshape(sh3), clear_frame.reshape(sh3),
-                 out_min.reshape(sh2), out_frame.reshape(sh2), step_clear.reshape(E, n, K))
+                 out_min.reshape(sh2), out_frame.reshape(sh2), step_clear.reshape(E, n, K), int(step))
 
 
-def first_contact(xs, ys, boxes, first=None, upto=None):
+def first_contact(xs, ys, boxes, first=None, upto=None, step: int = 1):
     """The same swept segment test against boxes that are touched rather than deadly (the goal, a key): fixed
     boxes (M, 5) in the contact convention (centre within BODY: game.level.Level.goal_boxes / key_boxes).
     xs, ys (E, n, K+1). Per trajectory the first frame k (step k-1 -> k) that touches a box, only frames
     first..upto (first, upto: broadcast to (E, n); None: 1 and K), and the index of the box; -1 when none.
     A box the trajectory starts in contact with (frame 0) is not counted for it: the game said it was not
-    touched there."""
+    touched there. step: frames per column; first, upto and the frames returned are in frames (a frame inside
+    a column counts as that column's end frame)."""
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
     E, n, K1 = xs.shape
     K = K1 - 1
@@ -273,7 +284,8 @@ def first_contact(xs, ys, boxes, first=None, upto=None):
     def lim(v, default):
         if v is None:
             return np.full(P, default, np.int64)
-        return np.broadcast_to(np.asarray(v, np.int64), (E, n)).reshape(P)
+        v = np.broadcast_to(np.asarray(v, np.int64), (E, n)).reshape(P)
+        return v if step == 1 else -(-v // step)
     lo, hi = lim(first, 1), np.minimum(lim(upto, K), K)
     # only the paths that come near a box, every step at once
     b = fb.boxes
@@ -295,7 +307,7 @@ def first_contact(xs, ys, boxes, first=None, upto=None):
     got = hit.any(1)
     k1 = hit.argmax(1)
     out_f, out_w = frame.reshape(P), which.reshape(P)
-    out_f[cand[got]] = k1[got] + 1
+    out_f[cand[got]] = (k1[got] + 1) * step
     out_w[cand[got]] = idx[j[np.arange(len(cand)), k1][got]]
     return out_f.reshape(E, n), out_w.reshape(E, n)
 
@@ -341,9 +353,11 @@ def assess(sw: Sweep) -> Safety:
         veto_id.append(None if not veto[c] else contact_id(veto_kind[c], sw.ids, b))
     soft_risk = np.zeros(n)
     soft_frame = np.full(n, -1, np.int64)
-    if K > VETO_FRAMES:
-        ks = np.arange(VETO_FRAMES + 1, K + 1)
-        c = sw.step_clear[:, :, VETO_FRAMES:]            # (E, n, K - VETO_FRAMES)
+    fk = sw.frames_of()
+    late = fk > VETO_FRAMES
+    if late.any():
+        ks = fk[late]
+        c = sw.step_clear[:, :, late]                    # (E, n, columns after VETO_FRAMES)
         with np.errstate(invalid="ignore"):
             risk = np.where(c < 0, 1.0, np.clip(1.0 - c / margin(ks), 0.0, 1.0))
         risk = np.nan_to_num(risk, nan=0.0)
@@ -367,9 +381,9 @@ def assess(sw: Sweep) -> Safety:
     return Safety(veto, veto_frame, veto_kind, veto_id, soft_risk, soft_frame, nearest, sw)
 
 
-def check(xs, ys, frames, bounds=None, floor=None) -> Safety:
-    """sweep + assess: the planner's safety verdict for (E, n, K+1) trajectories."""
-    return assess(sweep(xs, ys, frames, bounds, floor))
+def check(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Safety:
+    """sweep + assess: the planner's safety verdict for (E, n, K+1) trajectories (step: frames per column)."""
+    return assess(sweep(xs, ys, frames, bounds, floor, step))
 
 
 # ---- deaths the geometry did not predict ----------------------------------------------------------------

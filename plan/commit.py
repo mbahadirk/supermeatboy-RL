@@ -54,22 +54,30 @@ def kind_of(trigger: str) -> str:
     return trigger.split()[0] if trigger else "?"
 
 
+def tube_horizons(step: int = 1) -> tuple:
+    """The tube's measured horizons for a world model of `step` frames per step: plan.explain.HORIZONS that are
+    whole steps (1-frame model: 1, 4, 8, 16; step-4 model: 4, 8, 16)."""
+    return tuple(h for h in HORIZONS if h % max(1, int(step)) == 0)
+
+
 class ErrorTube:
     """90% position error (units) of followed predictions per horizon (frames after a decision).
 
     Measured horizons are plan.explain.HORIZONS (1, 4, 8, 16): the run's own followed errors
     (SurpriseTracker.err, added at every wave end with add(), plus the current wave's with refresh()) once a
     horizon has MIN_SAMPLES of them, else ERR90_AT. Between horizons linear; beyond 16 frames the model's
-    measured table plan.safety.ERR90 (32, 48 frames)."""
+    measured table plan.safety.ERR90 (32, 48 frames). horizons: the measured ones (a step-4 world model:
+    4, 8, 16, the frames its predictions are made at; below the first the first one's error holds)."""
 
-    def __init__(self):
-        self.samples = {h: [] for h in HORIZONS}
+    def __init__(self, horizons=HORIZONS):
+        self.horizons = tuple(horizons)
+        self.samples = {h: [] for h in self.horizons}
         self.table = {}
         self.refresh()
 
     def add(self, err: dict):
         """A finished wave's followed errors {horizon: [errors]}."""
-        for h in HORIZONS:
+        for h in self.horizons:
             s = self.samples[h]
             s.extend(float(e) for e in (err.get(h) or []))
             if len(s) > KEEP_SAMPLES:
@@ -79,15 +87,15 @@ class ErrorTube:
     def refresh(self, current: dict | None = None):
         """Recompute the table from the run's samples plus the current wave's (not kept)."""
         self.table = {}
-        for h in HORIZONS:
+        for h in self.horizons:
             e = self.samples[h] + [float(v) for v in ((current or {}).get(h) or [])]
             if len(e) >= MIN_SAMPLES:
                 self.table[h] = (float(np.percentile(e, 90)), "run", len(e))
             else:
                 self.table[h] = (float(ERR90_AT[h]), "ERR90_AT", len(e))
-        far = [(f, e) for f, e in S.ERR90 if f > max(HORIZONS)]
-        self._f = np.array([h for h in HORIZONS] + [f for f, _ in far], np.float64)
-        self._e = np.array([self.table[h][0] for h in HORIZONS] + [e for _, e in far], np.float64)
+        far = [(f, e) for f, e in S.ERR90 if f > max(self.horizons)]
+        self._f = np.array([h for h in self.horizons] + [f for f, _ in far], np.float64)
+        self._e = np.array([self.table[h][0] for h in self.horizons] + [e for _, e in far], np.float64)
 
     def at(self, k: int) -> float:
         return float(np.interp(float(k), self._f, self._e))
@@ -182,11 +190,11 @@ class Committed:
 class Committer:
     """Per planned agent: the committed plan and when to decide again (the module's rules)."""
 
-    def __init__(self, replan: int = REPLAN_DEFAULT, tube: float = TUBE_DEFAULT, on: bool = True):
+    def __init__(self, replan: int = REPLAN_DEFAULT, tube: float = TUBE_DEFAULT, on: bool = True, step: int = 1):
         self.replan = max(1, int(replan))
         self.tube_factor = float(tube)
         self.on = bool(on)
-        self.tube = ErrorTube()
+        self.tube = ErrorTube(tube_horizons(step))
         self.cur: dict[int, Committed] = {}
 
     def reset(self):

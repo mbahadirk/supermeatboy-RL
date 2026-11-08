@@ -66,7 +66,7 @@ def build(d: str, level: str, model: str, budget: float, collide_tol="default"):
 
 def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int = 8, tube: float = 1.5,
                 triggers: bool = True, hysteresis: float = HYSTERESIS_FRAMES, budget: float | None = 120.0, start: int = 0,
-                agent: int | None = None, log=None) -> dict:
+                agent: int | None = None, log=None, world_model: str | None = None) -> dict:
     """The world model plays itself: ensemble member 0 stands in for the game for one level (NOT the game).
 
     From a recorded agent's state at wave frame `start` of the level's second recorded wave (agent: a planned
@@ -77,13 +77,20 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
     one step of member 0 with that action; the hazards are the recorded ones of that wave (the time step is
     locked, so they do not depend on the agent), death by the geometry (plan.safety against the next frame's
     recorded boxes and the level's edge), the goal and keys by their contact boxes. Not modelled: tile changes
-    (crumbling blocks stay), the model's own death and finish heads. Returns the numbers and the plan dicts."""
+    (crumbling blocks stay), the model's own death and finish heads. Returns the numbers and the plan dicts.
+    world_model: the 1-frame model that stands in for the game (default: the planner's own model when it steps
+    1 frame, else DEFAULT_MODEL: a step-4 planner model cannot advance the world one frame)."""
     from plan import safety as S
     from plan.commit import Committer, kind_of
     from plan.planner import imagine
     lv, field, planner, ref_world, rows, world = build(d, level, model, budget)
     planner.hysteresis = float(hysteresis)
-    com = Committer(replan, tube, triggers)
+    from wm.model import WorldModel
+    env = (planner.model if planner.f == 1 and world_model is None else
+           WorldModel.load(world_model or DEFAULT_MODEL).eval())
+    if env.step != 1:
+        raise SystemExit("the closed loop's world needs a 1-frame model (--world-model)")
+    com = Committer(replan, tube, triggers, step=planner.f)
     fw = FutureWorld()
     fw.new_level()
     keep, grow = lv.hz_keep, lv.hz_grow
@@ -143,7 +150,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
         a = int(cur.actions[f - cur.frame])
         planner.played(0, f, a)
         played[f] = a
-        out = imagine(planner.model, slice(0, 1), planner.geom, s, np.array([[a]]), dt, fw.worlds(f, 1, dt)[0],
+        out = imagine(env, slice(0, 1), planner.geom, s, np.array([[a]]), dt, fw.worlds(f, 1, dt)[0],
                       keep_rows=True)
         s2 = out["rows"][0, :, 1].copy()
         x2, y2 = float(s2["x"][0]), float(s2["y"][0])
@@ -223,6 +230,9 @@ def main():
     ap.add_argument("--hysteresis", type=float, default=HYSTERESIS_FRAMES,
                     help=f"closed loop: as agent.py --hysteresis, frames (default {HYSTERESIS_FRAMES:g})")
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--world-model", default=None,
+                    help="closed loop: the 1-frame model standing in for the game (default --model if it steps 1 "
+                         "frame, else runs/wm_locked/wm_model.pt)")
     ap.add_argument("--decisions", type=int, default=20)
     ap.add_argument("--budget", type=float, default=120.0, help="ms per decision (the cheap stages' deadline)")
     ap.add_argument("--threads", type=int, default=2)
@@ -237,7 +247,7 @@ def main():
                      {"replan": args.replan, "tube": args.tube, "triggers": args.triggers == "on",
                       "hysteresis": args.hysteresis}):
             r = closed_loop(args.data, args.level, args.model, args.closed_loop, budget=args.budget, start=args.start,
-                            log=lambda t: print(t, flush=True), **mode)
+                            log=lambda t: print(t, flush=True), world_model=args.world_model, **mode)
             out.append(r)
         if args.json:
             with open(args.json, "w", encoding="utf-8") as f:
