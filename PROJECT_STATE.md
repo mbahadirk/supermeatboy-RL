@@ -565,6 +565,26 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
   decisions take about 163 ms); an explore agent about 30-36 ms per decision, 1.9-2.3 ms per game frame each.
 - **Unverified**: everything in the game (no run with the game since).
 
+
+### 7.7 Demos (2026-11-08, offline only)
+
+- **Demo-trained step-4 model** `runs/wm_step4_demo2`: as `runs/wm_step4` (the same 14 locked wm_data folders,
+  `--step 4 --sample-frac 0.07 --max-samples 1500000`, 5 members) plus `--demos runs/demos/recorded.json
+  --demo-share 0.2`, without the 1-16 and 4-6 demos (9 demos; no runs/demo_* shards existed). Open-loop error,
+  median / 90%, units (`wm.compare_steps`, runs/wm_step4_demo2/compare_report.md):
+
+  | model | +4 | +16 | +32 | +48 |
+  |---|---|---|---|---|
+  | wm_step4, 379 held-out waves | 0.47 / 3.08 | 3.95 / 17.24 | 10.92 / 42.20 | 19.59 / 71.20 |
+  | wm_step4_demo2 | 0.44 / 2.95 | 3.70 / 16.66 | 10.37 / 40.31 | 18.93 / 67.86 |
+  | wm_step4, demo rows of 3 held-out waves | 0.58 / 4.09 | 5.11 / 31.59 | 24.28 / 69.71 | 43.88 / 108.23 |
+  | wm_step4_demo2 | 0.65 / 4.84 | 4.52 / 25.83 | 22.24 / 78.38 | 45.89 / 98.22 |
+
+  Closed loops (plan/offline.py closed_loop, 300 frames, no deadlines, modes on, hysteresis 16; starts 1-13 0 /
+  100 / 200 and 1-8 0 / 30 / 60 from real_20261102-165351, 1-14 0 / 100 / 200 from plan_20261107-200300: the
+  folders with the longest second waves): wm_step4 4 finished (1-8 x3, 1-14 from 100), 0 died; wm_step4_demo2 3
+  finished (1-8 from 30 / 60, 1-14 from 0), 0 died. Fewer finishes: **runs/wm_step4 stays the default**.
+
 ---
 
 ## 8. Results so far (measured)
