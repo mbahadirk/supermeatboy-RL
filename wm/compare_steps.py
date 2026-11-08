@@ -26,7 +26,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from wm.buffer import load_shards, load_level, shard_files    # noqa: E402
+from wm.buffer import load_shard, load_shards, load_level, shard_files    # noqa: E402
 from wm.features import LevelGeom                         # noqa: E402
 from wm.model import WorldModel                           # noqa: E402
 from wm.rollout import World, rollout_batched             # noqa: E402
@@ -93,7 +93,6 @@ def main():
     torch.set_num_threads(args.threads)
     models = [WorldModel.load(m).eval() for m in args.models]
     trained = [held_out(m) for m in models]
-    H = max(args.frames)
     rng = np.random.default_rng(0)
     err = [{h: [] for h in args.frames} for _ in models]
     err_demo = [{h: [] for h in args.frames} for _ in models]
@@ -106,22 +105,11 @@ def main():
             if any(nd in dirs and (nd, k) not in held for dirs, held in trained):
                 continue                                    # a wave one of the models trained on
             lv = meta.get("level")
-            wf = {w["f"]: w for w in world}
-            frames = sorted(wf)
-            if len(frames) < H + 2:
+            if not roll_wave(d, lv, rows, world, geoms, rng, args.starts, err, models, args.frames,
+                             dem.get((nd, k)), err_demo):
                 continue
-            if lv not in geoms:
-                geoms[lv] = LevelGeom(*load_level(d, lv))
-            geom = geoms[lv]
-            by = {(int(r["agent"]), int(r["frame"])): r for r in rows}
-            starts = sorted(rng.choice(frames[1:-H], min(args.starts, len(frames) - H - 1), replace=False))
-            passes = [([(int(f0), None) for f0 in starts], err)]
-            if (nd, k) in dem:                              # the demo agents, from every DEMO_STRIDE-th frame
-                ds = sorted((f0, a) for a, fa, fb in dem[(nd, k)] for f0 in range(max(1, fa), fb, DEMO_STRIDE))
-                passes.append((ds, err_demo))
+            if (nd, k) in dem:
                 demo_waves.append(f"{lv} ({os.path.basename(os.path.dirname(nd))} wave {k})")
-            for pts, sink in passes:
-                roll_starts(pts, sink, geom, wf, frames, by, H, models, args.frames)
             waves += 1
             levels.add(lv)
             print(f"{d} wave {k} ({lv}) done", flush=True)
@@ -135,6 +123,47 @@ def main():
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fo:
             fo.write(text + "\n")
+
+
+def roll_wave(d, lv, rows, world, geoms, rng, n_starts, err, models, horizons, demos=None, err_demo=None) -> bool:
+    """One wave: n_starts random start frames (every agent alive there) into err, and the demo agents
+    [(agent, first frame, last frame)] from every DEMO_STRIDE-th frame into err_demo. False: the wave is too short."""
+    H = max(horizons)
+    wf = {w["f"]: w for w in world}
+    frames = sorted(wf)
+    if len(frames) < H + 2:
+        return False
+    if lv not in geoms:
+        geoms[lv] = LevelGeom(*load_level(d, lv))
+    geom = geoms[lv]
+    by = {(int(r["agent"]), int(r["frame"])): r for r in rows}
+    starts = sorted(rng.choice(frames[1:-H], min(n_starts, len(frames) - H - 1), replace=False))
+    passes = [([(int(f0), None) for f0 in starts], err)]
+    if demos:                                           # the demo agents, from every DEMO_STRIDE-th frame
+        passes.append((sorted((f0, a) for a, fa, fb in demos for f0 in range(max(1, fa), fb, DEMO_STRIDE)),
+                       err_demo))
+    for pts, sink in passes:
+        roll_starts(pts, sink, geom, wf, frames, by, H, models, horizons)
+    return True
+
+
+def wave_errors(models: list, waves: list, horizons=(16, 48), starts: int = 10, seed: int = 0) -> list:
+    """The open-loop errors of each model on these waves [(wm_data folder, shard index)] (wm.learner's fixed
+    evaluation): [{horizon: [errors]}] per model, the same metric as main."""
+    rng = np.random.default_rng(seed)
+    err = [{h: [] for h in horizons} for _ in models]
+    want = {}
+    for d, k in waves:
+        want.setdefault(d, set()).add(int(k))
+    with torch.no_grad():
+        for d, ks in want.items():
+            geoms = {}
+            for k, p in enumerate(shard_files(d)):
+                if k not in ks:
+                    continue
+                meta, rows, world = load_shard(p, k)
+                roll_wave(d, meta.get("level"), rows, world, geoms, rng, starts, err, models, list(horizons))
+    return err
 
 
 def roll_starts(pts, err, geom, wf, frames, by, H, models, horizons):

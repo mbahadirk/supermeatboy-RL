@@ -168,9 +168,14 @@ def replay_demos(data: list) -> dict:
     return out
 
 
-def all_demos(path: str | None, data: list) -> dict:
-    """recorded.json demos (load_demos) plus the replay folders' demo agents (replay_demos)."""
-    out = load_demos(path, data) if path else {}
+def all_demos(paths, data: list) -> dict:
+    """The demos of recorded.json-form files (load_demos; one path or a list: wm.learner adds the agent's own
+    runs/demos/self.json) plus the replay folders' demo agents (replay_demos)."""
+    out = {}
+    for path in ([paths] if isinstance(paths, str) else list(paths or [])):
+        for k, sh in load_demos(path, data).items():
+            for i, v in sh.items():
+                out.setdefault(k, {}).setdefault(i, []).extend(v)
     rep = replay_demos(data)
     for k, sh in rep.items():
         for i, v in sh.items():

@@ -175,11 +175,19 @@ def load_shards(d: str, level: str | None = None):
         meta = json.loads(str(z["meta"]))
         if level and meta.get("level") != level:
             continue
-        wp = p[:-4] + "_world.json.gz"
-        world = json.load(gzip.open(wp, "rt", encoding="utf-8")) if os.path.exists(wp) else []
-        rows = z["rows"].copy()
+        yield load_shard(p, k, z, meta)
+
+
+def load_shard(p: str, k: int | None = None, z=None, meta=None):
+    """(meta, rows, world frames) of one shard file; k: its index in its folder (the rows' "wave", load_shards)."""
+    z = np.load(p) if z is None else z
+    meta = json.loads(str(z["meta"])) if meta is None else meta
+    wp = p[:-4] + "_world.json.gz"
+    world = json.load(gzip.open(wp, "rt", encoding="utf-8")) if os.path.exists(wp) else []
+    rows = z["rows"].copy()
+    if k is not None:
         rows["wave"] = k                     # one number per shard (older data stored the game's wave count)
-        yield meta, rows, world
+    return meta, rows, world
 
 
 def load_level(d: str, name: str):
