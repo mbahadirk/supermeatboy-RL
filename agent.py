@@ -7,8 +7,13 @@ Start the game, enter a level, then from the project root:
 
 Same game side as realgame.py (realgame.js unchanged, the time step always locked): every agent is a real Meat
 Boy; waves start together, one life each, and end when all are dead or finished, when --end-after agents have
-finished, or after --wave-seconds. Agents 0..--agents-1 are planned; --explore K more agents play sticky random
-actions mixed with random chains of library moves (plan/moves.py), only for world-model data.
+finished, or after --wave-seconds. Agents 0..--agents-1 are planned; --explore K more agents, for world-model
+data: with planning modes on (--modes, default) each plans every 16 frames with Planner.explore (members 3 and 4;
+the safe plan they disagree on most), with --modes off (or without a planned agent, so without a model) they play
+sticky random actions mixed with random chains of library moves (plan/moves.py).
+World model: runs/wm_step4 by default (4 frames per model step; --model runs/wm_locked/wm_model.pt for the 1-frame
+one). Planning modes (plan/planner.py): long-safe (member 0), normal (member 1), reflex (member 2, also on the
+commit "danger" trigger); agent 0's chosen path is drawn in the game in its mode's colour (MODE_COL).
 
 Per level: game.level.Level (with the camera-bounds kill box), hazard boxes with their measured kill reach,
 sealed pockets, the progress field V (plan/progress.py, cells outside the kill box closed), mpc.future.FutureWorld

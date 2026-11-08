@@ -542,6 +542,29 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
   falls out of the 1-14 pit are not predicted; after the speed work (7.6) a decision takes 142-175 ms median at
   the 120 ms budget, the completion 24-63 ms of it (over 30 ms on 1-14 and 1-11; options in 7.6, not chosen). **Unverified**: everything in the game.
 
+
+### 7.6 Round 3 (2026-11-08): 4-frame world model, planning modes, Ctrl+C (offline only)
+
+- **Ctrl+C** (`shutdown.py`): the first Ctrl+C (or STOP) stops cleanly, every Frida call bounded, then the process
+  leaves with `os._exit` (Frida's exit-time teardown kept it alive; no Python thread did). A second Ctrl+C or no
+  clean stop in 10 s unloads the script (hooks gone, a waiting game thread released; the time-step lock bytes
+  stay patched: the game keeps its fixed step) and exits. Viewer, offline planner, training: Ctrl+C exits at once.
+- **Step-4 world model** (`runs/wm_step4`, `python -m wm.train <14 locked wm_data> --step 4 --sample-frac 0.07
+  --max-samples 1500000`): one step = 4 frames (the 4 actions in, events of the 4 frames out; step and target
+  scale in the model file). Open-loop position error on 249 waves neither model trained on (`wm.compare_steps`),
+  median / 90%, units: +4 0.79/3.56 -> 0.38/2.60, +16 5.99/30.56 -> 3.19/15.71, +48 39.79/166.57 -> 17.95/61.93
+  (wm_locked -> wm_step4; wm_step4 also saw more locked data). **Default** in agent.py and plan/offline.py.
+- **Planner on steps**: horizons in frames (48 / 45 = 12 steps), moves judged at the next step boundary, sweep /
+  contact / guard on step positions, the chosen path interpolated to frames; commit tube at 4, 8, 16 frames.
+  Offline at 120 ms: 220 -> 86 ms per decision (1-14), 210 -> 101 (2-1); 33 -> 13.5 and 31 -> 15.5 ms per frame.
+- **Planning modes** (`--modes on`, default; plan/planner.py docstring): long-safe (member 0, 96 frames, blue),
+  normal (member 1, green), reflex (member 2, red), explore agents on members 3 and 4 (purple, every 16 frames).
+  Closed loops (9 starts on 1-13, 1-8, 1-14, 300 frames, no deadlines; the world is wm_locked member 0): 343ad35
+  2 finished, 0 died, switch rate 0.20, 317 ms per decision; now 3 finished, 0 died, 0.27, 106 ms; chosen modes
+  normal 95.1%, long-safe 4.6%, reflex 0.3%. Long-safe costs about 73 ms when it runs (no deadline: those
+  decisions take about 163 ms); an explore agent about 30-36 ms per decision, 1.9-2.3 ms per game frame each.
+- **Unverified**: everything in the game (no run with the game since).
+
 ---
 
 ## 8. Results so far (measured)

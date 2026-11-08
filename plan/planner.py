@@ -2,6 +2,36 @@
 movement, geometric safety for death, the progress field for progress, and a Plan that records what it
 predicts and why it was chosen (plan/explain.py). No policy network, no PPO, no learned value.
 
+World model step (wm/model.py step, read from the model file): the default model (runs/wm_step4) predicts 4
+frames per step from the 4 per-frame actions, so a decision runs a quarter of the sequential model steps. Every
+horizon stays in frames (H = 48, completion 45: 12 steps each, rounded up); a move whose length is not a multiple
+of 4 is judged at the next step boundary (Planner.lib_end; its padded frames are the move's last action held);
+the safety sweep, goal / key contact and the collision guard work on the step positions (the swept segment test
+covers the motion between them; hazard boxes at each step's frame); every frame reported (veto, soft risk,
+touches, landings) is a frame. The chosen plan's path is interpolated back to frames (commit tube, overlay,
+viewer); the commit tube is measured at whole steps (4, 8, 16: plan.commit.tube_horizons). A 1-frame model
+(runs/wm_locked) works as before.
+
+Planning modes (Planner(modes=True): agent.py and plan/offline.py --modes on, the default there; off in the
+library and the golden tests). The 5 members are copies of the same physics predictor with roles:
+- LONG-SAFE (member 0, blue): when the agent is supported and its last long-safe plan is older than LONG_EVERY =
+  32 frames or no longer valid, stages 1 and 2 with member 0 to H_LONG = 96 frames (stage 2 rolled from the start:
+  the cost is the steps, not the batch); only candidates with no veto and soft risk <= LONG_RISK = 0.05 qualify;
+  its best (shifted by the frames since) joins the final stage. It stays valid while the final stage finds no
+  veto and soft risk <= 0.05 on it.
+- NORMAL (member 1, green): stages 1 and 2 below, every decision (Planner.member = 1).
+- REFLEX (member 2, red): when the commit "danger" trigger fired (plan(danger=True)) or a deadly box (kill reach
+  included) is within REFLEX_NEAR = 40 units (2 tiles) of the current plan's path in the next 16 frames: the
+  library moves of at most 16 frames with member 2, the least risk (a veto counts 1, else early_risk: frames
+  1..16 by the soft rule), then the best estimate. Its plan is re-scored in the final stage for the record but
+  chosen only by its override: whenever the chosen plan has a veto or any early risk in its first 16 frames.
+- Final stage: all 5 members re-score normal's top S, long-safe's best, the reflex plan and the previous plan as
+  below; the switch rule is unchanged (the reflex plan is not a switch candidate). Plan.mode records the mode
+  that produced the chosen plan (a kept previous plan keeps its mode); counts["modes"], timing long_safe / reflex.
+- EXPLORE (members 3 and 4, purple; Planner.explore, agent.py's --explore agents every EXPLORE_EVERY = 16
+  frames): stage 1 only (73 moves padded to 48 frames) with members 3 and 4; among the plans without a veto the
+  one whose two members' end positions disagree most, ties by estimate.
+
 Search, per decision (Planner.plan):
 1. Stage 1 (one ensemble member): every library move (73, 8 to 24 frames; rolled out as one batch to 24
    frames with its last action held, and judged on its own frames) plus the safety check of those frames.
