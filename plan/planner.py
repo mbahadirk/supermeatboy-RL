@@ -166,6 +166,16 @@ N_ALTERNATIVES = 5
 HAZ_FAR = 300.0                              # wm.features.hazard_features clips offsets and distances here
 FINAL_MS0 = 60.0                             # first guess of the final stage's cost (then measured, averaged)
 COLLIDE_TOL = 1.0                            # units: the collision guard moves imagined bodies overlapping more
+# planning modes (Planner(modes=True), module docstring): the ensemble members' roles
+MEMBERS = {"long-safe": 0, "normal": 1, "reflex": 2, "explore": (3, 4)}
+MODES = ("long-safe", "normal", "reflex", "explore")
+H_LONG = 96                                  # frames: the long-safe horizon
+LONG_EVERY = 32                              # frames: a long-safe plan older than this is searched again (supported)
+LONG_RISK = 0.05                             # soft risk at most this (and no veto) for a long-safe plan
+REFLEX_MAX = 16                              # frames: reflex library moves of at most this
+REFLEX_WINDOW = 16                           # frames of the current plan's path checked for a near hazard
+REFLEX_NEAR = 40.0                           # units beyond the kill reach (2 tiles): a hazard this near is danger
+EXPLORE_EVERY = 16                           # frames between an explore agent's decisions
 CONTACT_EPS = 0.01                           # units: a body put back to contact is this clear of the solid
 
 
@@ -453,6 +463,24 @@ def _verdict(sw: S.Sweep, upto: np.ndarray):
     return veto, veto_frame, veto_kind, veto_id, soft, soft_frame
 
 
+def early_risk(sw: S.Sweep, upto=None) -> np.ndarray:
+    """Risk of frames 1..VETO_FRAMES by plan.safety's soft rule (contact 1, else 1 - clearance / margin(frame),
+    clipped to [0, 1]), max over members and those frames (only frames <= upto (n,) when given): REFLEX's
+    measure, and its override test on the chosen plan."""
+    E, n, K = sw.step_clear.shape
+    fk = sw.frames_of()
+    m = fk <= S.VETO_FRAMES
+    if not m.any():
+        return np.zeros(n)
+    c, ks = sw.step_clear[:, :, m], fk[m]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        r = np.where(c < 0, 1.0, np.clip(1.0 - c / S.margin(ks), 0.0, 1.0))
+    r = np.nan_to_num(r, nan=0.0)
+    if upto is not None:
+        r = np.where(ks[None, None, :] <= np.asarray(upto)[None, :, None], r, 0.0)
+    return r.max(axis=(0, 2))
+
+
 def hit_reason(kind, hid, frame) -> str:
     if kind == S.KIND_OUT:
         return f"out of level at frame {frame}"
@@ -687,13 +715,14 @@ class Planner:
                  branch: int = BRANCH_DEFAULT, S_final: int = S_DEFAULT, budget_ms: float | None = BUDGET_MS,
                  member: int = 0, memory: FailureMemory | None = None, hysteresis: float = 0.0,
                  collide_tol: float | None = COLLIDE_TOL, moves: "MoveMemory | None | str" = "new",
-                 complete_max: int = COMPLETE_MAX):
+                 complete_max: int = COMPLETE_MAX, modes: bool = False):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms
         self.hysteresis = float(hysteresis)          # frames (switch rule); 0: the best total is chosen
         self.collide_tol = collide_tol               # the collision guard's tolerance; None: no guard
         self.complete_max = int(complete_max)        # airborne completion frames (0: none)
-        self.member = member
+        self.modes = bool(modes) and len(self.model.members) >= 5     # long-safe / normal / reflex on own members
+        self.member = MEMBERS["normal"] if self.modes else member
         self.final_ms = FINAL_MS0
         self.f = int(getattr(self.model, "step", 1))   # frames per model step (a step-4 model: 4)
         self.lib = list(LIBRARY)
@@ -709,8 +738,9 @@ class Planner:
 
     @property
     def future_frames(self) -> int:
-        """How many future frames a decision's inputs should cover (worlds; frames + 1): H + completion."""
-        return self.H + self.complete_max
+        """How many future frames a decision's inputs should cover (worlds; frames + 1): H + completion (the
+        long-safe horizon with modes)."""
+        return max(self.H + self.complete_max, H_LONG if self.modes else 0)
 
     # ---- level state -------------------------------------------------------------------------------------
     def set_level(self, level, field: ProgressField, memory: FailureMemory | None = None):
@@ -733,6 +763,7 @@ class Planner:
             self.moves.set_level(getattr(level, "name", None))
         self.surprise = SurpriseTracker()
         self.prev: dict[int, Plan] = {}
+        self.long: dict[int, dict] = {}               # agent -> the last long-safe plan {frame, actions, segs, valid}
 
     def set_field(self, field: ProgressField):
         """A (rebuilt) progress field: also T_support at the spawn (the point-of-no-return charge's scale)."""
@@ -772,6 +803,7 @@ class Planner:
 
     def new_wave(self):
         self.prev = {}
+        self.long = {}                               # agent -> the last long-safe plan {frame, actions, segs, valid}
         self.memory.pending = {}
         if self.moves is not None:
             self.moves.new_wave()
@@ -996,12 +1028,13 @@ class Planner:
         return float(out) if out.ndim == 0 else out
 
     # ---- one decision ------------------------------------------------------------------------------------
-    def plan(self, row, frame: int, worlds: list, frames: list, dt_ms: float = 16.667, agent: int = 0) -> Plan:
+    def plan(self, row, frame: int, worlds: list, frames: list, dt_ms: float = 16.667, agent: int = 0,
+             danger: bool = False) -> Plan:
         """row: the agent's state (wm.buffer.ROW, one row; state_row builds one). worlds: at least H World
         (model inputs, index k = frame + k); frames: H + 1 plan.safety.FrameBoxes (index k = frame + k; index 0
         unused); for the airborne completion they should cover H + complete_max (Planner.future_frames: the
         last given ones are repeated beyond them). Returns the chosen Plan (also kept as this agent's previous
-        plan)."""
+        plan). danger: the commit "danger" trigger fired (REFLEX runs; modes only)."""
         t0 = time.perf_counter()
         f = self.f                                   # frames per model step; arrays are per step (column)
         H = -(-self.H // f) * f                      # frames, whole steps
@@ -1145,6 +1178,64 @@ class Planner:
         t2 = time.perf_counter()
         timing["stage2"] = 1000 * (t2 - t1)
 
+        # ---- modes: long-safe (member 0) and reflex (member 2) candidates ------------------------------------
+        modes3 = ["normal"] * len(final)
+        li = ri = None                               # final indices of the long-safe / reflex candidates
+        ri_new = False
+        if self.modes:
+            pen_first = fail1 + death1
+            tl = time.perf_counter()
+            ls = self.long.get(agent)
+            age = frame - ls["frame"] if ls is not None else None
+            usable = ls is not None and ls["valid"] and 0 <= age < len(ls["actions"]) - 1
+            ran = bool(sup0[0]) and (not usable or age > LONG_EVERY)
+            cl = {"ran": ran}
+            if ran:
+                res, cnt_l = self._long_safe(row, worlds, frames, dt_ms, ck, leg, keys, pen_first, scale)
+                cl.update(cnt_l)
+                if res is not None:
+                    ls = self.long[agent] = {"frame": int(frame), "segs": res[0], "actions": [int(a) for a in res[1]],
+                                             "valid": True}
+                    age, usable = 0, True
+                else:
+                    self.long.pop(agent, None)
+                    usable = False
+            if usable:
+                segs = [(nm, max(0, a - age), min(b - age, H)) for nm, a, b in ls["segs"]
+                        if b - age > 0 and a - age < H and nm != "pad"]
+                acts_l = padded(np.asarray(ls["actions"], np.int64)[age:], H)
+                end = segs[-1][2] if segs else 0
+                if end < H:
+                    segs.append(("pad", end, H))
+                dup = [k for k, (_, a) in enumerate(final) if np.array_equal(a, acts_l)]
+                if dup:
+                    li = dup[0]
+                    modes3[li] = "long-safe"
+                else:
+                    final.append((segs, acts_l))
+                    modes3.append("long-safe")
+                    li = len(final) - 1
+                cl["age"] = int(age)
+            cl["candidate"] = li is not None
+            timing["long_safe"] = 1000 * (time.perf_counter() - tl)
+            tr = time.perf_counter()
+            near = danger or self._danger_near(agent, frame, x0, y0, frames)
+            cr = {"ran": bool(near), "commit_danger": bool(danger)}
+            if near:
+                k, r_risk, r_est = self._reflex(row, worlds, frames, dt_ms, ck, leg, keys, pen_first)
+                L = int(self.lib_len[k])
+                acts_r = padded(self.lib[k].array, H)
+                cr.update(move=self.lib[k].name, risk=round(r_risk, 3), estimate=round(r_est, 1))
+                dup = [c for c, (_, a) in enumerate(final) if np.array_equal(a, acts_r)]
+                if dup:
+                    ri = dup[0]
+                else:
+                    final.append(([(self.lib[k].name, 0, L)] + ([("pad", L, H)] if L < H else []), acts_r))
+                    modes3.append("reflex")
+                    ri, ri_new = len(final) - 1, True
+            timing["reflex"] = 1000 * (time.perf_counter() - tr)
+            counts["modes"] = {"long_safe": cl, "reflex": cr}
+
         # ---- final: re-score with all members and the full check -------------------------------------------
         prev = self.prev.get(agent)
         prev_idx, shift = -1, 0
@@ -1160,6 +1251,7 @@ class Planner:
                 prev_idx = dup[0]
             else:
                 final.append((segs, acts))
+                modes3.append(getattr(prev, "mode", "normal"))
                 prev_idx = len(final) - 1
         n3 = len(final)
         acts3 = np.stack([a for _, a in final])
@@ -1229,7 +1321,24 @@ class Planner:
         total3 = np.where(succ3, success_total(tg3, risk3 + fail3 + death3), total3)
         landing3 = lands | succ3 | np.array([r is not None and r["continuation"] is not None and r["on"] != "air"
                                              for r in comp_rec])
-        best, switch = self.switch_rule(int(np.argmax(total3)), prev_idx, total3, succ3, tg3, saf, soft3)
+        sel = total3
+        if ri_new and ri != prev_idx:                # the reflex plan is chosen only by its override
+            sel = total3.copy()
+            sel[ri] = -np.inf
+        best, switch = self.switch_rule(int(np.argmax(sel)), prev_idx, sel, succ3, tg3, saf, soft3)
+        mode = getattr(prev, "mode", "normal") if best == prev_idx else modes3[best]
+        if ri is not None:
+            er = early_risk(saf.sweep)
+            if saf.veto[best] or er[best] > 0:       # REFLEX overrides a chosen plan with early danger
+                why = (f"vetoed f{int(saf.veto_frame[best])}" if saf.veto[best] else f"early risk {er[best]:.2f}")
+                switch = {"kept": False, "gain": None, "margin": None, "unit": "frames",
+                          "reason": f"reflex override: the chosen plan was {why}"}
+                best, mode = ri, "reflex"
+            counts["modes"]["reflex"]["override"] = mode == "reflex"
+        if li is not None and (saf.veto[li] or soft3[li] > LONG_RISK):
+            self.long[agent]["valid"] = False        # no longer valid: searched again when supported
+        if self.modes:
+            counts["modes"]["candidates"] = modes3
         safe_alts = int(sum(1 for c in range(n3) if c != best and not saf.veto[c] and saf.soft_risk[c] < SAFE_RISK
                             and landing3[c]))
         self.last_final = {"estimate": est3, "veto": saf.veto, "soft": soft3, "landing": landing3, "completion": comp_rec,
@@ -1308,7 +1417,7 @@ class Planner:
             timing={**{k: round(v, 2) for k, v in timing.items()}, "total": round(1000 * (time.perf_counter() - t0), 2)},
             counts=counts, segments=[[nm, int(a), int(b)] for nm, a, b in segs], switch=switch,
             model_clipped=None if out3["clip"] is None else int(out3["clip"][:, best].any(0).sum()),
-            completion=completion)
+            completion=completion, mode=mode)
         plan.first_move_frames = int(first_frames)
         self.prev[agent] = plan
         if not plan.from_prev:                       # a kept plan keeps the predictions of its adoption
@@ -1320,6 +1429,164 @@ class Planner:
             vm = self.value(np.array([mx[first_frames]]), np.array([my[first_frames]]), keys)[0][0]
             self.memory.expect(agent, frame, plan.chosen[0], first_frames, acts, cell0, v0, float(vm))
         return plan
+
+    # ---- planning modes -----------------------------------------------------------------------------------
+    def _judge(self, out, frames, upto, leg, keys):
+        """Sweep, goal / key contact and the decision rule for an imagine() result (any members) judged on
+        frames 1..upto (n,): {veto, veto_frame, soft, succ, tg, tend (T at the end, members' mean, dead ends
+        charged), sweep}. A success: every member touches the goal before any deadly contact."""
+        f = self.f
+        x, y = out["x"], out["y"]
+        E, n, K1 = x.shape
+        fr = _near_frames(_cols(frames, K1, f), x, y)
+        sw = S.sweep(x, y, fr, self.bounds, self.floor, f)
+        tg_e, legs_e, _ = self._contacts(x, y, upto, sw.contact_frame, leg)
+        succ = (tg_e > 0).all(0)
+        tg = np.where(succ, tg_e.max(0), -1)
+        veto, vf, _, _, soft, _ = _verdict(sw, np.where(succ, np.minimum(upto, tg), upto))
+        uc = np.asarray(upto) // f
+        ar = np.arange(n)
+        xe, ye, vye = x[:, ar, uc], y[:, ar, uc], out["vy"][:, ar, uc]
+        tend = self._tt(self.time_to_go(xe, ye, keys, legs_e, vye)[0]).mean(0)
+        return {"veto": veto, "veto_frame": vf, "soft": soft, "succ": succ, "tg": tg, "tend": tend, "sweep": sw}
+
+    def _long_safe(self, row, worlds, frames, dt_ms, ck, leg, keys, pen_first, scale):
+        """LONG-SAFE (member 0): stage 1 (every library move on its own frames) and stage 2 (from the best
+        B1 qualifying first moves, the second moves padded to H_LONG, rolled from the start: the cost is
+        the number of steps, not the batch) with member 0. Only candidates with no veto and soft risk <=
+        LONG_RISK qualify; the best estimate (successes first) is returned as (segments, actions of H_LONG
+        frames, estimate, soft risk), or None when none qualifies; and the counts."""
+        f = self.f
+        HL = -(-H_LONG // f) * f
+        mem = slice(MEMBERS["long-safe"], MEMBERS["long-safe"] + 1)
+        n1 = len(self.lib)
+        out1 = imagine(self.model, mem, self.geom, np.repeat(row, n1), self.lib_actions, dt_ms, worlds, **ck)
+        j1 = self._judge(out1, frames, self.lib_end, leg, keys)
+        est1 = self.lib_end + j1["tend"] + scale * j1["soft"] + pen_first
+        ok1 = ~j1["veto"] & (j1["soft"] <= LONG_RISK)
+        key1 = np.where(j1["succ"], SUCCESS_SCORE - j1["tg"], -est1)
+        firsts = [int(i) for i in np.argsort(-key1, kind="stable") if ok1[i]][:self.B1]
+        cnt = {"stage1_qualified": int(ok1.sum()), "candidates": 0, "qualified": 0}
+        if not firsts:
+            return None, cnt
+        seconds = [BY_NAME[nm] for nm in CORE_SECOND]
+        for i in firsts:
+            if len(seconds) >= self.branch:
+                break
+            if self.lib[i].name not in CORE_SECOND:
+                seconds.append(self.lib[i])
+        cands, acts = [], []
+        for i in firsts:
+            L0, L = int(self.lib_len[i]), int(self.lib_end[i])
+            first = self.lib[i].array if L == L0 else padded(self.lib[i].array, L)
+            for sm in seconds[:self.branch]:
+                L2 = min(HL, L + len(sm))
+                cands.append(([(self.lib[i].name, 0, L0)] + ([("pad", L0, L)] if L > L0 else []) + [(sm.name, L, L2)]
+                              + ([("pad", L2, HL)] if L2 < HL else []), i))
+                acts.append(padded(np.concatenate([first, sm.array]), HL))
+        acts = np.stack(acts)
+        out2 = imagine(self.model, mem, self.geom, np.repeat(row, len(acts)), acts, dt_ms, worlds, **ck)
+        up = np.full(len(acts), HL, np.int64)
+        j2 = self._judge(out2, frames, up, leg, keys)
+        est2 = HL + j2["tend"] + scale * j2["soft"] + pen_first[[i for _, i in cands]]
+        ok2 = ~j2["veto"] & (j2["soft"] <= LONG_RISK)
+        cnt.update(candidates=len(acts), qualified=int(ok2.sum()))
+        if not ok2.any():
+            return None, cnt
+        key2 = np.where(j2["succ"], SUCCESS_SCORE - j2["tg"], -est2)
+        b = int(np.argmax(np.where(ok2, key2, -np.inf)))
+        return (cands[b][0], acts[b], float(est2[b]), float(j2["soft"][b])), cnt
+
+    def _danger_near(self, agent: int, frame: int, x0: float, y0: float, frames) -> bool:
+        """REFLEX's trigger besides the commit "danger" one: a deadly box (its measured kill reach included)
+        within REFLEX_NEAR units of the current plan's path (its own predicted path, shifted to now; without
+        one, the agent's position) in the next REFLEX_WINDOW frames."""
+        prev = self.prev.get(agent)
+        pts = [[x0, y0]]
+        if prev is not None and 0 <= frame - prev.frame < len(prev.path):
+            k0 = frame - prev.frame
+            pts += [list(q) for q in prev.path[k0 + 1:k0 + REFLEX_WINDOW + 1]]
+        pts += [pts[-1]] * (REFLEX_WINDOW + 1 - len(pts))
+        p = np.asarray(pts, np.float64)
+        for k in range(1, REFLEX_WINDOW + 1):
+            fb = frames[min(k, len(frames) - 1)]
+            if fb is None or not len(fb):
+                continue
+            clear, _ = S.segment_clearance(p[k - 1:k, 0], p[k - 1:k, 1], p[k:k + 1, 0], p[k:k + 1, 1], fb)
+            if clear.size and float(clear.min()) < REFLEX_NEAR:
+                return True
+        return False
+
+    def _reflex(self, row, worlds, frames, dt_ms, ck, leg, keys, pen_first):
+        """REFLEX (member 2): the library moves of at most REFLEX_MAX frames on their own frames; the least
+        risk (a veto counts 1, else early_risk: frames 1..16 by the soft rule), then the best estimate.
+        Returns (library index, its risk, its estimate)."""
+        idx = np.nonzero(self.lib_len <= REFLEX_MAX)[0]
+        mem = slice(MEMBERS["reflex"], MEMBERS["reflex"] + 1)
+        acts = self.lib_actions[idx][:, :REFLEX_MAX]
+        upto = self.lib_end[idx]
+        out = imagine(self.model, mem, self.geom, np.repeat(row, len(idx)), acts, dt_ms, worlds, **ck)
+        j = self._judge(out, frames, upto, leg, keys)
+        risk = np.where(j["veto"], 1.0, early_risk(j["sweep"], upto))
+        est = upto + j["tend"] + pen_first[idx]
+        b = int(np.lexsort((est, risk, j["veto"]))[0])
+        return int(idx[b]), float(risk[b]), float(est[b])
+
+    def explore(self, row, frame: int, worlds: list, frames: list, dt_ms: float = 16.667, agent: int = 0) -> Plan:
+        """EXPLORE (members 3 and 4): stage 1 only, every library move padded to H frames (last action held),
+        rolled with members 3 and 4; among the plans without a veto, the one whose two members' end positions
+        disagree most (the most informative for the model), ties by estimate (all vetoed: the latest veto).
+        Returns a Plan with mode "explore" (no previous plan, memories or surprise tracking)."""
+        t0 = time.perf_counter()
+        f = self.f
+        H = -(-self.H // f) * f
+        row = np.asarray(row, ROW).reshape(1)
+        x0, y0, keys = float(row["x"][0]), float(row["y"][0]), int(row["keys"][0])
+        vy0 = np.array([float(row["vy"][0]) * dt_ms / 1000.0])
+        t0a, sup0, g0, side0, leg = self.time_to_go(np.array([x0]), np.array([y0]), keys, vy=vy0)
+        T0 = float(t0a[0])
+        self._dead_t = T0 + DEAD_END_FRAMES if math.isfinite(T0) else DEAD_FAR
+        if getattr(self, "_explore_acts", None) is None or self._explore_acts.shape[1] != H:
+            self._explore_acts = np.stack([padded(m.array, H) for m in self.lib])
+        acts = self._explore_acts
+        n = len(acts)
+        E_all = len(self.model.members)
+        a, b = MEMBERS["explore"]
+        mem = slice(min(a, E_all - 2), min(b, E_all - 1) + 1)
+        ck = {"terrain": self.guard_terrain(keys), "tol": self.collide_tol}
+        out = imagine(self.model, mem, self.geom, np.repeat(row, n), acts, dt_ms, worlds, **ck)
+        up = np.full(n, H, np.int64)
+        j = self._judge(out, frames, up, leg, keys)
+        x, y = out["x"], out["y"]
+        dis = np.hypot(x[0, :, -1] - x[-1, :, -1], y[0, :, -1] - y[-1, :, -1])
+        est = H + j["tend"]
+        if (~j["veto"]).any():
+            c = int(np.lexsort((est, -dis, j["veto"]))[0])
+        else:
+            c = int(np.lexsort((est, -j["veto_frame"]))[0])
+        Hc = H // f
+        mx, my = x[:, c].mean(0), y[:, c].mean(0)
+        if f > 1:
+            mx, my = (np.interp(np.arange(H + 1), np.arange(Hc + 1) * f, v) for v in (mx, my))
+        name = self.lib[c].name
+        L = int(self.lib_len[c])
+        ms = 1000 * (time.perf_counter() - t0)
+        veto = None
+        if j["veto"][c]:
+            veto = {"frame": int(j["veto_frame"][c]), "id": None, "kind": "explore"}
+        return Plan(
+            frame=int(frame), agent=int(agent),
+            state={"x": x0, "y": y0, "vx": float(row["vx"][0]), "vy": float(row["vy"][0]), "keys": keys,
+                   "supported": bool(sup0[0])},
+            chosen=[name], actions=[int(v) for v in acts[c]], pad=H - L, from_prev=False,
+            path=[[float(p), float(q)] for p, q in zip(mx, my)], spread=[], landings=[], wall_jumps=[], nearest=[],
+            veto=veto, soft_risk=float(j["soft"][c]), soft_frame=-1,
+            score={"estimate": float(est[c]), "disagreement": float(dis[c]),
+                   "t_start": T0 if math.isfinite(T0) else None},
+            v_start=None, v_end=None, dead_end_members=0, leg=int(leg), end_supported=False, alternatives=[],
+            predictions={}, death_model=0.0, timing={"explore": round(ms, 2), "total": round(ms, 2)},
+            counts={"explore": {"candidates": n, "members": mem.stop - mem.start, "vetoed": int(j["veto"].sum())}},
+            segments=[[name, 0, L]] + ([["pad", L, H]] if L < H else []), first_move_frames=L, mode="explore")
 
     def switch_rule(self, best: int, p: int, total3, succ3, tg3, saf, soft=None):
         """The switch rule (module docstring) between the shifted previous plan (final index p, -1 none) and

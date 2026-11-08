@@ -39,7 +39,8 @@ def old_mode_run(tmp: str, extra=(), tol="default") -> dict:
                 kw["collide_tol"] = tol
             super().__init__(*a, **kw)
     args = agent.build_parser().parse_args(
-        ["--agents", "2", "--replan", "2", "--budget-ms", "60", "--model", MODEL, "--name", os.path.join(tmp, "run"),
+        ["--agents", "2", "--replan", "2", "--budget-ms", "60", "--model", MODEL, "--modes", "off",   # the old runner
+         "--name", os.path.join(tmp, "run"),
          "--death-memory", os.path.join(tmp, "deaths.json"), "--move-memory", os.path.join(tmp, "moves.json"), "--telemetry", "off", "--threads", "1",
          "--best-times", os.path.join(tmp, "best_times.json"), *extra])
     old_planner = agent.Planner

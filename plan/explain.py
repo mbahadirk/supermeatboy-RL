@@ -119,6 +119,7 @@ class Plan:
     switch: dict | None = None
     model_clipped: int | None = None
     completion: dict | None = None
+    mode: str = "normal"                              # the planning mode that produced it (plan/planner.py MODES)
 
     @property
     def name(self) -> str:

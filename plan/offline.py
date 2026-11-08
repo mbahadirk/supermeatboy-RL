@@ -50,7 +50,7 @@ def waves_of(d: str, level: str):
             yield z["rows"].copy(), json.load(gzip.open(p[:-4] + "_world.json.gz", "rt", encoding="utf-8"))
 
 
-def build(d: str, level: str, model: str, budget: float, collide_tol="default"):
+def build(d: str, level: str, model: str, budget: float, collide_tol="default", modes: bool = False):
     """(Level, ProgressField, Planner, reference wave world, current wave rows, current wave world).
     collide_tol: the planner's collision guard tolerance (default plan.planner.COLLIDE_TOL; None: no guard)."""
     gen = waves_of(d, level)
@@ -60,14 +60,14 @@ def build(d: str, level: str, model: str, budget: float, collide_tol="default"):
     inp = planner_inputs(level_from_data(d, level), ref_world)
     field = ProgressField(lv.words0, lv.ox, lv.oy, lv.spawn, lv.goals, inp["hazards"], inp["sweeps"], inp["keys"],
                           inp["bandages"], inp["portals"], lift=inp["lift"], blocks=inp["blocks"], doors=inp["doors"])
-    planner = Planner(model, lv, field, budget_ms=budget,
+    planner = Planner(model, lv, field, budget_ms=budget, modes=modes,
                       **({} if collide_tol == "default" else {"collide_tol": collide_tol}))
     return lv, field, planner, ref_world, rows, world
 
 
 def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int = 8, tube: float = 1.5,
                 triggers: bool = True, hysteresis: float = HYSTERESIS_FRAMES, budget: float | None = 120.0, start: int = 0,
-                agent: int | None = None, log=None, world_model: str | None = None) -> dict:
+                agent: int | None = None, log=None, world_model: str | None = None, modes: bool = False) -> dict:
     """The world model plays itself: ensemble member 0 stands in for the game for one level (NOT the game).
 
     From a recorded agent's state at wave frame `start` of the level's second recorded wave (agent: a planned
@@ -84,7 +84,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
     from plan import safety as S
     from plan.commit import Committer, kind_of
     from plan.planner import imagine
-    lv, field, planner, ref_world, rows, world = build(d, level, model, budget)
+    lv, field, planner, ref_world, rows, world = build(d, level, model, budget, modes=modes)
     planner.hysteresis = float(hysteresis)
     from wm.model import WorldModel
     env = (planner.model if planner.f == 1 and world_model is None else
@@ -142,7 +142,8 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
         check_s += time.perf_counter() - t
         if trig:
             fut["w"], fut["fb"], _ = future_inputs(fw, f, planner.future_frames, dt, lv.name)
-            cur = planner.plan(s, f, fut["w"], fut["fb"], dt, agent=0)
+            cur = planner.plan(s, f, fut["w"], fut["fb"], dt, agent=0,
+                               danger=any(kind_of(t) == "danger" for t in trig))
             com.decided(0, cur, f, fut["fb"], planner)
             plan_ms += cur.timing["total"]
             p = cur.to_dict()
@@ -197,7 +198,11 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
            "plan_ms_per_frame": round(plan_ms / n_frames, 2), "check_ms_per_frame": round(1000 * check_s / n_frames, 3),
            "triggers": dict(sorted(trig.items(), key=lambda kv: -kv[1])),
            "v_start": plans[0]["v_start"] if plans else None, "v_end": round(v1, 2) if math.isfinite(v1) else None,
-           "completed": sum(1 for p in plans if p.get("completion")), "events": events, "plans": plans}
+           "completed": sum(1 for p in plans if p.get("completion")), "events": events, "plans": plans,
+           "modes": {m: sum(1 for p in plans if p.get("mode", "normal") == m) for m in
+                     sorted({p.get("mode", "normal") for p in plans})},
+           "ms_median": round(float(np.median([p["timing"]["total"] for p in plans])), 1) if plans else None,
+           "ms_p90": round(float(np.percentile([p["timing"]["total"] for p in plans], 90)), 1) if plans else None}
     if log:
         log(closed_loop_text(res))
     return res
@@ -214,7 +219,8 @@ def closed_loop_text(r: dict) -> str:
             f"(switched {r['switched']}, kept {r['kept']}), committed plans followed {f(r['committed_followed_median'], '.0f')}"
             f" frames (median, n {r['committed']}), planning {f(r['plan_ms_per_frame'], '.1f')} ms per game frame "
             f"(+checks {f(r['check_ms_per_frame'], '.2f')}); V {f(r['v_start'], '.1f')} -> {f(r['v_end'], '.1f')}; "
-            f"triggers {r['triggers']}")
+            f"triggers {r['triggers']}; modes {r.get('modes')}, {f(r.get('ms_median'), '.0f')} ms per decision "
+            f"median ({f(r.get('ms_p90'), '.0f')} 90%)")
 
 
 def main():
@@ -231,6 +237,9 @@ def main():
     ap.add_argument("--hysteresis", type=float, default=HYSTERESIS_FRAMES,
                     help=f"closed loop: as agent.py --hysteresis, frames (default {HYSTERESIS_FRAMES:g})")
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--modes", choices=("on", "off"), default="on",
+                    help="planning modes: long-safe, normal and reflex on their own members (plan/planner.py; "
+                         "default on)")
     ap.add_argument("--world-model", default=None,
                     help="closed loop: the 1-frame model standing in for the game (default --model if it steps 1 "
                          "frame, else runs/wm_locked/wm_model.pt)")
@@ -248,7 +257,8 @@ def main():
                      {"replan": args.replan, "tube": args.tube, "triggers": args.triggers == "on",
                       "hysteresis": args.hysteresis}):
             r = closed_loop(args.data, args.level, args.model, args.closed_loop, budget=args.budget, start=args.start,
-                            log=lambda t: print(t, flush=True), world_model=args.world_model, **mode)
+                            log=lambda t: print(t, flush=True), world_model=args.world_model,
+                            modes=args.modes == "on", **mode)
             out.append(r)
         if args.json:
             with open(args.json, "w", encoding="utf-8") as f:
@@ -256,7 +266,8 @@ def main():
                     f.write(json.dumps({k: v for k, v in r.items() if k != "plans"}) + "\n")
         return
     t0 = time.time()
-    lv, field, planner, ref_world, rows, world = build(args.data, args.level, args.model, args.budget)
+    lv, field, planner, ref_world, rows, world = build(args.data, args.level, args.model, args.budget,
+                                                       modes=args.modes == "on")
     print(f"{args.level}: V field {field.summary()}; setup {time.time() - t0:.1f} s; model {args.model}")
     fw = FutureWorld()
     fw.new_level()
