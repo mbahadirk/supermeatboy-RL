@@ -1,7 +1,7 @@
 """Run the beam planner (plan/planner.py) on recorded states, no game: what it picks, why, and what a decision
 costs.
 
-    python -m plan.offline <run>/wm_data --level 4-6 [--decisions 20] [--model runs/wm_locked/wm_model.pt]
+    python -m plan.offline <run>/wm_data --level 4-6 [--decisions 20] [--model runs/wm_step4/wm_model.pt]
                            [--budget 120] [--threads 2] [--seed 0] [--json plans.jsonl]
     python -m plan.offline runs/plan_20261103-152013/wm_data --level 1-12 --closed-loop 400 [--start 0]
                            [--replan 8] [--tube 1.5] [--triggers on] [--hysteresis 16] [--json summary.jsonl]
@@ -39,7 +39,8 @@ from plan.measure_progress import level_from_data, planner_inputs          # noq
 from plan.planner import HYSTERESIS_FRAMES, Planner, future_inputs, state_row   # noqa: E402
 from plan.progress import ProgressField                                    # noqa: E402
 
-DEFAULT_MODEL = os.path.join(HERE, "runs", "wm_locked", "wm_model.pt")
+DEFAULT_MODEL = os.path.join(HERE, "runs", "wm_step4", "wm_model.pt")
+WORLD_MODEL = os.path.join(HERE, "runs", "wm_locked", "wm_model.pt")    # the closed loop's 1-frame world
 
 
 def waves_of(d: str, level: str):
@@ -79,7 +80,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
     recorded boxes and the level's edge), the goal and keys by their contact boxes. Not modelled: tile changes
     (crumbling blocks stay), the model's own death and finish heads. Returns the numbers and the plan dicts.
     world_model: the 1-frame model that stands in for the game (default: the planner's own model when it steps
-    1 frame, else DEFAULT_MODEL: a step-4 planner model cannot advance the world one frame)."""
+    1 frame, else WORLD_MODEL: a step-4 planner model cannot advance the world one frame)."""
     from plan import safety as S
     from plan.commit import Committer, kind_of
     from plan.planner import imagine
@@ -87,7 +88,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
     planner.hysteresis = float(hysteresis)
     from wm.model import WorldModel
     env = (planner.model if planner.f == 1 and world_model is None else
-           WorldModel.load(world_model or DEFAULT_MODEL).eval())
+           WorldModel.load(world_model or WORLD_MODEL).eval())
     if env.step != 1:
         raise SystemExit("the closed loop's world needs a 1-frame model (--world-model)")
     com = Committer(replan, tube, triggers, step=planner.f)

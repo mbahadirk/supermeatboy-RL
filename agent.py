@@ -91,7 +91,7 @@ JS = os.path.join(HERE, "realgame.js")
 GAME_EXE = "SuperMeatBoy.exe"
 MAX_AGENTS = 200                 # realgame.py: the game's 40 spare Meat Boys, more built at the level load
 GAME_POOL = 40
-DEFAULT_MODEL = os.path.join("runs", "wm_locked", "wm_model.pt")
+DEFAULT_MODEL = os.path.join("runs", "wm_step4", "wm_model.pt")      # 4 frames per step (wm.train --step 4)
 DEFAULT_DEATHS = os.path.join(HERE, "death_memory.json")
 DEFAULT_MOVES = os.path.join(HERE, "move_memory.json")
 DEFAULT_BEST = os.path.join(HERE, "best_times.json")
@@ -1222,7 +1222,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="replan on triggers (start, interval, move end, surprise, support, danger, short, missed: "
                          "plan/commit.py) or only every --replan frames (off) (default on)")
     ap.add_argument("--budget-ms", type=float, default=120.0, help="planner time budget per decision (default 120)")
-    ap.add_argument("--model", default=DEFAULT_MODEL, help="world model (default runs/wm_locked/wm_model.pt)")
+    ap.add_argument("--model", default=DEFAULT_MODEL, help="world model (default runs/wm_step4/wm_model.pt, 4 frames per step; the 1-frame "
+                         "runs/wm_locked/wm_model.pt works too)")
     ap.add_argument("--name", default=None, help="run folder under runs/ (default plan_<time>)")
     ap.add_argument("--wm-collect", action="store_true", help="save world-model data to runs/<name>/wm_data")
     ap.add_argument("--no-overlay", action="store_true", help="do not draw the plan in the game")
