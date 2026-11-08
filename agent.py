@@ -114,6 +114,8 @@ DEFAULT_MODEL = os.path.join("runs", "wm_step4", "wm_model.pt")      # 4 frames 
 DEFAULT_DEATHS = os.path.join(HERE, "death_memory.json")
 DEFAULT_MOVES = os.path.join(HERE, "move_memory.json")
 DEFAULT_BEST = os.path.join(HERE, "best_times.json")
+LIVE_DIR = os.path.join(HERE, "runs", "wm_live")       # --learn: wm.learner's published model and log
+SELF_DEMOS = os.path.join(HERE, "runs", "demos", "self.json")   # --learn: the planned agents' new bests as demos
 BACKUPS = os.path.join(HERE, "backups")         # S: the game's save is copied here once per run before a time write
 SAVE_FILE = os.path.join("UserData", "savegame.dat")   # next to the game's executable
 FIELD_REBUILDS = 4               # progress field rebuilds per level (between waves)
@@ -423,6 +425,9 @@ class Runner:
             path = args.model if os.path.exists(args.model) else os.path.join(HERE, args.model)
             self.model = WorldModel.load(path).eval()
             self.model_path = path
+        self.learn = bool(getattr(args, "learn", False)) and self.model is not None
+        self.learner = None                     # --learn: the wm.learner child process
+        self.live_mtime = os.path.getmtime(self.model_path) if self.model is not None else 0.0
         self.commit = Committer(self.replan, args.tube, args.triggers == "on",
                                 step=getattr(self.model, "step", 1) if self.model is not None else 1)
         self.deaths_path = args.death_memory
@@ -502,6 +507,7 @@ class Runner:
 
     # ---- level / waves ---------------------------------------------------------------------------------------
     def new_wave(self, n: int):
+        self.wave_shard = self.wm.n_shards if self.wm is not None else None   # this wave's shard number
         self.alive = [True] * n
         self.held = [0] * n
         self.prev_xy = [None] * n
@@ -931,6 +937,8 @@ class Runner:
             self.new_best |= new
             if new:
                 self.post_best(lv)
+                if self.learn and self.wm is not None and not self.protected:
+                    self.add_self_demo(i, int(finish_frame), lv, seconds)
             best = self.best.best(lv, "planned") if lv is not None else None
             self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds,
                        dt_ms=rec["dt_ms"], lock=self.lock, best=float(best["seconds"]) if best else None,
@@ -1139,6 +1147,8 @@ class Runner:
         if lv is not None and self.field_dirty and self.rebuilds < FIELD_REBUILDS:
             self.rebuilds += 1
             self.build_field(f"rebuild {self.rebuilds}/{FIELD_REBUILDS}: moving hazards / kill box / platforms")
+        if self.learn:
+            self.load_live()                        # between waves only: a newer published model
         self.new_wave(len(status) if status else len(self.alive))
         self.post_overlay(0, force=True)
         self.flush()
@@ -1239,7 +1249,80 @@ class Runner:
             self.wm.cut("S")                        # the wave in progress is kept as a partial shard
         self.script.post({"type": "finish", "payload": {"time": secs}})
 
+    # ---- train mode (--learn) ---------------------------------------------------------------------------------
+    def add_self_demo(self, i: int, finish_frame: int, lv: str, seconds: float):
+        """A planned agent's new best (lock on, not held-out): its rows of this wave become a demo for wm.learner
+        (runs/demos/self.json, recorded.json's form; the shard is written at the wave end or when the wave is cut)."""
+        from wm.learner import add_self_demo, _rel
+        e = {"wm_data": _rel(self.wm.dir), "shard": f"wave_{self.wave_shard:05d}.npz", "agent": int(i),
+             "frames": [0, finish_frame + 1], "level": lv, "seconds": seconds, "run": self.args.name,
+             "wave": self.wave_no, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        try:
+            n = add_self_demo(e, self.args.self_demos)
+        except OSError as err:
+            print(f"[learn] could not record the self-demo: {err}", flush=True)
+            return
+        print(f"[learn] self-demo {n}: {lv} {seconds:.2f} s (agent {i}, {e['shard']})", flush=True)
+        self.event("self demo", finish_frame, **e)
+
+    def load_live(self):
+        """Between waves: the learner's published model when it is newer than the one in use."""
+        p = os.path.join(self.args.live_dir, "wm_model.pt")
+        try:
+            if not os.path.exists(p) or os.path.getmtime(p) <= self.live_mtime:
+                return
+            mt = os.path.getmtime(p)
+            from wm.model import WorldModel
+            m = WorldModel.load(p).eval()
+        except (OSError, RuntimeError, KeyError, ValueError) as e:
+            print(f"[learn] could not load {p}: {e}", flush=True)
+            return
+        self.live_mtime = mt
+        if m.step != self.model.step or len(m.members) != len(self.model.members):
+            print(f"[learn] {p}: step {m.step} / {len(m.members)} members, the planner has {self.model.step} / "
+                  f"{len(self.model.members)}: not loaded", flush=True)
+            return
+        info = (m.info or {}).get("learner", {})
+        old = (info.get("parent_errors") or {}).get("16", [None])[0]
+        new = (info.get("errors") or {}).get("16", [None])[0]
+        self.model, self.model_path = m, p
+        if self.planner is not None:
+            self.planner.model = m
+        print(f"[learn] model v{info.get('version', '?')} loaded (+16 error {old} -> {new})", flush=True)
+        self.event("learn model", None, version=info.get("version"), err16=[old, new], path=p)
+
+    def start_learner(self):
+        """wm.learner as a child (below-normal priority), from the default model unless --live-dir has a newer one."""
+        import subprocess
+        live = os.path.join(self.args.live_dir, "wm_model.pt")
+        newer = os.path.exists(live) and os.path.getmtime(live) > os.path.getmtime(self.model_path)
+        init = live if newer else self.model_path
+        os.makedirs(self.args.live_dir, exist_ok=True)
+        out = open(os.path.join(self.args.live_dir, "learner_output.txt"), "a", encoding="utf-8")
+        flags = 0x4000 if sys.platform == "win32" else 0          # BELOW_NORMAL_PRIORITY_CLASS
+        self.learner = subprocess.Popen([sys.executable, "-m", "wm.learner", "--init", init, "--out",
+                                         self.args.live_dir, "--self-demos", self.args.self_demos],
+                                        cwd=HERE, stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
+        out.close()
+        print(f"[learn] learner started (pid {self.learner.pid}, from {init}; log "
+              f"{os.path.join(self.args.live_dir, 'learner.log')})", flush=True)
+
+    def stop_learner(self):
+        if self.learner is None:
+            return
+        try:
+            self.learner.terminate()
+            self.learner.wait(5)
+        except Exception:
+            try:
+                self.learner.kill()
+            except Exception:
+                pass
+        print("[learn] learner stopped", flush=True)
+        self.learner = None
+
     def close(self):
+        self.stop_learner()
         if self.wm is not None:
             try:
                 self.wm.cut("stop")                 # Ctrl+C / STOP: the wave in progress is kept (partial)
@@ -1264,6 +1347,8 @@ class Runner:
         if self.pool > GAME_POOL:
             print(f"{self.pool} agents: {self.pool - GAME_POOL} extra Meat Boys are built when a level loads (the level "
                   f"on screen now, if any, has the game's {GAME_POOL}: enter or restart a level for all)", flush=True)
+        if self.learn:
+            self.start_learner()
         cfg = {"agents": self.n_total, "pool": self.pool, "wave_frames": int(self.args.wave_seconds * HZ),
                "finish_frames": 60, "debug": False, "finish_quota": max(0, self.args.end_after), "probe_frames": 0,
                "lock_step": True}
@@ -1347,6 +1432,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "runs/wm_locked/wm_model.pt works too)")
     ap.add_argument("--name", default=None, help="run folder under runs/ (default plan_<time>)")
     ap.add_argument("--wm-collect", action="store_true", help="save world-model data to runs/<name>/wm_data")
+    ap.add_argument("--learn", action="store_true",
+                    help="train mode: wm.learner in the background (published models loaded between waves), new "
+                         "best times recorded as self-demos; turns on --wm-collect")
+    ap.add_argument("--live-dir", default=LIVE_DIR, help="--learn: the learner's folder (default runs/wm_live)")
+    ap.add_argument("--self-demos", default=SELF_DEMOS, help="--learn: self-demo list (default runs/demos/self.json)")
     ap.add_argument("--no-overlay", action="store_true", help="do not draw the plan in the game")
     ap.add_argument("--telemetry", default="127.0.0.1:47800",
                     help="host:port for the live telemetry (viz/telemetry.py), or off (default 127.0.0.1:47800)")
@@ -1395,7 +1485,11 @@ def main():
         raise SystemExit("the planner needs the game's time step locked (it assumes every future step is the game's "
                          "fixed step): run without --no-lock-step")
     if args.demo or args.demo_level:
+        if args.learn:
+            raise SystemExit("--learn needs planned agents: not with --demo / --demo-level")
         setup_demo(args)
+    if args.learn:
+        args.wm_collect = True                      # the learner trains on this run's shards too
     args.name = args.name or time.strftime("plan_%Y%m%d-%H%M%S")
     Runner(args).run()
 

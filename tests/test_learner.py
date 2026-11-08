@@ -1,5 +1,5 @@
-"""Train mode (wm/learner.py, agent.py --learn) with fakes, no game: the learner publishes only models that are
-not worse."""
+"""Train mode (wm/learner.py, agent.py --learn) with fakes, no game: self-demos on new bests only, the learner
+publishes only models that are not worse, and the agent loads a published model only between waves."""
 import json
 import os
 import sys
@@ -24,6 +24,35 @@ def _args(tmp_path, *extra):
          "--death-memory", str(tmp_path / "deaths.json"), "--move-memory", str(tmp_path / "moves.json"),
          "--best-times", str(tmp_path / "best_times.json"), "--self-demos", str(tmp_path / "self.json"),
          "--live-dir", str(tmp_path / "live"), *extra])
+
+
+@need_model
+def test_self_demo_on_a_new_best_only(tmp_path):
+    import agent
+    r = agent.Runner(_args(tmp_path, "--agents", "1", "--explore", "1", "--learn"))
+    r.post_best = lambda lv: None
+    r.level, r.lock, r.protected = types.SimpleNamespace(name="1-12"), True, False
+    sd = lambda: json.load(open(tmp_path / "self.json")) if os.path.exists(tmp_path / "self.json") else []
+    r.on_finish(0, 100, 0.0, 0.0)                                  # a first best: recorded
+    assert [(e["level"], e["shard"], e["agent"], e["frames"]) for e in sd()] == [("1-12", "wave_00000.npz", 0, [0, 101])]
+    assert sd()[0]["wm_data"].endswith("run/wm_data") and sd()[0]["seconds"] == pytest.approx(1.683, abs=1e-3)
+    r.on_finish(0, 120, 0.0, 0.0)                                  # slower: not a best
+    r.on_finish(1, 50, 0.0, 0.0)                                   # an explore agent
+    r.lock = False
+    r.on_finish(0, 60, 0.0, 0.0)                                   # unlocked: no best at all
+    r.lock, r.protected, r.level = True, True, types.SimpleNamespace(name="1-18")
+    r.on_finish(0, 60, 0.0, 0.0)                                   # a held-out level
+    assert len(sd()) == 1
+    r.protected, r.level = False, types.SimpleNamespace(name="1-12")
+    r.on_finish(0, 90, 0.0, 0.0)                                   # faster: recorded
+    assert [e["frames"] for e in sd()] == [[0, 101], [0, 91]]
+    r.close()
+    r2 = agent.Runner(_args(tmp_path / "b", "--agents", "1"))      # without --learn: never
+    r2.post_best = lambda lv: None
+    r2.level, r2.lock, r2.protected = types.SimpleNamespace(name="1-13"), True, False
+    r2.on_finish(0, 30, 0.0, 0.0)
+    assert not os.path.exists(tmp_path / "b" / "self.json")
+    r2.close()
 
 
 def test_learner_publishes_only_when_not_worse(tmp_path, monkeypatch):
@@ -63,3 +92,36 @@ def test_add_self_demo_is_atomic_and_appends(tmp_path):
     p = str(tmp_path / "d" / "self.json")
     assert L.add_self_demo({"level": "1-1"}, p) == 1 and L.add_self_demo({"level": "1-2"}, p) == 2
     assert [e["level"] for e in json.load(open(p))] == ["1-1", "1-2"] and not os.path.exists(p + ".tmp")
+
+
+@need_model
+def test_agent_loads_a_published_model_between_waves_only(tmp_path, capsys):
+    import agent
+    from test_agent import _drive_wave, _FakeScript, need_data
+    if need_data.args[0]:
+        pytest.skip("recorded data not here")
+    from wm.model import WorldModel
+    r = agent.Runner(_args(tmp_path, "--agents", "2", "--replan", "2", "--budget-ms", "60", "--learn"))
+    r.script = _FakeScript()
+    first = r.model
+    m = WorldModel.load(MODEL)
+    os.makedirs(tmp_path / "live")
+    m.save(str(tmp_path / "live" / "wm_model.pt"),
+           {"learner": {"version": 3, "errors": {"16": [3.5, 1, 1]}, "parent_errors": {"16": [4.0, 1, 1]}}})
+    os.utime(tmp_path / "live" / "wm_model.pt", (r.live_mtime + 10, r.live_mtime + 10))
+    during = []
+    on_frame = r.on_frame
+
+    def spy(msg, data=None):
+        during.append((r.model is first, r.planner is None or r.planner.model is first))
+        return on_frame(msg, data)
+    r.on_frame = spy
+    _drive_wave(r)
+    assert during and all(a and b for a, b in during)               # never mid-wave
+    assert r.model is not first and r.planner.model is r.model       # at the wave end
+    assert "[learn] model v3 loaded (+16 error 4.0 -> 3.5)" in capsys.readouterr().out
+    loaded = r.model
+    r.on_message({"type": "send", "payload": {"ev": "wave_end", "wave": 2, "status": [1, 1], "finish": [-1, -1],
+                                              "frame": 3, "why": "done"}}, None)
+    assert r.model is loaded                                         # not again: nothing newer
+    r.close()
