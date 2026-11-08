@@ -608,13 +608,24 @@
     "alternatives": [
      {
       "moves": [
-       "fall drift L 12f",
-       "jump up hold 15"
+       "walk L 8f",
+       "walk L 8f"
       ],
-      "total": -265.0,
-      "progress": -65.0,
+      "total": -263.0,
+      "progress": -63.0,
       "stage": "final",
-      "reason": "no progress (T 200 -> 215 frames; estimate 265 vs 258)",
+      "reason": "no progress (T 200 -> 215 frames; estimate 263 vs 258)",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "jump L hold 6 turn",
+       "walk L 8f"
+      ],
+      "total": -309.1978768943845,
+      "progress": -109.19787689438448,
+      "stage": "final",
+      "reason": "risk 0.09 near h0 at frame 20 (chosen 0.00, +46 frames)",
       "vetoed": false
      },
      {
@@ -622,21 +633,10 @@
        "walk L 8f",
        "jump up hold 15"
       ],
-      "total": -306.08832677263183,
-      "progress": -106.08832677263183,
+      "total": -310.047801129695,
+      "progress": -110.04780112969502,
       "stage": "final",
-      "reason": "risk 0.10 near h0 at frame 25 (chosen 0.00, +48 frames)",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "walk L 8f",
-       "jump R hold 6 turn"
-      ],
-      "total": -364.7339828873096,
-      "progress": -164.7339828873096,
-      "stage": "final",
-      "reason": "risk 0.20 near h0 at frame 22 (chosen 0.00, +102 frames)",
+      "reason": "risk 0.10 near h0 at frame 25 (chosen 0.00, +52 frames)",
       "vetoed": false
      },
      {
@@ -644,19 +644,19 @@
        "run R 16f"
       ],
       "total": null,
-      "progress": -74.43588902828469,
+      "progress": 1.0,
       "stage": "stage 1",
       "reason": "hits h0 at frame 10",
       "vetoed": true
      },
      {
       "moves": [
-       "run R 24f"
+       "run-jump R hold 6 after 4f"
       ],
       "total": null,
-      "progress": -74.43588902828469,
+      "progress": -4.0,
       "stage": "stage 1",
-      "reason": "hits h0 at frame 10",
+      "reason": "hits h0 at frame 11",
       "vetoed": true
      }
     ],
@@ -684,14 +684,14 @@
        "wall-jump L hold 8",
        "wall-jump R hold 8",
        "jump up hold 15",
+       "jump L hold 6 turn",
+       "jump up hold 3",
+       "jump up hold 6",
+       "jump up hold 10",
        "walk L 8f",
        "walk L 16f",
        "walk L 24f",
-       "run L 8f",
-       "run L 24f",
-       "fall drift L 12f",
-       "jump R hold 6 turn",
-       "jump L hold 12 turn"
+       "run L 8f"
       ],
       "goal": 0,
       "clipped": 0
@@ -710,14 +710,8 @@
       "completion_rows_frames": 90,
       "completion_clipped": 0,
       "completion_inputs": 93,
-      "safe_alternatives": 5,
+      "safe_alternatives": 13,
       "completions": [
-       {
-        "continuation": "neutral",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
        {
         "continuation": "neutral",
         "frames": 0,
@@ -731,8 +725,14 @@
         "died": []
        },
        {
-        "continuation": "left",
-        "frames": 2,
+        "continuation": "right",
+        "frames": 8,
+        "on": "ground",
+        "died": []
+       },
+       {
+        "continuation": "neutral",
+        "frames": 0,
         "on": "ground",
         "died": []
        },
@@ -821,132 +821,132 @@
    "flat airborne, hazard ahead",
    {
     "chosen": [
-     "jump L hold 3",
-     "wall-jump L hold 8"
+     "run-jump R hold 6",
+     "run-jump R hold 3"
     ],
     "actions": [
-     4,
-     4,
-     4,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     4,
-     4,
-     4,
-     4,
-     4,
-     4,
-     4,
-     4,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1,
-     1
+     7,
+     7,
+     7,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     7,
+     7,
+     7,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6,
+     6
     ],
     "segments": [
      [
-      "jump L hold 3",
+      "run-jump R hold 6",
       0,
-      9
+      12
      ],
      [
-      "wall-jump L hold 8",
-      9,
-      23
+      "run-jump R hold 3",
+      12,
+      21
      ],
      [
       "pad",
-      23,
+      21,
       48
      ]
     ],
-    "pad": 25,
+    "pad": 27,
     "from_prev": false,
     "score": {
      "frames_used": 48,
      "t_start": 195.96000000000004,
-     "t_end": 190.0,
-     "estimate": 238.0,
-     "risk_frames": 0.0,
+     "t_end": 117.0,
+     "estimate": 290.22045781625195,
+     "risk_frames": 125.22045781625197,
      "failure_frames": 0.0,
      "death_frames": 0.0,
-     "total": -238.0,
-     "completion": 0,
+     "total": -290.22045781625195,
+     "completion": null,
      "landing": true,
-     "spread_end": 11.846622915128176
+     "spread_end": 7.2484435789967465
     },
     "v_start": 40.77817459305203,
-    "v_end": 39.6,
+    "v_end": 23.4,
     "dead_end_members": 0,
     "leg": 0,
     "veto": null,
-    "soft_risk": 0.0,
-    "soft_frame": -1,
+    "soft_risk": 0.2504409156325039,
+    "soft_frame": 18,
     "end_supported": false,
-    "first_move_frames": 9,
+    "first_move_frames": 12,
     "alternatives": [
      {
       "moves": [
-       "jump L hold 3",
-       "walk L 8f"
+       "run-jump R hold 6",
+       "run-jump R hold 6"
       ],
-      "total": -238.0,
-      "progress": -42.039999999999964,
+      "total": -293.4115699282555,
+      "progress": -97.45156992825548,
       "stage": "final",
-      "reason": "estimate 238 vs 238 frames",
+      "reason": "risk 0.26 near h0 at frame 18 (chosen 0.25, +128 frames)",
       "vetoed": false
      },
      {
       "moves": [
-       "jump L hold 3",
-       "walk L 16f"
+       "run-jump R hold 6",
+       "run-jump R hold 15"
       ],
-      "total": -238.0,
-      "progress": -42.039999999999964,
+      "total": -294.4115699282555,
+      "progress": -98.45156992825548,
       "stage": "final",
-      "reason": "estimate 238 vs 238 frames",
+      "reason": "risk 0.26 near h0 at frame 18 (chosen 0.25, +128 frames)",
       "vetoed": false
      },
      {
       "moves": [
-       "jump L hold 3",
-       "walk L 24f"
+       "run-jump R hold 6",
+       "run-jump R hold 10"
       ],
-      "total": -238.0,
-      "progress": -42.039999999999964,
+      "total": -294.4115699282555,
+      "progress": -98.45156992825548,
       "stage": "final",
-      "reason": "estimate 238 vs 238 frames",
+      "reason": "risk 0.26 near h0 at frame 18 (chosen 0.25, +128 frames)",
       "vetoed": false
      },
      {
@@ -981,10 +981,10 @@
      },
      "stage2": {
       "candidates": 128,
-      "steps": 40,
-      "of_steps": 40,
+      "steps": 39,
+      "of_steps": 39,
       "complete": 128,
-      "vetoed": 0,
+      "vetoed": 4,
       "second_moves": [
        "wait 8f",
        "run L 16f",
@@ -994,14 +994,14 @@
        "wall-jump L hold 8",
        "wall-jump R hold 8",
        "jump up hold 15",
-       "jump L hold 3",
-       "walk L 8f",
-       "walk L 16f",
-       "walk L 24f",
-       "run L 8f",
-       "run L 24f",
-       "run-jump L hold 22",
-       "run-jump L hold 6 after 4f"
+       "run-jump R hold 6 after 4f",
+       "run wall-jump R hold 8",
+       "run-jump R hold 3",
+       "run-jump R hold 6",
+       "run-jump R hold 10",
+       "jump up hold 10",
+       "jump R hold 6",
+       "jump up hold 6"
       ],
       "goal": 0,
       "clipped": 0
@@ -1015,109 +1015,29 @@
       "goal": 0,
       "start_in_goal": false,
       "clipped": 0,
-      "landing": 0,
-      "completed": 16,
+      "landing": 16,
+      "completed": 0,
       "completion_rows_frames": 0,
       "completion_clipped": 0,
       "completion_inputs": 93,
       "safe_alternatives": 15,
       "completions": [
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "ground",
-        "died": []
-       }
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null,
+       null
       ]
      }
     },
@@ -1513,6 +1433,17 @@
      },
      {
       "moves": [
+       "jump up hold 10",
+       "wall-jump R hold 8"
+      ],
+      "total": -244.14999999999995,
+      "progress": -55.04999999999998,
+      "stage": "final",
+      "reason": "estimate 244 vs 211 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
        "run-jump L hold 10 after 8f",
        "run R 16f"
       ],
@@ -1520,17 +1451,6 @@
       "progress": -58.41,
       "stage": "final",
       "reason": "no progress (T 189 -> 200 frames; estimate 248 vs 211)",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "wait 16f",
-       "run-jump L hold 15 after 4f"
-      ],
-      "total": -248.72999999999996,
-      "progress": -59.629999999999995,
-      "stage": "final",
-      "reason": "no progress (T 189 -> 201 frames; estimate 249 vs 211)",
       "vetoed": false
      }
     ],
@@ -2033,6 +1953,17 @@
      },
      {
       "moves": [
+       "jump up hold 10",
+       "wall-jump R hold 8"
+      ],
+      "total": -244.14999999999995,
+      "progress": -55.04999999999998,
+      "stage": "final",
+      "reason": "estimate 244 vs 213 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
        "wait 16f",
        "run-jump L hold 15 after 4f"
       ],
@@ -2051,17 +1982,6 @@
       "progress": -59.06800000000001,
       "stage": "final",
       "reason": "no progress (T 189 -> 200 frames; estimate 248 vs 213)",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "jump up hold 3",
-       "run-jump L hold 15 after 4f"
-      ],
-      "total": -248.71599999999998,
-      "progress": -59.616000000000014,
-      "stage": "final",
-      "reason": "no progress (T 189 -> 201 frames; estimate 249 vs 213)",
       "vetoed": false
      }
     ],

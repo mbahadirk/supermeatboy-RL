@@ -37,9 +37,9 @@ Search, per decision (Planner.plan):
    frames with its last action held) plus the safety check. Every move is ranked at the same end frame (24:
    the batch's length; goal and key contact over those frames): its estimate is 24 + T there, so a short move
    is followed by its held last action, not credited for stopping early. Safety covers the frames the
-   estimate credits: the veto on the move's own frames, soft risk on frames 1..24 (a success: 1..its touch),
-   so contacts of the held tail are soft risk (even before frame VETO_FRAMES). The best B1 = 8 not vetoed are
-   kept (all vetoed: the ones with the latest veto frame).
+   estimate credits, 1..24: the veto and the margin rule on the move's own frames, contact only (soft risk 1,
+   no margin) on the held tail, even before frame VETO_FRAMES (a success: 1..its touch, margin rule). The best
+   B1 = 8 not vetoed are kept (all vetoed: the ones with the latest veto frame).
 2. Stage 2 (one member): from each kept end state (the world model's own end rows), each of 16 second moves
    (a fixed diverse core, moves.CORE_SECOND, plus the best-scoring first moves of this decision not in it),
    padded to the horizon H = 48 (last action held, jump released). Only the continuation is rolled out (the
@@ -48,11 +48,12 @@ Search, per decision (Planner.plan):
    are re-scored from the start with ALL ensemble members and the full safety check (plan.safety.check); the
    best is chosen, unless the switch rule below keeps the previous plan. One window for all: every candidate,
    the shifted previous plan included, ends at H (its unplanned tail is the pad: last action held, jump
-   released) for T(end), the completion and goal / key contact, and veto and soft risk count the same frames
-   1..H, the pad included (a success: 1..its touch): safety covers every frame the score credits. (Judging
-   the kept plan on H - shift frames made standing still cheaper by construction: frames + T(end) over a
-   shorter window. Judging veto and risk on the planned frames only, against re-score noise of the
-   never-planned tail, credited a pad tail through a hazard with the progress of passing it and no risk.)
+   released) for T(end), the completion and goal / key contact, and safety counts the same frames 1..H: the
+   veto on 1..VETO_FRAMES, the margin rule on the later planned frames (pads excluded; the previous plan: its
+   remaining planned frames), contact only (soft risk 1, no margin) on the never-planned pad tail (a success:
+   1..its touch, margin rule). (Judging the kept plan on H - shift frames made standing still cheaper by
+   construction: frames + T(end) over a shorter window. No tail check credited a pad tail through a hazard
+   with the progress of passing it and no risk; the margin on the tail refused passages near hazards.)
 
 Switch rule (hysteresis, Planner(hysteresis=...), agent.py / plan/offline.py --hysteresis, frames, default
 HYSTERESIS_FRAMES = 3 there, from closed loops): the shifted previous plan is kept unless the best other candidate's estimate is lower
@@ -83,7 +84,8 @@ Score of a candidate: the estimated frames to reach the goal (lower is better; t
   end's vertical velocity (imagine's per-step vy). T = +inf (a dead end): T(start) + DEAD_END_FRAMES (DEAD_FAR
   when the start is a dead end too). Final stage: the mean over members (each member's own end and leg).
 - death: contact within the first 16 frames (plan.safety.VETO_FRAMES) in any member is a hard veto; contact or near
-  contact later is a soft risk in [0, 1] (safety's margin from the measured position error), DEATH_FRAMES each.
+  contact later is a soft risk in [0, 1] (safety's margin from the measured position error), DEATH_FRAMES each;
+  on a never-planned tail (pad, stage 1's held last action) only contact counts (1).
 - failure memory: FAIL_FRAMES x the times this first move failed from this start cell (FailureMemory).
 - point-of-no-return memory: deaths / (tries + 1) x DEATH_FRAMES for this first move from this start cell
   (MoveMemory).
@@ -467,17 +469,18 @@ def _near_frames(frames, xs, ys, margin=BOX_MARGIN):
     return out
 
 
-def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None):
+def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None):
     """The decision rule (plan.safety.assess) for candidates judged on their own first `upto` frames (one or
     more members): veto, veto frame, what was hit, soft risk and its frame (all in frames, also for a sweep of
     a step-k model's columns). The veto counts contact in frames 1..min(veto_upto, VETO_FRAMES) (veto_upto:
-    default upto); every later frame up to upto is soft risk by the margin rule (contact 1). With veto_upto =
-    upto this is assess on the first upto frames; a smaller veto_upto (stage 1: the move's own frames of a
-    window that goes on with its held last action) makes the frames after it soft risk, even before frame
-    VETO_FRAMES."""
+    default upto); the later frames up to `planned` (n,; default upto) are soft risk by the margin rule
+    (contact 1, else 1 - clearance / margin(frame)); the frames after `planned` up to upto (a never-planned
+    tail: the pad, or stage 1's held last action) count contact only (1), no margin. Defaults: assess on the
+    first upto frames."""
     E, n, K = sw.step_clear.shape
     cf = sw.contact_frame
     upto = np.asarray(upto)
+    pl_n = upto if planned is None else np.minimum(np.asarray(planned), upto)
     lim_n = np.minimum(upto if veto_upto is None else np.asarray(veto_upto), S.VETO_FRAMES)
     lim = lim_n[None, :]
     early = (cf >= 1) & (cf <= lim)
@@ -495,10 +498,12 @@ def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None):
         ks = fk[late]
         c = sw.step_clear[:, :, late]
         with np.errstate(invalid="ignore", divide="ignore"):
-            risk = np.where(c < 0, 1.0, np.clip(1.0 - c / S.margin(ks), 0.0, 1.0))
-        risk = np.nan_to_num(risk, nan=0.0)
-        soft_win = (ks[None, :] > lim_n[:, None]) & (ks[None, :] <= upto[:, None])     # (n, columns)
-        risk = np.where(soft_win[None], risk, 0.0).max(0)
+            near = np.where(c < 0, 1.0, np.clip(1.0 - c / S.margin(ks), 0.0, 1.0))
+        near = np.nan_to_num(near, nan=0.0)
+        after = ks[None, :] > lim_n[:, None]                                            # (n, columns)
+        margin_win = after & (ks[None, :] <= pl_n[:, None])                             # planned frames
+        tail_win = after & (ks[None, :] > pl_n[:, None]) & (ks[None, :] <= upto[:, None])  # never planned
+        risk = np.where(margin_win[None], near, np.where(tail_win[None] & (c < 0), 1.0, 0.0)).max(0)
         j = risk.argmax(1)
         soft = risk[np.arange(n), j]
         soft_frame = np.where(soft > 0, ks[j], -1)
@@ -1132,10 +1137,11 @@ class Planner:
         tg1, legs1 = tg1[0], legs1[0]
         succ1 = tg1 > 0
         # safety over every frame the score credits: the estimate is taken at the common end (a success: its goal
-        # touch), so soft risk counts frames 1..end1 (1..t), the held last action included; the veto stays on the
-        # move's own frames (or up to its touch), the held tail's contacts are soft risk
-        veto1, vf1, vk1, vid1, soft1, sf1 = _verdict(sw1, np.where(succ1, tg1, end1),
-                                                     veto_upto=np.where(succ1, np.minimum(up1, tg1), up1))
+        # touch), so soft risk counts frames 1..end1 (1..t), the held last action included; the veto and the
+        # margin rule stay on the move's own frames (or up to its touch); the held tail counts contact only
+        own1 = np.where(succ1, np.minimum(up1, tg1), up1)
+        veto1, vf1, vk1, vid1, soft1, sf1 = _verdict(sw1, np.where(succ1, tg1, end1), veto_upto=own1,
+                                                     planned=np.where(succ1, tg1, up1))
         xe1, ye1, vye1 = out1["x"][0, :, steps1], out1["y"][0, :, steps1], out1["vy"][0, :, steps1]
         tend1 = ends_time(xe1, ye1, vye1, legs1)
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
@@ -1305,10 +1311,14 @@ class Planner:
         # every candidate, the shifted previous plan included, is judged at the same end frame H (its unplanned
         # tail is the pad: last action held, jump released): estimates of one stage compare over one window.
         # Safety covers every frame the score credits: a non-success is scored by its state at H (or its
-        # completion from H), so veto (frames 1..VETO_FRAMES) and soft risk (the frames after, to H) count frames
-        # 1..H, the pad included; a success frames 1..t (its goal touch). (Judging the planned frames only, as
-        # b08aea4 did against re-score noise of the never-planned tail, credited a pad tail through a hazard with
-        # the progress of passing it and no risk: bench_20261108-221922, 1-8.)
+        # completion from H), so it is judged on frames 1..H: the veto on 1..VETO_FRAMES, the margin rule on its
+        # later planned frames (pads excluded; the previous plan: its remaining planned frames), contact only
+        # (soft risk 1, no margin) on the never-planned pad tail up to H; a success on frames 1..t (its goal
+        # touch), margin rule throughout. (No tail check credited a pad tail through a hazard with the progress
+        # of passing it and no risk: bench_20261108-221922, 1-8. The margin on the tail refused passages: a pad
+        # passing a saw at 40 units cost most of a death; bench_20261109-001206, 1-13.)
+        planned3 = np.array([max((b for nm, a, b in segs if nm != "pad"), default=0) for segs, _ in final], np.int64)
+        planned3 = np.minimum(np.maximum(-(-planned3 // f) * f, S.VETO_FRAMES), H)   # step-f model: step boundary
         out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds, **ck)
         E = out3["x"].shape[0]
         fr3 = _near_frames(_cols(frames, Hc + 1, f), out3["x"], out3["y"])
@@ -1321,14 +1331,8 @@ class Planner:
             ts = np.sort(tg_e[tg_e[:, c] > 0, c])
             tg3[c] = ts[(len(ts) - 1) // 2]                          # median (the lower one of an even count)
         win3 = np.where(succ3, tg3, H)                               # successes: frames 1..t; others: 1..H
-        judge = win3 < H
-        if judge.any():
-            vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3)
-            saf = replace(saf, veto=np.where(judge, vv, saf.veto), veto_frame=np.where(judge, vfr, saf.veto_frame),
-                          veto_kind=np.where(judge, vkd, saf.veto_kind),
-                          veto_id=[vid[c] if judge[c] else saf.veto_id[c] for c in range(n3)],
-                          soft_risk=np.where(judge, vsoft, saf.soft_risk),
-                          soft_frame=np.where(judge, vsf, saf.soft_frame))
+        vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3, planned=np.where(succ3, tg3, planned3))
+        saf = replace(saf, veto=vv, veto_frame=vfr, veto_kind=vkd, veto_id=vid, soft_risk=vsoft, soft_frame=vsf)
         xe, ye, vye = out3["x"][:, :, Hc], out3["y"][:, :, Hc], out3["vy"][:, :, Hc]
         tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, keys, legs_e, vye)      # (E, n3), each member's own leg
         vend_e = self.value(xe, ye, keys, legs_e, vye)[0]                         # V: display only

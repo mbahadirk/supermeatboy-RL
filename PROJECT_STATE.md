@@ -592,8 +592,25 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
   1-11 717/885, 1-13 376/425, 1-14 198/324; the user's 1-1 run plan_20261108-172037 stood at the lower right wall
   (154, -154) for about 1200 frames each wave. Cause: since 4e16bf0 the kept plan was judged on H - shift frames,
   the others on H; estimate = frames + T(end) with an optimistic T (p90 speed), so the shorter window won.
-- **Fix** (`b08aea4`): final stage, every candidate ends at H (unplanned tail = pad); veto and soft risk on planned
-  frames only (at least VETO_FRAMES). Stage 1 ranks every move at its common end (24 frames). `--hysteresis` 3.
+- **Fix** (`b08aea4`): final stage, every candidate ends at H (unplanned tail = pad). Stage 1 ranks every move at
+  its common end (24 frames). `--hysteresis` 3. (b08aea4 judged veto and soft risk on the planned frames only;
+  superseded below.)
+- **Safety window now** (`1559563`, then the tail rule after it): safety covers every frame the score credits.
+  Final stage, a candidate without a goal touch, frames 1..H: veto on 1..VETO_FRAMES (16); soft risk by the ERR90
+  margin on its later planned frames (pads excluded; the kept previous plan: its remaining planned frames);
+  on the never-planned pad tail up to H only real contact counts (soft risk 1, no margin). Stage 1, frames 1..24:
+  veto and margin on the move's own frames, contact only on its held last action. A goal touch at t: frames
+  1..t, margin rule. Stage 2, long-safe, reflex and explore judge the frames they score (unchanged).
+  counts["final"]["safe_alternatives"] (MoveMemory's point of no return) uses the window's risk plus the
+  completion's deaths.
+  - Why: b08aea4's planned-frames window credited a pad tail through a saw with the progress of passing it and
+    no risk (bench_20261108-221922: 1-8 4/99, 95 identical deaths on h2; 150 of 160 deaths had an adopted plan
+    with no veto, soft < 0.5 and hazard contact in its tail). 1559563 judged 1..H with the margin everywhere;
+    live (bench_20261109-001206) 1-8 34/47, overall 61% (was 18%), but 1-13 0/16 (all timeouts): passages near
+    saws were refused, the margin (38 units at 32 frames, 60 at 48) on the pad tail cost most of a death (1-13:
+    2628 of 3393 logged near-miss maxima in the tail). The contact-only tail keeps the 1-8 holes caught.
+  - Offline (replays with the logged plan as the incumbent; closed loops on 21 starts): see the commit messages
+    of 1559563 and the tail rule. **Unverified** in the game: the tail rule.
 - **Still share** (`5209c61`): plan.analyze_run.is_still (chosen plan only wait / pad), per level in
   plan.benchmark. **Benchmark** (`3f19070`): `python smbrl/plan/benchmark.py cmd | report <run>` from the folder
   above smbrl/; the run command keeps the overlay and passes --wm-collect.
