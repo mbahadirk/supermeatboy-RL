@@ -38,9 +38,9 @@ def auc(score: np.ndarray, label: np.ndarray) -> float:
     return float((r[label].sum() - pos * (pos + 1) / 2) / (pos * neg))
 
 
-def to_raw(m: np.ndarray) -> np.ndarray:
-    """Model output (correction / RES_SCALE) -> game units (add the physics prior for a prediction)."""
-    return m * RES_SCALE
+def to_raw(m: np.ndarray, scale=RES_SCALE) -> np.ndarray:
+    """Model output (correction / the model's res_scale) -> game units (add the physics prior for a prediction)."""
+    return m * scale
 
 
 def predict_all(model, X, bs=8192):
@@ -55,10 +55,12 @@ def predict_all(model, X, bs=8192):
 def report(model, d: dict, idx: np.ndarray) -> str:
     p = predict_all(model, d["X"][idx])
     raw = d["raw"][idx]
-    pred = d["prior"][idx] + to_raw(p["mean"])
-    std = to_raw(p["std"])
+    rs = model.res_scale
+    pred = d["prior"][idx] + to_raw(p["mean"], rs)
+    std = to_raw(p["std"], rs)
     g = d["group"][idx]
-    lines = [f"Held-out transitions: {len(idx)} (recorded waves never trained on).", ""]
+    lines = [f"Held-out transitions: {len(idx)} (recorded waves never trained on)" +
+             (f"; one step = {model.step} frames" if model.step > 1 else "") + ".", ""]
 
     def errs(pr):
         pos = np.hypot(pr[:, 0] - raw[:, 0], pr[:, 1] - raw[:, 1])
@@ -81,8 +83,8 @@ def report(model, d: dict, idx: np.ndarray) -> str:
     lines += ["", "### How sure versus how right",
               f"Share of true values within 2 predicted standard deviations (about 95% if the model knows its own "
               f"uncertainty): dx {within[0]:.2f}, dy {within[1]:.2f}, vx {within[2]:.2f}, vy {within[3]:.2f}.",
-              f"Ensemble spread (median, game units): dx {np.median(to_raw(p['spread'])[:, 0]):.3f}, "
-              f"vy {np.median(to_raw(p['spread'])[:, 3]):.2f}.", ""]
+              f"Ensemble spread (median, game units): dx {np.median(to_raw(p['spread'], rs)[:, 0]):.3f}, "
+              f"vy {np.median(to_raw(p['spread'], rs)[:, 3]):.2f}.", ""]
     yb = d["yb"][idx] > 0.5
     lines += ["### Events and flags after one step", "", "| event | true rate | accuracy | precision | recall | AUC |",
               "|---|---|---|---|---|---|"]
@@ -106,13 +108,15 @@ def fit(model, ts: dict, d: dict, va_idx, epochs: int, lr: float, batch: int, t0
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=epochs * max(1, n // batch), pct_start=0.1)
     T = lambda a, dt=torch.float32: torch.as_tensor(a, dtype=dt)
+    W = lambda src, b: T(src["wc"][b]) if "wc" in src else None     # step-k: cut chains' NLL weight 0
     rng = np.random.default_rng(0)
     for ep in range(epochs):
         perm = rng.permutation(n)
         acc = []
         for i in range(0, n - batch + 1, batch):
             b = perm[i:i + batch]
-            loss, parts = model.loss(T(ts["X"][b]), T(ts["yc"][b]), T(ts["yb"][b]), T(ts["ys"][b], torch.long), T(ts["yr"][b]))
+            loss, parts = model.loss(T(ts["X"][b]), T(ts["yc"][b]), T(ts["yb"][b]), T(ts["ys"][b], torch.long), T(ts["yr"][b]),
+                                     W(ts, b))
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -122,7 +126,8 @@ def fit(model, ts: dict, d: dict, va_idx, epochs: int, lr: float, batch: int, t0
         a = np.mean(acc, 0)
         with torch.no_grad():
             vb = va_idx[:20000]
-            vl, _ = model.loss(T(d["X"][vb]), T(d["yc"][vb]), T(d["yb"][vb]), T(d["ys"][vb], torch.long), T(d["yr"][vb]))
+            vl, _ = model.loss(T(d["X"][vb]), T(d["yc"][vb]), T(d["yb"][vb]), T(d["ys"][vb], torch.long), T(d["yr"][vb]),
+                               W(d, vb))
         print(f"epoch {ep + 1}/{epochs}: train loss {a[0]:.3f} (nll {a[1]:.3f}, bce {a[2]:.3f}, ce {a[3]:.3f}, "
               f"mse {a[4]:.3f}), held-out loss {vl.item():.3f}  [{time.time() - t0:.0f}s]", flush=True)
 
@@ -142,6 +147,8 @@ def main():
                     help="keep this share of each wave's transitions before building inputs (long runs)")
     ap.add_argument("--levels", nargs="*", default=None, help="only these levels")
     ap.add_argument("--threads", type=int, default=4, help="CPU threads (leave some for the game)")
+    ap.add_argument("--step", type=int, default=1,
+                    help="frames per model step (default 1; 4: one step predicts 4 frames from the 4 actions)")
     ap.add_argument("--init", default=None, help="start from this wm_model.pt (then --epochs is not used)")
     ap.add_argument("--self-correct", type=int, default=0, metavar="K",
                     help="then train on the model's own K-step rollouts (wm/selfcorrect.py)")
@@ -158,7 +165,16 @@ def main():
     t0 = time.time()
     held = eval_levels()
     d = build(args.data, levels=args.levels, max_samples=args.max_samples, log=lambda *a: None, seed=args.seed,
-              frac=args.sample_frac, exclude=held)
+              frac=args.sample_frac, exclude=held, step=args.step)
+    res_scale = RES_SCALE
+    if args.step > 1:                        # targets in unit scale: the corrections' spread over full chains
+        full = d["full"]
+        corr = (d["raw"] - d["prior"])[full & (d["shard"] % 5 != 0)]
+        res_scale = np.maximum(corr.std(0), 1e-3).astype(np.float32)
+        d["yc"] = (d["yc"] * RES_SCALE / res_scale).astype(np.float32)
+        d["wc"] = full.astype(np.float32)
+        print(f"step {args.step}: res_scale {np.round(res_scale, 2).tolist()}, {int((~full).sum())} chains cut "
+              f"by a death / finish", flush=True)
     n = len(d["X"])
     val = d["shard"] % 5 == 0
     if not val.any() or val.all():           # too few waves: hold out the last one
@@ -174,13 +190,14 @@ def main():
         print(f"starting from {args.init}")
     else:
         torch.manual_seed(args.seed)
-        model = WorldModel(members=args.members, hidden=args.hidden, layers=args.layers)
+        model = WorldModel(d["X"].shape[1], members=args.members, hidden=args.hidden, layers=args.layers,
+                           step=args.step, res_scale=res_scale)
         model.set_norm(torch.as_tensor(d["X"][tr_idx[:200000]], dtype=torch.float32))
         pos = d["yb"][tr_idx].mean(0)
         pw = np.where(np.isin(np.arange(len(BIN_NAMES)), list(EVENTS.values())),
                       np.clip((1 - pos) / np.maximum(pos, 1e-6), 1, 50), 1)
         model.pos_weight.copy_(torch.as_tensor(pw, dtype=torch.float32))
-    train_set = {k: d[k][tr_idx] for k in ("X", "yc", "yb", "ys", "yr")}
+    train_set = {k: d[k][tr_idx] for k in ("X", "yc", "yb", "ys", "yr") + (("wc",) if "wc" in d else ())}
     if not args.init:
         fit(model, train_set, d, va_idx, args.epochs, 1e-3, args.batch, t0)
     if args.self_correct:                    # then on its own rollouts (wm/selfcorrect.py)
@@ -198,7 +215,7 @@ def main():
 
     info = {"data": args.data, "levels": sorted(set(d["level"])), "train": int(len(tr_idx)), "held_out": int(len(va_idx)),
             "eval_levels_excluded": sorted(held), "sample_frac": args.sample_frac,
-            "hidden": model.hidden, "layers": model.layers}
+            "hidden": model.hidden, "layers": model.layers, "step": model.step}
     model.save(os.path.join(out, "wm_model.pt"), info)
     text = "# World model: one-step accuracy\n\n" + \
         f"Data: {', '.join(args.data)}; levels {', '.join(info['levels'])}.\n\n" + report(model, d, va_idx)

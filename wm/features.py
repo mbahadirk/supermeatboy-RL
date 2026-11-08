@@ -27,7 +27,7 @@ import math
 import numpy as np
 
 from realpath import tile_classes, slope_open_corner, box_distance
-from wm.buffer import transitions, load_level, load_shards
+from wm.buffer import transitions, chains, load_level, load_shards
 
 TILE = 20.0
 P = 3                                  # tile patch radius: 7x7
@@ -221,13 +221,42 @@ def featurize(s, a, dt_ms, geom: LevelGeom, boxes, pf, pf_prev, dt_prev_s, fans,
     return X
 
 
-def prior(s, dt_ms) -> np.ndarray:
+def prior(s, dt_ms, sub: int = 1) -> np.ndarray:
     """Plain physics [dx, dy, vx', vy'] (game units): the same velocity, gravity in the air, moved by the new
-    velocity x the time step. The model predicts only the correction to this (input, collisions, walls)."""
-    dt = dt_ms / 1000.0
+    velocity x the time step. The model predicts only the correction to this (input, collisions, walls).
+    sub: the step is `sub` frames of dt_ms / sub each (a step-k model: gravity and movement per frame)."""
     vx, vy = s["vx"].astype(np.float64), s["vy"].astype(np.float64)
-    vy2 = np.where((s["flags"] & AIR) != 0, vy - GRAVITY * dt, vy)
-    return np.stack([vx * dt, vy2 * dt, vx, vy2], 1).astype(np.float32)
+    air = (s["flags"] & AIR) != 0
+    if sub == 1:
+        dt = dt_ms / 1000.0
+        vy2 = np.where(air, vy - GRAVITY * dt, vy)
+        return np.stack([vx * dt, vy2 * dt, vx, vy2], 1).astype(np.float32)
+    h = np.asarray(dt_ms, np.float64) / 1000.0 / sub
+    dy = np.zeros_like(vy)
+    for _ in range(sub):
+        vy = np.where(air, vy - GRAVITY * h, vy)
+        dy = dy + vy * h
+    return np.stack([vx * h * sub, dy, vx, vy], 1).astype(np.float32)
+
+
+def featurize_k(s, acts, dt_ms, geom: LevelGeom, boxes, pf, pf_prev, dt_prev_s, fans) -> np.ndarray:
+    """Inputs of a step-k model (wm.model): featurize with the first of the k actions acts (n, k) and the whole
+    step's dt, then the other k - 1 actions one-hot (N_ACTIONS each) after all other inputs."""
+    n, k = acts.shape
+    X = np.zeros((n, FEAT_DIM + (k - 1) * N_ACTIONS), np.float32)
+    featurize(s, acts[:, 0], dt_ms, geom, boxes, pf, pf_prev, dt_prev_s, fans, out=X[:, :FEAT_DIM])
+    actions_into(X, acts)
+    return X
+
+
+def actions_into(X, acts):
+    """The extra one-hot actions 2..k of a step-k model's inputs (columns after FEAT_DIM), in place."""
+    n, k = acts.shape
+    if k > 1:
+        X[:, FEAT_DIM:] = 0.0
+        r = np.arange(n)
+        for j in range(1, k):
+            X[r, FEAT_DIM + (j - 1) * N_ACTIONS + np.clip(acts[:, j], 0, N_ACTIONS - 1)] = 1.0
 
 
 def targets(s, s2, r, pri):
@@ -262,12 +291,15 @@ def group_of(s) -> np.ndarray:
     return np.where(wall, 2, np.where(air, 1, 0)).astype(np.int8)
 
 
-def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=None, exclude=()) -> dict:
+def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=None, exclude=(), step: int = 1) -> dict:
     """Features, targets and baselines of every transition in these wm_data folders. frac: keep this share of
     each wave's transitions (all deaths and finishes) before the inputs are built, for runs too long to
-    featurize whole. exclude: levels left out (the held-out ones)."""
+    featurize whole. exclude: levels left out (the held-out ones). step k > 1: samples of a step-k model
+    (wm.buffer.chains: k frames, the k actions, the summed dt, events of any of the frames; "full" False where a
+    death / finish cut the chain short; the targets' continuous part in game units minus the prior, / RES_SCALE
+    as for step 1: wm.train rescales it to the model's res_scale)."""
     rng_f = np.random.default_rng(seed + 1)
-    X, YC, YB, YS, YR, G, SH, LV, BC, BG, RAW, PR = [], [], [], [], [], [], [], [], [], [], [], []
+    X, YC, YB, YS, YR, G, SH, LV, BC, BG, RAW, PR, FU = [], [], [], [], [], [], [], [], [], [], [], [], []
     shard_no = 0
     for d in dirs:
         geoms = {}
@@ -286,11 +318,19 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
             if geom is None:
                 continue
             geom.reset()
-            tr = transitions(rows)
-            s, s2, a, r = tr["s"], tr["s2"], tr["a"], tr["r"]
+            if step > 1:
+                tr = chains(rows, step)
+                s, s2, a, r = tr["s"], tr["s2"], tr["a"], tr["r"]
+                ext = {"full": tr["full"], "landing": tr["landing"], "blocked": tr["blocked"]}
+            else:
+                tr = transitions(rows)
+                s, s2, a, r = tr["s"], tr["s2"], tr["a"], tr["r"]
+                ext = None
             if frac is not None and frac < 1.0 and len(s):
                 k = (s2["status"] != 0) | (rng_f.random(len(s)) < frac)
                 s, s2, a, r = s[k], s2[k], a[k], r[k]
+                if ext is not None:
+                    ext = {kk: v[k] for kk, v in ext.items()}
             if not len(s):
                 continue
             wf = {w["f"]: w for w in world}
@@ -309,10 +349,20 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
                 m = np.nonzero(s["frame"] == f)[0]
                 dt = w.get("dt") or DT_DEFAULT
                 pw = wf.get(int(f) - 1, {})
-                X.append(featurize(s[m], a[m], dt, geom, hazard_boxes(w.get("hz", []), keep), w.get("pf"),
-                                   pw.get("pf"), (pw.get("dt") or DT_DEFAULT) / 1000.0, fans).astype(np.float16))
-                pri = prior(s[m], dt)
-                yc, yb, ys_, yr = targets(s[m], s2[m], r[m], pri)
+                if ext is None:
+                    X.append(featurize(s[m], a[m], dt, geom, hazard_boxes(w.get("hz", []), keep), w.get("pf"),
+                                       pw.get("pf"), (pw.get("dt") or DT_DEFAULT) / 1000.0, fans).astype(np.float16))
+                    pri = prior(s[m], dt)
+                    yc, yb, ys_, yr = targets(s[m], s2[m], r[m], pri)
+                else:
+                    dt = sum((wf.get(int(f) + j, {}).get("dt") or dt) for j in range(step))
+                    X.append(featurize_k(s[m], a[m], dt, geom, hazard_boxes(w.get("hz", []), keep), w.get("pf"),
+                                         pw.get("pf"), (pw.get("dt") or DT_DEFAULT) / 1000.0, fans).astype(np.float16))
+                    pri = prior(s[m], dt, step)
+                    yc, yb, ys_, yr = targets(s[m], s2[m], r[m], pri)
+                    yb[:, EVENTS["landing"]] = ext["landing"][m]
+                    yb[:, EVENTS["blocked"]] = ext["blocked"][m]
+                    FU.append(ext["full"][m])
                 PR.append(pri)
                 YC.append(yc); YB.append(yb); YS.append(ys_); YR.append(yr)
                 G.append(group_of(s[m]))
@@ -328,6 +378,7 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
            "yr": np.concatenate(YR), "group": np.concatenate(G), "shard": np.concatenate(SH),
            "level": np.concatenate(LV), "base_const": np.concatenate(BC), "base_grav": np.concatenate(BG),
            "raw": np.concatenate(RAW).astype(np.float32), "prior": np.concatenate(PR)}
+    out["full"] = np.concatenate(FU) if FU else np.ones(len(out["X"]), bool)
     n = len(out["X"])
     if max_samples and n > max_samples:        # keep every rare event (deaths, finishes), sample the rest
         rng = np.random.default_rng(seed)

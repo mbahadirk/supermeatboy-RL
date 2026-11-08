@@ -179,6 +179,55 @@ def transitions(rows: np.ndarray, wave_ended_by_time: bool = True) -> dict:
             "terminated": n["status"] != STATUS_ALIVE, "truncated_rows": trunc_rows}
 
 
+def chains(rows: np.ndarray, k: int) -> dict:
+    """Runs of k consecutive transitions of one agent in one wave (a step-k model's samples): start rows s, the
+    k actions (n, k), the end row s2 (k frames on, or the death / finish row that cut the run short: full False,
+    its missing actions repeat the last one), the frames covered, the summed reward, and whether any of the
+    covered transitions was a landing (airborne -> not) or blocked (wm.features.targets' rule)."""
+    rows = np.sort(rows, order=["wave", "agent", "frame"])
+    n = len(rows)
+    AIRF = 0x2
+
+    def at(j):                                        # row i + j is the same agent's frame + j (bool (n,))
+        ok = np.zeros(n, bool)
+        if 0 < j < n:
+            ok[:n - j] = ((rows["wave"][j:] == rows["wave"][:-j]) & (rows["agent"][j:] == rows["agent"][:-j]) &
+                          (rows["frame"][j:] == rows["frame"][:-j] + j))
+        return ok
+
+    def sh(a, j):                                     # a[i + j] (the last j rows: a's last value, never used)
+        return np.concatenate([a[j:], np.repeat(a[-1:], j)]) if j else a
+    air = (rows["flags"] & AIRF) != 0
+    vx = np.abs(rows["vx"])
+    land1 = air & ~sh(air, 1)                         # transition i -> i + 1
+    block1 = (vx > 40) & (sh(vx, 1) < 0.25 * vx)
+    act_ok = rows["action"] >= 0
+    alive = rows["status"] == STATUS_ALIVE
+    go = alive & act_ok                               # the chain is still running from row i + j - 1
+    end = np.full(n, -1, np.int64)
+    land = np.zeros(n, bool)
+    block = np.zeros(n, bool)
+    rew = np.zeros(n, np.float64)
+    acts = np.zeros((n, k), np.int64)
+    acts[:, 0] = rows["action"]
+    for j in range(1, k + 1):
+        okj = go & at(j)
+        land |= okj & sh(land1, j - 1)
+        block |= okj & sh(block1, j - 1)
+        rew = np.where(okj, rew + np.nan_to_num(sh(rows["reward"], j)), rew)
+        term = okj & ~sh(alive, j)
+        stop = term | (okj & (j == k))
+        end[stop & (end < 0)] = j
+        go = okj & ~term & sh(act_ok, j)
+        if j < k:
+            acts[:, j] = np.where(go, sh(rows["action"], j), acts[:, j - 1])
+    keep = end > 0
+    idx = np.nonzero(keep)[0]
+    e = end[idx]
+    return {"s": rows[idx], "s2": rows[idx + e], "a": acts[idx], "frames": e, "full": e == k, "r": rew[idx],
+            "landing": land[idx], "blocked": block[idx]}
+
+
 def stats(d: str):
     shards = list(load_shards(d))
     if not shards:

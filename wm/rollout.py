@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
-from wm.features import (featurize, prior, hazard_boxes, RES_SCALE, FLAG_BITS, EVENTS, BIN_NAMES, AIR, WALL,
-                         DT_DEFAULT)
+from wm.features import (featurize, featurize_k, prior, hazard_boxes, RES_SCALE, FLAG_BITS, EVENTS, BIN_NAMES, AIR,
+                         WALL, DT_DEFAULT)
 
 WALL_REPRESS = 6                                   # realgame.js / realgame.py
 ACT_JUMP = np.array([0, 0, 0, 1, 1, 1, 0, 1, 0, 1], bool)   # realgame.ACTIONS: which actions hold jump
@@ -48,7 +48,9 @@ _KEEP = ~np.uint64(int(sum(FLAG_BITS)))
 
 def advance(s: np.ndarray, a, move: np.ndarray, pb: np.ndarray, state_cls: np.ndarray) -> np.ndarray:
     """The next agent rows from one predicted step: move [dx, dy, vx', vy'] (game units), probabilities of
-    the binary heads (the flag bits are set where > 0.5, other bits kept), the next movement state."""
+    the binary heads (the flag bits are set where > 0.5, other bits kept), the next movement state. a: the
+    step's action (n,), or its k actions (n, k) for a step-k model (the jump key then follows all k, with
+    the start's flags)."""
     s2 = s.copy()
     s2["x"] = s["x"] + move[:, 0]
     s2["y"] = s["y"] + move[:, 1]
@@ -57,8 +59,24 @@ def advance(s: np.ndarray, a, move: np.ndarray, pb: np.ndarray, state_cls: np.nd
     on = (pb[:, :nb] > 0.5) @ _BITS                     # the bits to set (distinct powers of two: OR = sum)
     s2["flags"] = ((s["flags"].astype(np.uint64) & _KEEP) | on).astype(np.uint32)
     s2["state"] = state_cls
-    s2["held"] = next_held(s["held"], a, s["flags"])
+    if np.ndim(a) == 2:
+        held = s["held"]
+        for j in range(a.shape[1]):
+            held = next_held(held, a[:, j], s["flags"])
+        s2["held"] = held
+    else:
+        s2["held"] = next_held(s["held"], a, s["flags"])
     return s2
+
+
+def step_actions(actions: np.ndarray, k: int) -> np.ndarray:
+    """Per-frame actions (n, K) as a step-k model's steps (n, ceil(K / k), k): the last action repeats to
+    fill the last step."""
+    n, K = actions.shape
+    Ks = -(-K // k)
+    if Ks * k > K:
+        actions = np.concatenate([actions, np.repeat(actions[:, -1:], Ks * k - K, 1)], 1)
+    return actions.reshape(n, Ks, k)
 
 
 @torch.no_grad()
@@ -142,20 +160,35 @@ def rollout_batched(model, geom, s0: np.ndarray, actions: np.ndarray, dts, world
     """rollout() with all members in one batched call per step (2-3x faster, same numbers). deadline
     (time.perf_counter() value): stop after the step that passes it; out["steps"] says how many steps were
     rolled out (the arrays keep their full size; the steps after it are left as they were at the stop).
-    keep_rows: also out["rows"] (E, n, K+1) agent rows (flags, state, jump key) for the planner."""
+    keep_rows: also out["rows"] (E, n, K+1) agent rows (flags, state, jump key) for the planner.
+    A step-k model (model.step > 1): actions / dts / worlds stay per frame (K frames); the arrays are per
+    model step, ceil(K / k) of them (column j = frame j x k; out["step"] = k), the world at each step's first
+    frame."""
     import time
     E = len(model.members)
-    n, K = actions.shape
+    f = getattr(model, "step", 1)
+    if f > 1:                                  # a step-k model: K frames -> ceil(K / k) steps (module docstring)
+        from wm.features import actions_into
+        dts = np.asarray(dts, np.float64)
+        sa = step_actions(actions, f)
+        K = sa.shape[1]
+        dfr = np.concatenate([dts, np.repeat(dts[-1:], K * f - len(dts))]) if dts.ndim == 1 else None
+        dts = dfr.reshape(K, f).sum(1) if dts.ndim == 1 else             np.concatenate([dts, np.repeat(dts[:, -1:], K * f - dts.shape[1], 1)], 1).reshape(len(dts), K, f).sum(2)
+        worlds = [worlds[min(j * f, len(worlds) - 1)] for j in range(K)]
+        actions = sa
+    else:
+        actions_into = None
+    n, K = actions.shape[:2]
     dts = np.asarray(dts, np.float64)
     W, B = _stacked(model)
     s = np.concatenate([s0] * E)                          # member-major: rows e*n .. e*n+n-1 are member e
-    a_all = np.tile(actions, (E, 1))
+    a_all = np.tile(actions, (E, 1) + (1,) * (actions.ndim - 2))
     out = {k: np.zeros((E, n, K + 1), np.float32) for k in ("x", "y", "vx", "vy", "alive", "airborne")}
     out["p"] = np.zeros((E, n, K, len(BIN_NAMES)), np.float32)
     out["std"] = np.zeros((E, n, K, 4), np.float32)
     rows = np.zeros((E, n, K + 1), s0.dtype) if keep_rows else None
     alive = np.ones(E * n, np.float32)
-    rs = torch.as_tensor(RES_SCALE)
+    rs = torch.as_tensor(getattr(model, "res_scale", RES_SCALE))
 
     def put(k, s, alive):
         for name in ("x", "y", "vx", "vy"):
@@ -169,12 +202,15 @@ def rollout_batched(model, geom, s0: np.ndarray, actions: np.ndarray, dts, world
     for k in range(K):
         dt = dts[k] if dts.ndim == 1 else np.tile(dts[:, k], E)
         w = worlds[k]
-        X = torch.as_tensor(featurize(s, a_all[:, k], dt, geom, w.boxes, w.pf, w.pf_prev, w.dt_prev_s, w.fans))
+        if actions_into is not None:
+            X = torch.as_tensor(featurize_k(s, a_all[:, k], dt, geom, w.boxes, w.pf, w.pf_prev, w.dt_prev_s, w.fans))
+        else:
+            X = torch.as_tensor(featurize(s, a_all[:, k], dt, geom, w.boxes, w.pf, w.pf_prev, w.dt_prev_s, w.fans))
         z = ((X - model.mu) / model.sd).view(E, n, -1)
         for i in range(len(W) - 1):
             z = torch.nn.functional.silu(torch.baddbmm(B[i], z, W[i]))
         h = model.split(torch.baddbmm(B[-1], z, W[-1]).reshape(E * n, -1))
-        move = (h["mean"] * rs).numpy() + prior(s, dt)
+        move = (h["mean"] * rs).numpy() + prior(s, dt, f)
         pb = torch.sigmoid(h["bin"]).numpy()
         s = advance(s, a_all[:, k], move, pb, h["state"].argmax(-1).numpy())
         alive = alive * (1.0 - pb[:, EVENTS["death"]])
@@ -185,6 +221,7 @@ def rollout_batched(model, geom, s0: np.ndarray, actions: np.ndarray, dts, world
             done = k + 1
             break
     out["steps"] = done
+    out["step"] = f
     if rows is not None:
         out["rows"] = rows
     return out
