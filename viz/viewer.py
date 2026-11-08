@@ -107,6 +107,13 @@ KILLBOX = (220, 90, 90)
 ALIVEBOX = (90, 92, 110)
 PLAN = (40, 225, 70)
 PLAN_DONE = (30, 120, 45)
+# the chosen path in its planning mode's colour (plan/planner.py MODES; agent.py MODE_COL in the game)
+MODE_COLORS = {"long-safe": (64, 128, 255), "normal": PLAN, "reflex": (255, 48, 48), "explore": (176, 64, 240)}
+
+
+def mode_color(plan: dict) -> tuple:
+    """The chosen path's colour: its planning mode's (older runs without Plan.mode: normal, green)."""
+    return MODE_COLORS.get(plan.get("mode") or "normal", PLAN)
 COMPLETION = (110, 170, 110)       # the airborne completion after the plan (fainter, dashed)
 LAND = (255, 225, 40)
 WALL = (40, 225, 255)
@@ -1110,16 +1117,18 @@ class Renderer:
                 col = ALT_VETO if alt.get("vetoed") else ALT
                 pg.draw.lines(surf, col, False, pts, 1)
                 self.alt_hits.append((pts, alt))
-        # the chosen path: dashed and faded where the members disagree, thinner where already played
+        # the chosen path (its mode's colour): dashed and faded where the members disagree, thinner where played
+        col = mode_color(plan)
+        col_done = tuple(v // 2 for v in col)
         pts = [m.pt(x, y) for x, y in path]
         for k in range(len(pts) - 1):
             far = k + 1 < len(spread) and spread[k + 1] is not None and spread[k + 1] > SPREAD_FAR
             done = k < k_now
             if far:
                 if k % 2 == 0:
-                    pg.draw.line(surf, PLAN_DONE, pts[k], pts[k + 1], 2)
+                    pg.draw.line(surf, col_done, pts[k], pts[k + 1], 2)
             else:
-                pg.draw.line(surf, PLAN_DONE if done else PLAN, pts[k], pts[k + 1], 2 if done else 3)
+                pg.draw.line(surf, col_done if done else col, pts[k], pts[k + 1], 2 if done else 3)
         # the airborne completion: dashed, fainter, from the plan's end to its landing (or death)
         comp = plan.get("completion") or {}
         cp = [m.pt(x, y) for x, y in comp.get("path") or []]
@@ -1287,7 +1296,14 @@ class Renderer:
             sw = plan.get("switch")
             small(trig, TEXT)
             small(swt, WARN if sw and not sw.get("kept") else DIM)
-            line(plan_name(plan), PLAN)
+            line(plan_name(plan), mode_color(plan))
+            line(f"mode: {plan.get('mode') or 'normal'}", mode_color(plan))
+            if y + 15 <= bottom:                     # legend: the four modes in their colours
+                lx = x
+                for nm, c in MODE_COLORS.items():
+                    self.text(surf, nm, lx, y, c, self.small)
+                    lx += self.small.size(nm + "  ")[0]
+                y += 15
             for t in score_lines(plan):
                 small(t, TEXT)
             veto = plan.get("veto")

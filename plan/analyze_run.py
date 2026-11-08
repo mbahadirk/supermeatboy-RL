@@ -158,7 +158,10 @@ def slim(d: dict) -> dict:
                                            "unit": sw.get("unit")},
             "dead_end": d.get("v_end") is None, "family": family(chosen[0]) if chosen else "(none)",
             "timing": d.get("timing") or {}, "clipped": d.get("model_clipped"),
-            "s2": c2["steps"] / c2["of_steps"] if c2.get("of_steps") else None}
+            "s2": c2["steps"] / c2["of_steps"] if c2.get("of_steps") else None,
+            "mode": d.get("mode") or "normal",
+            "mode_ran": {k: bool(v.get("ran")) for k, v in ((d.get("counts") or {}).get("modes") or {}).items()
+                         if isinstance(v, dict)}}
 
 
 def analyze(run: str, level: str | None = None) -> dict:
@@ -180,6 +183,7 @@ def analyze(run: str, level: str | None = None) -> dict:
             states[(k, int(a[0]))][int(d["frame"])] = (float(a[1]), float(a[2]), int(a[5]))
 
     T = defaultdict(list)
+    M = defaultdict(lambda: {"chosen": 0, "own_ms": [], "total_ms": []})     # planning mode -> decisions, ms
     err_f, err_u = defaultdict(list), defaultdict(list)
     n = n_air = 0
     changed = changed_air = with_prev = with_prev_air = 0
@@ -211,6 +215,13 @@ def analyze(run: str, level: str | None = None) -> dict:
             n_air += p["air"]
             for key, v in p["timing"].items():
                 T["ms_" + key].append(v)
+            tm = p["timing"]
+            M[p["mode"]]["chosen"] += 1
+            M[p["mode"]]["total_ms"].append(tm.get("total"))
+            M["normal"]["own_ms"].append((tm.get("stage1") or 0) + (tm.get("stage2") or 0))
+            for tk, nm in (("long_safe", "long-safe"), ("reflex", "reflex")):
+                if p["mode_ran"].get(tk):
+                    M[nm]["own_ms"].append(tm.get(tk))
             if p["s2"] is not None:
                 T["s2"].append(p["s2"])
             h = 0
@@ -354,6 +365,10 @@ def analyze(run: str, level: str | None = None) -> dict:
         "completed": share(n_completed, n), "landing": share(n_landing, n_landing_known),
         "clipped": {"share": share(n_clip, n_clip_known), "n": n_clip_known},
         "position_error": err,
+        "modes": {nm: {"share": share(v["chosen"], n), "chosen": v["chosen"], "runs": len(v["own_ms"]),
+                       "own_ms": q([x for x in v["own_ms"] if x is not None]),
+                       "total_ms_when_chosen": q([x for x in v["total_ms"] if x is not None])}
+                  for nm, v in M.items() if v["chosen"] or v["own_ms"]},
         "levels": per_level}
 
 
@@ -374,6 +389,11 @@ def report(r: dict) -> str:
       f"{num(r['replan_interval'][0], '.0f')} / {num(r['replan_interval'][1], '.0f')} frames")
     w("ms per decision, median / 90%: " + ", ".join(f"{k} {num(v[0], '.0f')} / {num(v[1], '.0f')}"
                                                      for k, v in r["timing_ms"].items()))
+    if r.get("modes"):
+        w("planning modes (chosen share; ms of its own search when it ran, median / 90%; total ms when chosen): "
+          + "; ".join(f"{nm} {pct(v['share'])} ({v['chosen']}), own {num(v['own_ms'][0], '.0f')} / "
+                      f"{num(v['own_ms'][1], '.0f')} in {v['runs']} runs, total {num(v['total_ms_when_chosen'][0], '.0f')}"
+                      for nm, v in sorted(r["modes"].items())))
     s2 = r["stage2_steps_share"]
     w(f"stage 2 steps rolled / needed: median {num(s2[0], '.2f')}, 10% {num(s2[1], '.2f')}, 90% {num(s2[2], '.2f')}")
     fl = r["followed_frames"]
