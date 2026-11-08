@@ -14,7 +14,8 @@ change shows as a diff of benchmark.json when it is frozen again; `cmd` notes an
 
 Run folders are read only through plan/analyze_run.py: analyze(folder, level) per benchmark level. Per level:
 waves, finishes, completion (finishes / waves), best seconds, deaths by cause (and per wave), decisions, median
-total ms per decision, median replan interval and the position error per horizon (followed / not followed).
+total ms per decision, median replan interval, the still share (decisions whose chosen plan has no moves other
+than wait / pad: plan.analyze_run.is_still) and the position error per horizon (followed / not followed).
 Records go to runs/benchmarks/<label>.json; --set-baseline also writes runs/benchmarks/baseline.json.
 
 Comparability: completion is over the waves actually played per level (shown with every record), not trimmed to
@@ -177,6 +178,7 @@ def aggregate(results: list, spec: dict) -> tuple[dict, dict]:
             deaths.update(L["deaths"])
         bests = [L["best_s"] for _, _, L in parts if L["best_s"] is not None]
         dec = sum(r["decisions"] for _, r, _ in parts)
+        still = sum(L.get("still_n") or 0 for _, _, L in parts)    # analyze_run.is_still decisions
         ms = [((r["timing_ms"].get("total") or [None])[0], r["decisions"]) for _, r, _ in parts]
         rp = [(r["replan_interval"][0], r["decisions"]) for _, r, _ in parts]
         levels[lv] = {
@@ -184,6 +186,7 @@ def aggregate(results: list, spec: dict) -> tuple[dict, dict]:
             "completion": _ratio(fins, waves), "best_s": min(bests) if bests else None,
             "deaths": dict(deaths.most_common()), "deaths_total": sum(deaths.values()),
             "deaths_per_wave": _ratio(sum(deaths.values()), waves), "decisions": dec,
+            "still_decisions": still, "still": _ratio(still, dec),
             "ms_per_decision": ms[0][0] if len(parts) == 1 else _wmean(ms),
             "replan_interval": rp[0][0] if len(parts) == 1 else _wmean(rp),
             "position_error": _merge_err([r["position_error"] for _, r, _ in parts]) if parts else None,
@@ -196,6 +199,8 @@ def aggregate(results: list, spec: dict) -> tuple[dict, dict]:
     overall = {"waves": waves, "waves_planned": spec["waves_per_level"] * len(levels), "finishes": fins,
                "completion": _ratio(fins, waves), "deaths_per_wave": _ratio(dt, waves),
                "decisions": sum(v["decisions"] for v in vs),
+               "still_decisions": sum(v["still_decisions"] for v in vs),
+               "still": _ratio(sum(v["still_decisions"] for v in vs), sum(v["decisions"] for v in vs)),
                "ms_per_decision": _wmean((v["ms_per_decision"], v["decisions"]) for v in vs),
                "levels_finished": sum(v["finishes"] > 0 for v in vs), "levels": len(levels)}
     return levels, overall
@@ -215,7 +220,7 @@ def build_record(folders: list, spec: dict, label: str | None = None, runs_dir: 
             "levels": levels, "overall": overall}
 
 
-DELTA_KEYS = ("completion", "best_s", "deaths_per_wave", "ms_per_decision")
+DELTA_KEYS = ("completion", "best_s", "deaths_per_wave", "ms_per_decision", "still")
 
 
 def deltas(rec: dict, base: dict) -> dict:
@@ -263,23 +268,26 @@ def table(rec: dict, base: dict | None = None) -> str:
           + ("; MODEL CHANGED since the baseline" if (bm.get("mtime"), bm.get("size"), bm.get("path"))
              != (m["mtime"], m["size"], m["path"]) else "")
           + ("; CONFIG DIFFERS from the baseline" if base.get("config") != rec["config"] else ""))
-    hdr = f"{'level':<8}{'waves':>8}{'fin':>5}{'compl':>7}{'best_s':>8}{'d/wave':>8}{'dec':>7}{'ms/dec':>8}{'replan':>7}"
+    hdr = (f"{'level':<8}{'waves':>8}{'fin':>5}{'compl':>7}{'best_s':>8}{'d/wave':>8}{'dec':>7}{'ms/dec':>8}{'replan':>7}"
+           f"{'still':>7}")
     if dl:
-        hdr += f"  | {'d compl':>8}{'d best':>8}{'d d/w':>8}{'d ms':>8}"
+        hdr += f"  | {'d compl':>8}{'d best':>8}{'d d/w':>8}{'d ms':>8}{'d still':>8}"
     w(hdr)
     rows = list(rec["levels"].items()) + [("overall", rec["overall"])]
     for lv, v in rows:
         s = (f"{lv:<8}{str(v['waves']) + '/' + str(v['waves_planned']):>8}{v['finishes']:>5}{_p(v['completion']):>7}"
              f"{_f(v.get('best_s')):>8}{_f(v['deaths_per_wave']):>8}{v['decisions']:>7}"
-             f"{_f(v['ms_per_decision'], '.0f'):>8}{_f(v.get('replan_interval'), '.0f'):>7}")
+             f"{_f(v['ms_per_decision'], '.0f'):>8}{_f(v.get('replan_interval'), '.0f'):>7}{_p(v.get('still')):>7}")
         if dl:
             x = dl[lv]
             s += (f"  | {_d(x['completion'], '', True):>8}{_d(x['best_s'], '.2f'):>8}"
-                  f"{_d(x['deaths_per_wave'], '.2f'):>8}{_d(x['ms_per_decision'], '.0f'):>8}")
+                  f"{_d(x['deaths_per_wave'], '.2f'):>8}{_d(x['ms_per_decision'], '.0f'):>8}"
+                  f"{_d(x['still'], '', True):>8}")
         w(s)
     approx = [lv for lv, v in rec["levels"].items() if v["approx_medians"]]
     if approx:
         w(f"(medians of {', '.join(approx)}: weighted means of per-run medians, played in several runs)")
+    w("still: decisions whose chosen plan has no moves other than wait / pad (plan.analyze_run.is_still)")
     w("deaths by cause:")
     for lv, v in rec["levels"].items():
         if v["deaths"]:

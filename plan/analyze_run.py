@@ -27,7 +27,8 @@ the collision guard clipped (plans.jsonl "model_clipped"; older runs: none); the
 horizon for followed and not followed predictions (alive agents only); per level: decisions, no-progress
 share (frames: T(end) >= T(start), the time-to-go did not shrink; older runs: progress <= 0.05 V units), dead-end ends, the most common first-move families, deaths per cause, finishes and
 their times (times.jsonl or finish events; for older runs without them, the wave length of a 'quota' wave a
-planned agent finished, labelled as an estimate).
+planned agent finished, labelled as an estimate). Still share (overall and per level): decisions whose chosen plan
+has no moves other than wait / pad (is_still), and the share of decisions that kept such a plan (from_prev).
 """
 from __future__ import annotations
 
@@ -57,6 +58,7 @@ SUCCESS_SCORE = 1e5                # plan.planner.SUCCESS_SCORE: a success's tot
 NEAR_TIE_FRAMES = 3                # successes whose touch frames are this close (plan.planner.SUCCESS_MARGIN)
 FRAME_MS = 16.667                  # the locked time step (older runs' finishes have no dt)
 TOP_FAMILIES = 5
+STILL_MOVES = ("wait",)            # move-name prefixes that do nothing (plan.moves: "wait 8f", "wait 16f")
 
 
 def resolve_run(arg: str, runs_dir: str = RUNS) -> str:
@@ -129,6 +131,11 @@ def share(n, d):
     return round(n / d, 4) if d else None
 
 
+def is_still(chosen) -> bool:
+    """A chosen plan that does nothing: no moves other than wait (chosen lists no pads; empty: pad only)."""
+    return all(nm.startswith(STILL_MOVES) for nm in chosen)
+
+
 def slim(d: dict) -> dict:
     """The fields of a plan record this analysis uses."""
     sc = d.get("score") or {}
@@ -159,7 +166,7 @@ def slim(d: dict) -> dict:
             "dead_end": d.get("v_end") is None, "family": family(chosen[0]) if chosen else "(none)",
             "timing": d.get("timing") or {}, "clipped": d.get("model_clipped"),
             "s2": c2["steps"] / c2["of_steps"] if c2.get("of_steps") else None,
-            "mode": d.get("mode") or "normal",
+            "mode": d.get("mode") or "normal", "still": is_still(chosen),
             "mode_ran": {k: bool(v.get("ran")) for k, v in ((d.get("counts") or {}).get("modes") or {}).items()
                          if isinstance(v, dict)}}
 
@@ -195,7 +202,9 @@ def analyze(run: str, level: str | None = None) -> dict:
     end_sup = n_completed = n_landing = n_landing_known = 0
     units = Counter()                               # decisions scored in frames / V
     n_clip_known = n_clip = 0                       # decisions with model_clipped (older runs: none)
-    lv = defaultdict(lambda: {"decisions": 0, "no_progress": 0, "dead_end": 0, "families": Counter()})
+    n_still = n_still_kept = 0                      # chosen plans that do nothing (is_still); of them kept from_prev
+    lv = defaultdict(lambda: {"decisions": 0, "no_progress": 0, "dead_end": 0, "still": 0, "still_kept": 0,
+                              "families": Counter()})
     for (k, agent), ps in plans.items():
         ps.sort(key=lambda p: p["frame"])
         real = states.get((k, agent), {})
@@ -275,6 +284,10 @@ def analyze(run: str, level: str | None = None) -> dict:
             L["no_progress"] += int(p["progress"] is not None and
                                     p["progress"] <= (NO_PROGRESS if p["frames"] else NO_PROGRESS_V))
             L["dead_end"] += int(p["dead_end"])
+            L["still"] += int(p["still"])
+            L["still_kept"] += int(p["still"] and p["from_prev"])
+            n_still += int(p["still"])
+            n_still_kept += int(p["still"] and p["from_prev"])
             L["families"][p["family"]] += 1
             prev = p
     del plans, states
@@ -329,12 +342,15 @@ def analyze(run: str, level: str | None = None) -> dict:
         err[str(hz)] = {"followed": q(err_f[hz]) + [len(err_f[hz])], "not_followed": q(err_u[hz]) + [len(err_u[hz])]}
     per_level = {}
     for name in sorted(set(lv) | set(deaths) | set(finishes) | set(waves), key=lambda s: str(s)):
-        L = lv.get(name) or {"decisions": 0, "no_progress": 0, "dead_end": 0, "families": Counter()}
+        L = lv.get(name) or {"decisions": 0, "no_progress": 0, "dead_end": 0, "still": 0, "still_kept": 0,
+                             "families": Counter()}
         fs = finishes.get(name, [])
         secs = [x["seconds"] for x in fs if x["seconds"] is not None]
         per_level[str(name)] = {
             "decisions": L["decisions"], "no_progress": share(L["no_progress"], L["decisions"]),
             "dead_end": share(L["dead_end"], L["decisions"]),
+            "still": share(L["still"], L["decisions"]), "still_kept": share(L["still_kept"], L["decisions"]),
+            "still_n": L["still"],
             "first_moves": [[f, share(c, L["decisions"])] for f, c in L["families"].most_common(TOP_FAMILIES)],
             "deaths": dict(deaths.get(name, Counter()).most_common()),
             "waves": waves[name]["waves"] if name in waves else 0,
@@ -362,6 +378,7 @@ def analyze(run: str, level: str | None = None) -> dict:
         "uncertainty": {"below_0.9": share(sum(u < 0.9 for u in unc), len(unc)),
                         "below_0.5": share(sum(u < 0.5 for u in unc), len(unc))},
         "ends_supported": share(end_sup, n),
+        "still": {"share": share(n_still, n), "kept": share(n_still_kept, n), "n": n_still},
         "completed": share(n_completed, n), "landing": share(n_landing, n_landing_known),
         "clipped": {"share": share(n_clip, n_clip_known), "n": n_clip_known},
         "position_error": err,
@@ -426,6 +443,9 @@ def report(r: dict) -> str:
     cl = r.get("clipped") or {}
     w(f"chosen plans the collision guard clipped (the model's path went into solid tiles): {pct(cl.get('share'))}"
       + (f" (n {cl['n']})" if cl.get("n") else " (not logged: an older run)"))
+    st = r["still"]
+    w(f"still (chosen plan only wait / pad): {pct(st['share'])} of decisions (n {st['n']}), kept from the previous "
+      f"plan {pct(st['kept'])}")
     w("position error (units), median / 90% (n): followed | not followed")
     for hz, e in r["position_error"].items():
         a, b = e["followed"], e["not_followed"]
@@ -434,7 +454,8 @@ def report(r: dict) -> str:
     for name, L in r["levels"].items():
         fam = ", ".join(f"{f} {pct(s)}" for f, s in L["first_moves"])
         w(f"  {name}: {L['decisions']} decisions, no progress {pct(L['no_progress'])}, dead-end ends "
-          f"{pct(L['dead_end'])}; {L['waves']} waves {L['wave_end']}")
+          f"{pct(L['dead_end'])}, still {pct(L['still'])} (kept {pct(L['still_kept'])}); {L['waves']} waves "
+          f"{L['wave_end']}")
         if fam:
             w(f"    first moves: {fam}")
         if L["deaths"]:

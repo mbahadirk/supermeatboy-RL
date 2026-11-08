@@ -91,6 +91,25 @@ def test_clipped_share(tmp_path):
     assert "clipped (the model's path went into solid tiles): 50%" in A.report(r)
 
 
+def test_still_share(tmp_path):
+    """Still: the chosen plan has no moves other than wait / pad (empty chosen: pad only); kept: from_prev too."""
+    assert A.is_still([]) and A.is_still(["wait 8f", "wait 16f"])
+    assert not A.is_still(["wait 8f", "run R 16f"]) and not A.is_still(["run R 16f"])
+    run = tmp_path / "plan_still"
+    _write(str(run))
+    with open(run / "plans.jsonl", "w", encoding="utf-8") as f:
+        for k, (ch, prev) in enumerate(((["wait 8f"], False), ([], True), (["wait 8f", "run R 16f"], True),
+                                        (["run R 16f"], False))):
+            f.write(json.dumps({**_plan(2 * k, 1, chosen=ch), "from_prev": prev}) + "\n")
+    r = A.analyze(str(run))
+    assert r["still"] == {"share": 0.5, "kept": 0.25, "n": 2}
+    L = r["levels"]["1-1"]
+    assert L["still"] == 0.5 and L["still_kept"] == 0.25 and L["still_n"] == 2
+    out = A.report(r)
+    assert "still (chosen plan only wait / pad): 50% of decisions (n 2), kept from the previous plan 25%" in out
+    assert "still 50% (kept 25%)" in out
+
+
 def test_move_family():
     assert A.family("run-jump R hold 10 after 4f") == "run-jump R"
     assert A.family("wait 8f") == "wait" and A.family("jump L hold 6 turn") == "jump L turn"

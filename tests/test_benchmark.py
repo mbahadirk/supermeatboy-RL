@@ -13,22 +13,24 @@ from plan import benchmark as B          # noqa: E402
 SPEC = B.load_spec()
 
 
-def _plan(level, wave, frame, act):
+def _plan(level, wave, frame, act, chosen=("run R 16f",)):
     return {"frame": frame, "agent": 0, "level": level, "wave": wave, "actions": [act] * 48,
             "path": [[frame + h, 0.0] for h in range(49)], "state": {"supported": True}, "end_supported": True,
-            "chosen": ["run R 16f"], "score": {"estimate": 100.0, "total": 1.0, "t_start": 50.0, "t_end": 40.0},
+            "chosen": list(chosen), "score": {"estimate": 100.0, "total": 1.0, "t_start": 50.0, "t_end": 40.0},
             "alternatives": [], "v_end": 3.0, "timing": {"total": 60.0}, "trigger": ["interval"]}
 
 
-def _run(d, waves):
-    """waves: [(level, wave, 'finish' | 'death', seconds or cause)]: 12 frames each, a plan every 4 frames."""
+def _run(d, waves, still=()):
+    """waves: [(level, wave, 'finish' | 'death', seconds or cause)]: 12 frames each, a plan every 4 frames.
+    still: (level, wave) pairs whose plans choose only "wait 8f"."""
     os.makedirs(d)
     with open(os.path.join(d, "plans.jsonl"), "w") as fp, open(os.path.join(d, "states.jsonl"), "w") as fs, \
             open(os.path.join(d, "events.jsonl"), "w") as fe, open(os.path.join(d, "times.jsonl"), "w") as ft:
         fe.write(json.dumps({"kind": "lock", "level": None, "wave": 0, "ok": True}) + "\n")
         for lv, w, end, x in waves:
             for fr in range(0, 12, 4):
-                fp.write(json.dumps(_plan(lv, w, fr, 1)) + "\n")
+                fp.write(json.dumps(_plan(lv, w, fr, 1, ("wait 8f",) if (lv, w) in still else ("run R 16f",)))
+                         + "\n")
             for fr in range(12):
                 fs.write(json.dumps({"frame": fr, "wave": w, "level": lv,
                                      "agents": [[0, float(fr), 0.0, 0.0, 0.0, 0]]}) + "\n")
@@ -47,7 +49,7 @@ def _two_runs(tmp_path):
     _run(str(runs / "bench_a"), [("1-5", 1, "finish", 4.0), ("1-5", 2, "death", "hazard saw"),
                                  ("1-8", 3, "death", "hazard saw"), ("1-8", 4, "finish", 6.5),
                                  ("1-1", 5, "finish", 1.0)])                   # not a benchmark level
-    _run(str(runs / "bench_b"), [("1-5", 1, "finish", 3.5), ("1-8", 2, "death", "kill box")])
+    _run(str(runs / "bench_b"), [("1-5", 1, "finish", 3.5), ("1-8", 2, "death", "kill box")], still={("1-5", 1)})
     return runs
 
 
@@ -61,6 +63,9 @@ def test_record_aggregates_benchmark_levels(tmp_path):
     assert L8["deaths"] == {"hazard saw": 1, "kill box": 1}
     assert L5["decisions"] == 9 and L5["ms_per_decision"] == 60.0 and L5["replan_interval"] == 4.0
     assert L5["approx_medians"] and [r["waves"] for r in L5["runs"]] == [2, 1]
+    # still (plan.analyze_run.is_still): bench_b's 1-5 wave, 3 of the 9 decisions, summed over the runs exactly
+    assert L5["still_decisions"] == 3 and L5["still"] == pytest.approx(1 / 3, abs=1e-4) and L8["still"] == 0.0
+    assert rec["overall"]["still_decisions"] == 3 and rec["overall"]["still"] == pytest.approx(3 / 18, abs=1e-4)
     assert set(L5["position_error"]) == {str(h) for h in B.HORIZONS}
     assert L5["position_error"]["4"]["followed"][2] > 0
     assert rec["levels"]["1-11"]["waves"] == 0 and rec["levels"]["1-11"]["completion"] is None
@@ -86,7 +91,9 @@ def test_baseline_deltas(tmp_path, capsys):
     assert d["1-5"]["deaths_per_wave"] == pytest.approx(-0.5) and d["1-5"]["ms_per_decision"] == 0.0
     assert d["1-8"]["completion"] == pytest.approx(-0.5) and d["1-8"]["best_s"] is None
     assert d["1-11"]["completion"] is None
-    assert "d compl" in capsys.readouterr().out
+    assert d["1-5"]["still"] == pytest.approx(1.0) and d["1-8"]["still"] == 0.0
+    out = capsys.readouterr().out
+    assert "d compl" in out and "d still" in out and "still: decisions whose chosen plan" in out
 
 
 def test_cmd_has_every_frozen_flag_and_no_placeholder():
