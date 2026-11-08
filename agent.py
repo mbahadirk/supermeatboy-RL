@@ -50,6 +50,17 @@ In the game (unless --no-overlay): the first planned agent's chosen path (green)
 green, dashed) with its landing (yellow), predicted landings (yellow),
 wall jumps (cyan), where it touches the princess (pink) or picks a key (gold), and the top rejected
 alternatives (faint red when vetoed, grey otherwise).
+Demo replay (--demo <best.json> or --demo-level <level>, plan/demos.py; run  python -m plan.demos inventory  first):
+no planner and no model; agent 0 plays a PPO agent's best finish (realgame.py's levels/<level>/best.json) frame by
+frame from the wave start with the time-step lock, --demo-copies K (default 20) more agents play it with 1-3 small
+seeded changes each (an action change shifted 1-4 frames, a jump released 1-4 frames early or late, 4-12 frames of
+a random action; new per wave, logged in events.jsonl and the shard meta "perturbations"). Waves wait for every
+agent (--end-after 0) and last at least the demo + 2 s. Each wave checks that agent 0 finished at the demo's
+frame (+-1) and warns when it did not (the demo is not reproducible, e.g. recorded unlocked). Held-out levels,
+SUSPICIOUS inventory entries and another level loaded in the game are refused. Run folder runs/demo_<level>_<time>;
+--wm-collect shards have source "demo" (agent 0) / "demo-noisy" (the copies), as agent_sources. Overlay: the
+demo's path in white (recorded positions, else agent 0's path as it plays). No best times are offered.
+    python smbrl/agent.py --demo-level 1-12 --wm-collect
 Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
 The wave summary line also says how often the planned agents decided: decisions per 100 alive frames, the
 median frames between an agent's decisions, the triggers by kind, the switch rate (decisions that switched
@@ -118,6 +129,8 @@ COL_COMP = 0x9020E040                             # the airborne completion afte
 # the chosen path in its planning mode's colour (plan/planner.py MODES; viz/viewer.py uses the same colours)
 MODE_COL = {"long-safe": 0xE04080FF, "normal": COL_PLAN, "reflex": 0xE0FF3030, "explore": 0xE0B040F0}
 OVERLAY_ALTS, PLAN_STEP, ALT_STEP = 3, 3, 4
+COL_DEMO = 0xE0FFFFFF                             # --demo: the demo's path (white)
+DEMO_TRAIL_EVERY = 15                             # --demo without recorded positions: redraw agent 0's path this often
 
 
 def other_runners() -> list[str]:
@@ -387,8 +400,12 @@ class Runner:
         self.args = args
         self.run_dir = os.path.join(HERE, "runs", args.name)
         os.makedirs(self.run_dir, exist_ok=True)
+        self.demo = getattr(args, "demo_play", None)       # plan.demos.DemoPlay (--demo / --demo-level)
+        self.demo_fin, self.demo_trail = None, []
+        if self.demo is not None:
+            args.agents, args.explore = 0, 0
         self.n_plan, self.n_explore = max(0, int(args.agents)), max(0, int(args.explore))
-        self.n_total = self.n_plan + self.n_explore
+        self.n_total = self.n_plan + self.n_explore + (self.demo.n if self.demo is not None else 0)
         if self.n_total < 1:
             raise SystemExit("no agents: --agents and --explore are both 0")
         if self.n_total > MAX_AGENTS:
@@ -424,10 +441,16 @@ class Runner:
         self.wm = None
         if args.wm_collect:
             from wm.buffer import Collector
-            src = "planner" if not self.n_explore else ("explore" if not self.n_plan else "planner+explore")
-            self.wm = Collector(os.path.join(self.run_dir, "wm_data"), source=src)
-            self.wm.meta_extra = {"agent_sources": {"planner": list(range(self.n_plan)),
-                                                    "explore": list(range(self.n_plan, self.n_total))}}
+            if self.demo is not None:
+                self.wm = Collector(os.path.join(self.run_dir, "wm_data"),
+                                    source="demo" if not self.demo.copies else "demo+demo-noisy")
+                self.wm.meta_extra = {"agent_sources": {"demo": [0], "demo-noisy": list(range(1, self.n_total))},
+                                      "demo": self.demo.demo["best"]}
+            else:
+                src = "planner" if not self.n_explore else ("explore" if not self.n_plan else "planner+explore")
+                self.wm = Collector(os.path.join(self.run_dir, "wm_data"), source=src)
+                self.wm.meta_extra = {"agent_sources": {"planner": list(range(self.n_plan)),
+                                                        "explore": list(range(self.n_plan, self.n_total))}}
         if telemetry is not None:
             self.tel = telemetry
         else:
@@ -493,8 +516,13 @@ class Runner:
                    "failed": 0, "errors": 0, "ex_finished": 0, "ex_died": 0, "triggers": {}, "gaps": [],
                    "agent_frames": 0, "check_s": 0.0, "switched": 0, "kept": 0, "clipped": 0, "pnr": 0,
                    "pnr_none": 0, "completed": 0}
-        self.fin = {"planned": [], "explore": []}     # this wave's finish times (s)
+        self.fin = {"planned": [], "explore": [], "demo": []}     # this wave's finish times (s)
         self.new_best = False
+        if self.demo is not None:                 # this wave's perturbed copies (same for repeated calls)
+            self.demo.new_wave()
+            self.demo_fin, self.demo_trail = None, []
+            if self.wm is not None:
+                self.wm.meta_extra["perturbations"] = self.demo.changes
 
     def on_info(self, info: dict, tiles: bytes):
         if info["W"] * info["H"] == 0 or len(tiles or b"") != info["W"] * info["H"] * 4:
@@ -502,6 +530,12 @@ class Runner:
             return
         if info["name"] in (None, "unknown"):
             info["name"] = identify_level(info, tiles) or "unknown"
+        if self.demo is not None and info["name"] != self.demo.demo["level"]:
+            print(f"[demo] refused: the game has level {info['name']} loaded, the demo is for "
+                  f"{self.demo.demo['level']} (enter {self.demo.demo['level']} and start again); stopping", flush=True)
+            self.level = None
+            self.stopping = True
+            return
         self.level = lv = Level(info, tiles)
         self.cost.reset()
         from wm.buffer import eval_levels
@@ -738,7 +772,14 @@ class Runner:
             acts[i], act_idx[i] = list(ACTIONS[a]), a
             pl.played(i, frame, a)
         C.go("explore")
-        for i in range(self.n_plan, n):
+        if self.demo is not None:
+            if self.alive and self.alive[0] and int(states[0][6]) == 0:
+                self.demo_trail.append((float(states[0][0]), float(states[0][1])))
+            for i in range(n):
+                if self.alive[i] and int(states[i][6]) == 0:
+                    a = self.demo.action(i, frame)
+                    acts[i], act_idx[i] = list(ACTIONS[a]), a
+        for i in range(self.n_plan, n if self.demo is None else 0):
             if self.alive[i] and int(states[i][6]) == 0:
                 a = self.explore_plan(i, frame, states[i], held_before[i], dt, fut) if pl is not None and \
                     pl.modes else self.explore_action(i)
@@ -862,8 +903,10 @@ class Runner:
         messages' dt; 16.667 ms with the time-step lock) / 1000. Every finish goes to times.jsonl; with the
         lock on it is offered as the level's best (planned and explore apart); planned finishes are events."""
         planned = i < self.n_plan
-        source = "planned" if planned else "explore"
+        source = "planned" if planned else ("demo" if self.demo is not None else "explore")
         self.st["finished" if planned else "ex_finished"] += 1
+        if self.demo is not None and i == 0:
+            self.demo_fin = int(finish_frame)
         lv = self.level.name if self.level else None
         frames = int(finish_frame) + 1
         seconds = round(frames * self.dt_ms / 1000.0, 3)
@@ -873,7 +916,7 @@ class Runner:
         self._write(self.f_times, rec)
         self.fin[source].append(seconds)
         new = False
-        if self.lock is True and lv is not None:
+        if self.lock is True and lv is not None and self.demo is None:
             new = self.best.offer(lv, source, {"seconds": seconds, "frames": frames, "run": self.args.name,
                                                "wave": self.wave_no, "agent": int(i), "date": rec["time"]})
         if planned:
@@ -922,6 +965,19 @@ class Runner:
         return a
 
     def post_overlay(self, frame: int, force: bool = False):
+        if self.demo is not None:
+            if self.args.no_overlay or self.script is None:
+                return
+            pts = self.demo.demo.get("path") or self.demo_trail
+            key = ("rec",) if self.demo.demo.get("path") else ("trail", len(pts) // DEMO_TRAIL_EVERY)
+            if (not force and key == self.overlay_frame) or len(pts) < 2:
+                return
+            self.overlay_frame = key
+            try:
+                self.script.post({"type": "path", "payload": [{"pts": _sub(pts, PLAN_STEP), "col": COL_DEMO, "w": 3}]})
+            except Exception:
+                pass
+            return
         if self.args.no_overlay or self.script is None or not self.n_plan:
             return
         p = self.cur_plan.get(0) if self.alive and self.alive[0] else None
@@ -1042,6 +1098,17 @@ class Runner:
                 + (f" | death memory +{st['memory']} ({len(self.deaths)})" if st["memory"] else "")
                 + f"  [{el:.1f} min]")
         print(line, flush=True)
+        if self.demo is not None and lv is not None:
+            ok, why = self.demo.check(self.demo_fin)
+            fins = self.fin["demo"]
+            print(f"[demo] wave {self.wave_no}: {why}" + ("" if ok else " - WARNING: the demo is not reproducible "
+                  "here (recorded without the time-step lock, or the level does not replay the same way)")
+                  + f"; {len(fins)}/{self.n_total} agents finished" + (f" (fastest {min(fins):.2f} s)" if fins else ""),
+                  flush=True)
+            self.event("demo check", frame, ok=ok, why=why, finish_frame=self.demo_fin,
+                       demo_finish_frame=self.demo.finish_frame, finished=len(fins), demo=self.demo.demo["best"],
+                       perturbations=self.demo.changes, demo_wave=self.demo.waves)
+            self.demo.wave_done()
         if cost is not None:
             print(self.cost.text(cost), flush=True)
         self.event("wave", frame, **(cost or {}), why=m.get("why"), frames=frame,
@@ -1277,8 +1344,32 @@ def build_parser() -> argparse.ArgumentParser:
                     help="best finish times per level (default smbrl/best_times.json; time-step lock on only)")
     ap.add_argument("--threads", type=int, default=2, help="torch threads for the world model (default 2)")
     ap.add_argument("--seed", type=int, default=0, help="random seed of the explore agents")
+    ap.add_argument("--demo", default=None, metavar="BEST_JSON",
+                    help="replay this PPO best finish (runs/real_*/levels/<level>/best.json; plan.demos inventory)")
+    ap.add_argument("--demo-level", default=None, help="replay the level's fastest non-suspicious PPO best finish")
+    ap.add_argument("--demo-copies", type=int, default=20, help="--demo: perturbed copies besides the exact one")
     ap.add_argument("--no-lock-step", action="store_true", help=argparse.SUPPRESS)
     return ap
+
+
+def setup_demo(args, entries=None):
+    """--demo / --demo-level: resolve (refusals: SystemExit), then the agents, wave length and run name."""
+    from plan.demos import resolve_demo, DemoPlay
+    if args.demo and args.demo_level:
+        raise SystemExit("--demo and --demo-level: give one")
+    demo = resolve_demo(best=args.demo, level=args.demo_level, entries=entries)
+    if not 0 <= args.demo_copies <= MAX_AGENTS - 1:
+        raise SystemExit(f"--demo-copies {args.demo_copies}: 0 to {MAX_AGENTS - 1}")
+    args.demo_play = DemoPlay(demo, args.demo_copies, args.seed)
+    args.end_after = 0                              # every copy plays the wave out
+    need = demo["seconds"] + 2.0
+    if args.wave_seconds < need:
+        print(f"[demo] --wave-seconds {args.wave_seconds:g} -> {need:.1f} (the demo takes {demo['seconds']:.2f} s)")
+        args.wave_seconds = need
+    args.name = args.name or time.strftime(f"demo_{demo['level']}_%Y%m%d-%H%M%S")
+    print(f"[demo] {demo['best']}: {demo['level']} in {demo['seconds']:.2f} s ({len(demo['actions'])} frames, "
+          f"{demo['entry']['verdict']}), {args.demo_copies} perturbed copies (seed {args.seed})", flush=True)
+    return args
 
 
 def main():
@@ -1286,6 +1377,8 @@ def main():
     if args.no_lock_step:
         raise SystemExit("the planner needs the game's time step locked (it assumes every future step is the game's "
                          "fixed step): run without --no-lock-step")
+    if args.demo or args.demo_level:
+        setup_demo(args)
     args.name = args.name or time.strftime("plan_%Y%m%d-%H%M%S")
     Runner(args).run()
 

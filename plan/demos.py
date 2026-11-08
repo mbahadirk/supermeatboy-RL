@@ -230,6 +230,151 @@ def recorded(entries: list) -> list:
             for e in entries if e["verdict"] == "VALID_RECORDED"]
 
 
+# ---- replay (agent.py --demo) -------------------------------------------------------------------------------
+REPLAY_OK = ("VALID_RECORDED", "REPLAYABLE")
+REPRO_TOL = 1                 # frames: the exact copy must finish at the demo's finish frame +- this
+
+
+def _norm(p: str) -> str:
+    """A path given relative to the current folder (smbrl/runs/...) or to smbrl (runs/..., the inventory's)."""
+    if not os.path.isabs(p) and os.path.exists(p):
+        p = os.path.abspath(p)
+    return os.path.normcase(os.path.normpath(p if os.path.isabs(p) else os.path.join(HERE, p)))
+
+
+def resolve_demo(best: str | None = None, level: str | None = None, entries: list | None = None) -> dict:
+    """The demo to replay: a best.json path (--demo) or the fastest non-suspicious one of a level (--demo-level).
+    Refused (SystemExit) for held-out levels, SUSPICIOUS entries and best.json files the inventory does not know.
+    Returns {level, seconds, actions, best, entry, path (recorded positions, [] without rows)}."""
+    held = eval_levels()
+    if entries is None:
+        try:
+            entries = load_inventory()
+        except OSError:
+            raise SystemExit("no demo inventory: run  python -m plan.demos inventory  first")
+    if level is not None:
+        if level in held:
+            raise SystemExit(f"{level} is a held-out level: demos there are never used")
+        e = best_for_level(level, entries)
+        if e is None:
+            raise SystemExit(f"no non-suspicious demo for {level} in the inventory")
+    else:
+        e = next((x for x in entries if _norm(x["best"]) == _norm(best)), None)
+        if e is None:
+            raise SystemExit(f"{best} is not in the demo inventory (run  python -m plan.demos inventory)")
+    if e["level"] in held or e["verdict"] == "HELD_OUT":
+        raise SystemExit(f"{e['level']} is a held-out level: demos there are never used")
+    if e["verdict"] not in REPLAY_OK:
+        raise SystemExit(f"{e['best']} is {e['verdict']}: " + "; ".join(e["reasons"]))
+    with open(_norm(e["best"]), encoding="utf-8") as f:
+        acts = [int(a) for a in json.load(f).get("actions") or []]
+    if not acts:
+        raise SystemExit(f"{e['best']} has no actions")
+    return {"level": e["level"], "seconds": float(e["seconds"]), "actions": acts, "best": e["best"], "entry": e,
+            "path": recorded_path(e)}
+
+
+def recorded_path(e: dict) -> list:
+    """The demo's recorded positions [[x, y], ...] (VALID_RECORDED entries), else []."""
+    if not e.get("rows"):
+        return []
+    p = os.path.join(_norm(e["wm_data"]), e["shard"])
+    if not os.path.exists(p):
+        return []
+    with np.load(p) as z:
+        r = z["rows"]
+    r = np.sort(r[r["agent"] == e["agent"]], order="frame")
+    return [[float(x), float(y)] for x, y in zip(r["x"], r["y"])]
+
+
+def _jump_ids():
+    from mpc.candidates import ACTIONS
+    idx = {a: i for i, a in enumerate(ACTIONS)}
+    on = np.array([idx[(a[0], a[1], 1, a[3])] for a in ACTIONS])       # same action with the jump key held
+    off = np.array([idx[(a[0], a[1], 0, a[3])] for a in ACTIONS])      # ... released
+    has = np.array([a[2] == 1 for a in ACTIONS])
+    return on, off, has, len(ACTIONS)
+
+
+def perturb(actions, rng: np.random.Generator) -> tuple[list, list]:
+    """A near-expert copy: 1 to 3 changes, each one of: a change of action shifted by 1-4 frames (earlier or
+    later), a jump released 1-4 frames early or late, or 4-12 frames of a random action. Every change stays
+    inside the demo's frames. Returns (actions, changes logged as dicts)."""
+    on, off, has, n_act = _jump_ids()
+    a = np.array(actions, np.int64)
+    L = len(a)
+    changes = []
+    for _ in range(int(rng.integers(1, 4))):
+        cps = np.nonzero(a[1:] != a[:-1])[0] + 1                       # first frame of each new action
+        ends = np.nonzero(has[a[:-1]] & ~has[a[1:]])[0] + 1             # first frame after a held jump
+        kinds = ["random"] + (["shift"] if len(cps) else []) + (["jump"] if len(ends) else [])
+        kind = kinds[int(rng.integers(len(kinds)))]
+        d = int(rng.integers(1, 5))
+        if kind == "shift":
+            c = int(cps[int(rng.integers(len(cps)))])
+            if rng.random() < 0.5:
+                a[c:min(L, c + d)] = a[c - 1]
+                changes.append({"kind": "shift", "frame": c, "by": d})
+            else:
+                a[max(0, c - d):c] = a[c]
+                changes.append({"kind": "shift", "frame": c, "by": -d})
+        elif kind == "jump":
+            e = int(ends[int(rng.integers(len(ends)))])
+            if rng.random() < 0.5:
+                a[max(0, e - d):e] = off[a[max(0, e - d):e]]
+                changes.append({"kind": "jump early", "frame": e, "by": d})
+            else:
+                a[e:min(L, e + d)] = on[a[e:min(L, e + d)]]
+                changes.append({"kind": "jump late", "frame": e, "by": d})
+        else:
+            n = int(rng.integers(4, 13))
+            t = int(rng.integers(0, max(1, L - n + 1)))
+            r = int(rng.integers(n_act))
+            a[t:min(L, t + n)] = r
+            changes.append({"kind": "random", "frame": t, "frames": min(L, t + n) - t, "action": r})
+    return a.tolist(), changes
+
+
+class DemoPlay:
+    """Per wave: agent 0 plays the demo's actions exactly, agents 1..copies a perturbed copy (seeded by
+    (seed, wave count, copy)); after the actions run out an agent waits (action 0)."""
+
+    def __init__(self, demo: dict, copies: int, seed: int = 0):
+        self.demo, self.copies, self.seed = demo, max(0, int(copies)), int(seed)
+        self.actions = list(demo["actions"])
+        self.finish_frame = len(self.actions) - 1      # the update in which the demo touched the goal
+        self.waves = 0                                  # waves played (the perturbation seed's wave part)
+        self.seqs, self.changes = [], []
+        self.new_wave()
+
+    @property
+    def n(self) -> int:
+        return 1 + self.copies
+
+    def new_wave(self):
+        self.seqs, self.changes = [list(self.actions)], [[]]
+        for c in range(1, self.n):
+            s, ch = perturb(self.actions, np.random.default_rng([self.seed, self.waves, c]))
+            self.seqs.append(s)
+            self.changes.append(ch)
+
+    def wave_done(self):
+        self.waves += 1
+
+    def action(self, i: int, frame: int) -> int:
+        s = self.seqs[i] if 0 <= i < len(self.seqs) else []
+        return int(s[frame]) if 0 <= frame < len(s) else 0
+
+    def check(self, finish_frame) -> tuple[bool, str]:
+        """Did the exact copy reproduce the demo (finish frame within REPRO_TOL)?"""
+        want = self.finish_frame
+        if finish_frame is None:
+            return False, f"the exact copy did not finish (demo finish frame {want})"
+        if abs(int(finish_frame) - want) > REPRO_TOL:
+            return False, f"the exact copy finished at frame {finish_frame}, the demo at {want}"
+        return True, f"the exact copy finished at frame {finish_frame} (demo {want})"
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
