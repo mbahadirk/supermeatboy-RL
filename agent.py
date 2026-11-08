@@ -64,6 +64,14 @@ loaded in the game are refused. Run folder runs/demo_<level>_<time>;
 --wm-collect shards have source "demo" (agent 0) / "demo-noisy" (the copies), as agent_sources. Overlay: the
 demo's path in white (recorded positions, else agent 0's path as it plays). No best times are offered.
     python smbrl/agent.py --demo-level 1-12 --wm-collect
+Train mode (--learn; turns on --wm-collect, not with --demo): wm.learner runs as a child process (below-normal
+priority, 2 threads; from the default model, or from --live-dir's published one when that is newer; stopped on
+exit). It fine-tunes on every locked wm_data folder plus the demos whenever 20 new shards or a new self-demo exist
+and publishes runs/wm_live/wm_model.pt only when its error at +16 and +48 frames is not worse (runs/wm_live/
+learner.log). Between waves (never mid-wave) a newer published model replaces the planner's: "[learn] model v<N>
+loaded (+16 error a -> b)". A planned agent's new best time (lock on, not a held-out level) appends its wave rows
+to runs/demos/self.json (--self-demos), which the learner trains on as a demo.
+    python smbrl/agent.py --learn
 Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
 The wave summary line also says how often the planned agents decided: decisions per 100 alive frames, the
 median frames between an agent's decisions, the triggers by kind, the switch rate (decisions that switched

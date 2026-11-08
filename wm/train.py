@@ -14,6 +14,9 @@ printed); demo rows of held-out waves stay held out, held-out levels stay out. R
 (agent.py --demo: runs/demo_<level>_*/wm_data) add their shards' "demo" agents (meta agent_sources) as demo rows.
 Demos the user excluded (plan.demos.USER_EXCLUDED: 1-16, 4-6) are never used: their replay folders are dropped from
 the data and their recorded.json entries skipped (the levels' other rows stay).
+Partial shards (a wave cut by S, a level change or a stop; meta "partial") are read like any other.
+Train mode (agent.py --learn) fine-tunes in the background with wm.learner (the same folders' rules, plus the
+agent's own new bests in runs/demos/self.json); this script trains from scratch (--init: self-correction only).
 """
 from __future__ import annotations
 

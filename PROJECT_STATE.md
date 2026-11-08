@@ -584,6 +584,20 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
   100 / 200 and 1-8 0 / 30 / 60 from real_20261102-165351, 1-14 0 / 100 / 200 from plan_20261107-200300: the
   folders with the longest second waves): wm_step4 4 finished (1-8 x3, 1-14 from 100), 0 died; wm_step4_demo2 3
   finished (1-8 from 30 / 60, 1-14 from 0), 0 died. Fewer finishes: **runs/wm_step4 stays the default**.
+- **Replay fix**: the first replays (runs/demo_*_20261108-*) wrote no shard: copies left standing after the
+  demo's actions kept the wave alive to --wave-seconds (20 s), and S / Ctrl+C dropped the wave. Demo waves now end
+  1 s after the actions run out ("demo done"), and any wave cut by S, a level change or a stop is written as a
+  shard marked "partial" (agent.py and realgame.py). The replays need re-running.
+- **User exclusions**: 1-16 (very slow, would teach unwanted movement) and 4-6 (finished through a bug) are
+  USER_EXCLUDED (plan.demos.USER_EXCLUDED): not replayed, not in recorded.json, their replay folders and demo
+  rows skipped by training. Nothing deleted.
+- **Train mode** (`agent.py --learn`): wm.learner fine-tunes in the background (2 threads, below-normal priority)
+  on every locked wm_data folder plus the demos and the agent's own new bests (runs/demos/self.json), every 20 new
+  shards or new self-demo, and publishes runs/wm_live/wm_model.pt only when the median error at +16 and +48 on 40
+  fixed held-out waves is not worse; the agent loads it between waves. One cycle on the current data (16 folders,
+  600000 transitions, 1 epoch): 603 s, of which 544 s building the features, 43 s training, 16 s evaluating; it
+  improved wm_step4 on the 40 waves (+16 4.10 -> 4.03, +48 19.57 -> 19.29 median; a test folder, not runs/wm_live).
+  **Unverified**: everything in the game, including the learner beside a live run.
 
 ---
 
