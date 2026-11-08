@@ -455,7 +455,7 @@ python smbrl/agent.py --agents 1 --explore 40 --wm-collect
 - `--replan 2` (frames between a planned agent's decisions; in between it plays its plan), `--budget-ms 120`,
   `--model runs/wm_locked/wm_model.pt`, `--wave-seconds 20`, `--end-after 1`, `--name` (default `plan_<time>`),
   `--no-overlay`, `--telemetry 127.0.0.1:47800` (or `off`), `--death-memory smbrl/death_memory.json`,
-  `--move-memory smbrl/move_memory.json` (or `none`), `--hysteresis 16` (frames, chosen from closed loops, since step 4), `--threads 2`,
+  `--move-memory smbrl/move_memory.json` (or `none`), `--hysteresis 3` (frames, chosen from closed loops, since 2026-11-08), `--threads 2`,
   `--seed 0`.
 - Stop: Ctrl+C or a file `runs/<name>/STOP`.
 
@@ -598,6 +598,23 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
   600000 transitions, 1 epoch): 603 s, of which 544 s building the features, 43 s training, 16 s evaluating; it
   improved wm_step4 on the 40 waves (+16 4.10 -> 4.03, +48 19.57 -> 19.29 median; a test folder, not runs/wm_live).
   **Unverified**: everything in the game, including the learner beside a live run.
+
+### 7.8 Standing still fixed: one window per stage (2026-11-08, offline only)
+
+- **Problem** (bench_20261108-185846): 1-11 0/6, 1-13 0/2, 1-14 0/3 finishes; decisions keeping a do-nothing plan
+  1-11 717/885, 1-13 376/425, 1-14 198/324; the user's 1-1 run plan_20261108-172037 stood at the lower right wall
+  (154, -154) for about 1200 frames each wave. Cause: since 4e16bf0 the kept plan was judged on H - shift frames,
+  the others on H; estimate = frames + T(end) with an optimistic T (p90 speed), so the shorter window won.
+- **Fix** (`b08aea4`): final stage, every candidate ends at H (unplanned tail = pad); veto and soft risk on planned
+  frames only (at least VETO_FRAMES). Stage 1 ranks every move at its common end (24 frames). `--hysteresis` 3.
+- **Still share** (`5209c61`): plan.analyze_run.is_still (chosen plan only wait / pad), per level in
+  plan.benchmark. **Benchmark** (`3f19070`): `python smbrl/plan/benchmark.py cmd | report <run>` from the folder
+  above smbrl/; the run command keeps the overlay and passes --wm-collect.
+- Closed loops (13 starts: 9 as before + 1-11 x3 + 1-1 demo; 300 frames, no deadlines): 9cabc9b (h16) 4 finished,
+  4 died, switch 0.29, still 0.27; now (h3) 4 finished, 3 died, switch 0.58, still 0.06. 1-1 from the right wall
+  (plan_20261108-172037 wave 2): 9cabc9b stands and dies; now leaves (h3: moves, no finish in 300 frames; h16
+  finishes). The closed loops are noisy (one start flips between finish and death across settings).
+- **Unverified**: everything in the game; 1-11 dies in every closed loop (old and new).
 
 ---
 

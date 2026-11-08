@@ -13,7 +13,7 @@
     "budget_ms": 120.0,
     "replan": 8,
     "tube": 1.5,
-    "hysteresis": 16.0,
+    "hysteresis": 3.0,
     "modes": "on",
     "triggers": "on",
     "agents": 1,

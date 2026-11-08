@@ -52,7 +52,7 @@ Search, per decision (Planner.plan):
    still cheaper by construction: frames + T(end) over a shorter window.)
 
 Switch rule (hysteresis, Planner(hysteresis=...), agent.py / plan/offline.py --hysteresis, frames, default
-HYSTERESIS_FRAMES = 16 there, from closed loops): the shifted previous plan is kept unless the best other candidate's estimate is lower
+HYSTERESIS_FRAMES = 3 there, from closed loops): the shifted previous plan is kept unless the best other candidate's estimate is lower
 by more than `hysteresis` frames (both successes: SUCCESS_MARGIN frames earlier at the goal); a success always
 beats a non-success; a vetoed previous plan never blocks a switch; a previous plan whose soft risk is over the
 best's by more than RISK_SWITCH is dropped. hysteresis 0 (the default here): no rule, the best total is chosen.
@@ -190,12 +190,13 @@ VETO_TIE = 1e-6                              # vetoed: by veto frame, then (tiny
 SUCCESS_SCORE = 1e5                          # a plan touching the goal at frame t: SUCCESS_SCORE - t
 TIE = 1e-3                                   # successes at the same frame: tie-break by their penalty frames
 SUCCESS_MARGIN = 3                           # frames: a success replaces a successful previous plan only if earlier
-# agent.py / plan/offline.py --hysteresis default (frames). Chosen from closed loops (offline.closed_loop, 9 starts on
-# 1-13, 1-8, 1-14, 300 frames, no deadlines) at 3 / 16 / 43 / 60 frames: switch rate 0.35 / 0.22 / 0.11 / 0.09,
-# finished 4 / 4 / 2 / 1, died 0 / 0 / 2 / 2; 16 is the lowest switch rate with no more deaths and no fewer finishes
-# than 3. The kept plan's re-score noise (interval-only decisions, after judging it on its own frames): |noise|
-# median 7, 75% 14, 90% 43 frames (before that fix 18 / 70 / 167)
-HYSTERESIS_FRAMES = 16.0
+# agent.py / plan/offline.py --hysteresis default (frames). After every final candidate is judged at the same end
+# frame H, the kept plan's re-score noise (interval-only decisions, closed loops at 3) is |noise| median 11, 75% 21,
+# 90% 75 frames (141 pairs; signed median +10: a kept plan pays for the frames it stood). Closed loops
+# (offline.closed_loop, 300 frames, no deadlines, modes on; 9 starts on 1-13, 1-8, 1-14, 3 on 1-11, 1-1 from the
+# demo) at 3 / 8 / 11 / 16 frames: finished 4 / 5 / 4 / 2, died 3 / 4 / 5 / 4, switch rate 0.58 / 0.50 / 0.43 / 0.44;
+# 3 is the smallest value (and the only one tried) with no more deaths and no fewer finishes than 3.
+HYSTERESIS_FRAMES = 3.0
 RISK_SWITCH = 0.2                            # soft risk: a previous plan riskier than the best by more is dropped
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
 N_ALTERNATIVES = 5

@@ -4,7 +4,7 @@ costs.
     python -m plan.offline <run>/wm_data --level 4-6 [--decisions 20] [--model runs/wm_step4/wm_model.pt]
                            [--budget 120] [--threads 2] [--seed 0] [--json plans.jsonl]
     python -m plan.offline runs/plan_20261103-152013/wm_data --level 1-12 --closed-loop 400 [--start 0]
-                           [--replan 8] [--tube 1.5] [--triggers on] [--hysteresis 16] [--json summary.jsonl]
+                           [--replan 8] [--tube 1.5] [--triggers on] [--hysteresis 3] [--json summary.jsonl]
 
 --closed-loop: the world model (member 0) plays itself from a recorded state, the old way (--replan 2,
 triggers off, hysteresis 0) and then with the given flags (closed_loop): decisions per 100 frames, switch rate,
