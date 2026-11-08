@@ -152,3 +152,53 @@ def test_runner_replays_collects_and_checks(tmp_path):
     r.on_message({"type": "send", "payload": dict(meta, name="1-12", agents=3, ev="info")}, words.astype("<u4").tobytes())
     assert r.stopping and r.level is None
     r.close()
+
+
+@need_data
+def test_demo_wave_ends_when_every_agent_is_done_and_cut_waves_are_kept(tmp_path):
+    """(1) a demo wave ends 1 s after the actions ran out, copies left standing count as done (the replays of
+    2026-11-08 ran to S / Ctrl+C with no shard); (2) a wave cut by S, a level change or a stop is written as a
+    partial shard, which the trainer's reader takes."""
+    import agent
+    from wm.buffer import load_level, load_shards, transitions
+    from wm.features import build
+    with open(agent.JS, encoding="utf-8") as f:
+        assert "if (act.end) { endWave(" in f.read()                     # realgame.js ends the wave on "end"
+    es = _entries(tmp_path, level=LEVEL)
+    r = _runner(tmp_path, es)
+    words, meta = load_level(DATA, LEVEL)
+    info = {"type": "send", "payload": dict(meta, name=LEVEL, agents=3, ev="info")}
+    r.on_message(info, words.astype("<u4").tobytes())
+    sx, sy = meta["spawn"]
+    end = r.demo.end_frame
+    assert end == len(ACTS) + D.DEMO_SETTLE
+
+    def frames(fs, wave):
+        out = []
+        for f in fs:
+            st = [[sx + min(f, 50), sy, 0.0, 0.0, 0, 0, 0, 0] for _ in range(3)]   # all alive, standing at the end
+            r.on_message({"type": "send", "payload": {"ev": "frame", "frame": f, "wave": wave, "dt": 16.667,
+                                                      "s": st}}, None)
+            out.append([p for p in r.script.posts if p["type"] == "act"][-1]["payload"])
+        return out
+    rep = frames(range(end + 1), 1)
+    assert all("end" not in x for x in rep[:end]) and rep[end]["end"] == "demo done"
+    r.on_message({"type": "send", "payload": {"ev": "wave_end", "wave": 1, "status": [0, 0, 0], "finish": [-1] * 3,
+                                              "frame": end, "why": "demo done"}}, None)
+    frames(range(10), 2)
+    r.on_message({"type": "send", "payload": {"ev": "save", "level": LEVEL}}, None)      # S
+    frames(range(5), 3)
+    r.on_message({"type": "send", "payload": {"ev": "level", "name": LEVEL}}, None)      # a level change
+    r.on_message(info, words.astype("<u4").tobytes())
+    r.on_message({"type": "send", "payload": {"ev": "level", "name": LEVEL}}, None)      # nothing recorded: no shard
+    r.on_message(info, words.astype("<u4").tobytes())
+    frames(range(4), 1)
+    r.close()                                                                            # Ctrl+C / STOP
+    got = list(load_shards(os.path.join(r.run_dir, "wm_data")))
+    assert [(m.get("why"), m.get("partial", False), m.get("partial_reason")) for m, _, _ in got] == [
+        ("demo done", False, None), ("cut", True, "S"), ("cut", True, "level change"), ("cut", True, "stop")]
+    assert [m["wave"] for m, _, _ in got] == [1, 2, 3, 1] and [len(rw) for _, rw, _ in got] == [3 * (end + 1), 30, 15, 12]
+    assert got[1][0]["frames"] == 10 and got[1][0]["source"] == "demo+demo-noisy"
+    assert len(transitions(got[1][1])["truncated_rows"]) == 3          # the cut agents' last rows: cut by time
+    d = build([os.path.join(r.run_dir, "wm_data")], log=lambda *a: None)
+    assert len(d["X"]) > 0

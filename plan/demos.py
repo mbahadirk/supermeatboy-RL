@@ -233,6 +233,7 @@ def recorded(entries: list) -> list:
 # ---- replay (agent.py --demo) -------------------------------------------------------------------------------
 REPLAY_OK = ("VALID_RECORDED", "REPLAYABLE")
 REPRO_TOL = 1                 # frames: the exact copy must finish at the demo's finish frame +- this
+DEMO_SETTLE = HZ              # frames after the actions run out before a demo wave ends (falls land or die)
 
 
 def _norm(p: str) -> str:
@@ -357,6 +358,12 @@ class DemoPlay:
             s, ch = perturb(self.actions, np.random.default_rng([self.seed, self.waves, c]))
             self.seqs.append(s)
             self.changes.append(ch)
+
+    @property
+    def end_frame(self) -> int:
+        """The wave frame at which agent.py ends a demo wave: DEMO_SETTLE frames after the longest action
+        sequence ran out (a copy left standing there would otherwise keep the wave going to --wave-seconds)."""
+        return max(len(s) for s in self.seqs) + DEMO_SETTLE
 
     def wave_done(self):
         self.waves += 1

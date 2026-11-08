@@ -1036,10 +1036,14 @@ class Trainer:
                 self.on_wave_end(p)
             elif ev == "level":
                 print(f"[game] level {p['name']}", flush=True)
+                if self.wm is not None:
+                    self.wm.cut("level change")     # the wave in progress is kept as a partial shard
                 self.level = None
                 self.paths = []
             elif ev == "save":
                 lv = p.get("level")
+                if self.wm is not None:
+                    self.wm.cut("S")                # the wave in progress is kept as a partial shard
                 self.save(os.path.join(self.run_dir, f"{lv}_model.pt"))
                 print(f"[S] saved the agent for {lv}; finishing the level", flush=True)
                 self.script.post({"type": "finish"})
@@ -1140,6 +1144,11 @@ class Trainer:
             session.detach()
             if self.mpc:
                 self.mpc.close()
+            if self.wm is not None:
+                try:
+                    self.wm.cut("stop")             # Ctrl+C / STOP: the wave in progress is kept (partial)
+                except OSError as e:
+                    print(f"[wm] could not write the cut wave: {e}", flush=True)
             if mon is not None:
                 mon.close()
             signal.signal(signal.SIGINT, old_sigint)

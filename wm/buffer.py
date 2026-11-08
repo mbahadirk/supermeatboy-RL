@@ -11,6 +11,9 @@ before it, the action chosen for it (-1 when it chose none: dead / finished), an
 action earned (NaN on its first row). Rows are raw game values, not network inputs, so the world model can
 build its own features from them and the level data.
 
+A wave cut before its end (S, a level change, Ctrl+C / STOP: Collector.cut) is still written, with meta
+"partial": true and "partial_reason"; readers take it like any shard (its last alive rows count as cut by time).
+
 Each shard's meta says who chose the actions (`source`: ppo / mpc / mpc+ppo, or from agent.py planner /
 explore / planner+explore) and why the run played (`mode`: train / eval), so planner-driven data can be kept
 apart from PPO data. agent.py also writes `agent_sources` ({"planner": [agent indices], "explore": [...]}) for
@@ -62,9 +65,11 @@ class Collector:
     def _reset(self):
         self.rows, self.world, self.chars, self.char_frames = [], [], [], []
         self.ids_sent = None
+        self.cur_wave, self.cur_frame = -1, -1
 
     def level(self, lv, info: dict):
-        """A new level: its static data, once per level name."""
+        """A new level: its static data, once per level name. A wave still in progress is kept (cut)."""
+        self.cut("level change")
         self.level_name = lv.name
         self._reset()
         p = os.path.join(self.dir, "levels", f"{lv.name}.npz")
@@ -102,6 +107,7 @@ class Collector:
         """One row per agent that was alive when this frame came in. The row's wave is the shard number (the
         game's wave count starts again on every level; it is kept in the shard's meta)."""
         idx = [i for i in range(len(states)) if i < len(alive) and alive[i]]
+        self.cur_wave, self.cur_frame = int(wave), int(frame)      # the game's wave / frame (cut())
         if not idx:
             return
         r = np.zeros(len(idx), ROW)
@@ -116,8 +122,9 @@ class Collector:
             self.chars.append(np.frombuffer(data, np.uint8).copy())
             self.char_frames.append(frame)
 
-    def wave_end(self, wave: int, m: dict):
-        """Write this wave's shard (the game waits for the trainer here anyway)."""
+    def wave_end(self, wave: int, m: dict, partial: str | None = None):
+        """Write this wave's shard (the game waits for the trainer here anyway). partial: the wave was cut
+        before its end (cut())."""
         if self.rows:
             k = self.n_shards
             self.n_shards += 1
@@ -125,6 +132,8 @@ class Collector:
             meta = {"level": self.level_name, "wave": wave, "why": m.get("why"), "frames": m.get("frame"),
                     "status": m.get("status"), "finish": m.get("finish"),
                     "source": self.source, "mode": self.mode, **self.meta_extra}
+            if partial:
+                meta.update(partial=True, partial_reason=partial)
             np.savez_compressed(base + ".npz", rows=np.concatenate(self.rows), meta=json.dumps(meta))
             with gzip.open(base + "_world.json.gz", "wt", encoding="utf-8") as f:
                 json.dump(self.world, f, separators=(",", ":"))
@@ -132,6 +141,15 @@ class Collector:
                 np.save(base + "_char.npy", np.stack(self.chars))
                 np.save(base + "_char_frames.npy", np.array(self.char_frames, np.int32))
         self._reset()
+
+    def cut(self, reason: str):
+        """The wave in progress was cut (S, a level change, Ctrl+C / STOP): its rows so far become a shard
+        marked partial (meta "partial": true, "partial_reason"); readers treat its last alive rows as cut by
+        time. Nothing recorded: nothing written."""
+        if self.rows:
+            self.wave_end(self.cur_wave, {"why": "cut", "frame": self.cur_frame + 1}, partial=reason)
+        else:
+            self._reset()
 
 
 # ---- reading --------------------------------------------------------------------------------------

@@ -37,9 +37,10 @@ none: off; held-out levels: nothing charged) and logs a "point of no return" eve
 Logs in runs/<name>/: plans.jsonl (one Plan.to_dict() per decision, with the level, wave and the real state),
 events.jsonl (surprises, deaths, failed moves, points of no return, level / kill box / hazard / field messages,
 wave summaries),
-states.jsonl (per frame: frame, wave, every planned agent's [i, x, y, vx, vy, status]), times.jsonl (every
-finish, planned and explore: level, wave, agent, source, frames, seconds, lock, time of day); --wm-collect:
-world-model data in runs/<name>/wm_data (shards' source: planner, explore or planner+explore, with agent_sources).
+states.jsonl (per frame: frame, wave, every planned agent's [i, x, y, vx, vy, status]; --demo: every agent's),
+times.jsonl (every finish, planned and explore: level, wave, agent, source, frames, seconds, lock, time of day);
+--wm-collect: world-model data in runs/<name>/wm_data (shards' source: planner, explore or planner+explore, with
+agent_sources). A wave cut by S, a level change or Ctrl+C / STOP is still written, as a shard marked partial.
 Best finish times per level (planned and explore apart, time-step lock on only): --best-times (default
 smbrl/best_times.json; the old best.json is not used); the [level] line and the game's timer sign
 ("BEST x.xx", at the level start and on every new best) show the planned agents' best.
@@ -54,8 +55,9 @@ Demo replay (--demo <best.json> or --demo-level <level>, plan/demos.py; run  pyt
 no planner and no model; agent 0 plays a PPO agent's best finish (realgame.py's levels/<level>/best.json) frame by
 frame from the wave start with the time-step lock, --demo-copies K (default 20) more agents play it with 1-3 small
 seeded changes each (an action change shifted 1-4 frames, a jump released 1-4 frames early or late, 4-12 frames of
-a random action; new per wave, logged in events.jsonl and the shard meta "perturbations"). Waves wait for every
-agent (--end-after 0) and last at least the demo + 2 s. Each wave checks that agent 0 finished at the demo's
+a random action; new per wave, logged in events.jsonl and the shard meta "perturbations"). A wave ends when every
+agent finished or died, or 1 s after the demo's actions ran out (plan.demos.DemoPlay.end_frame: copies left
+standing count as done; why "demo done"), or at --wave-seconds (raised to the demo + 2 s). Each wave checks that agent 0 finished at the demo's
 frame (+-1) and warns when it did not (the demo is not reproducible, e.g. recorded unlocked). Held-out levels,
 SUSPICIOUS inventory entries and another level loaded in the game are refused. Run folder runs/demo_<level>_<time>;
 --wm-collect shards have source "demo" (agent 0) / "demo-noisy" (the copies), as agent_sources. Overlay: the
@@ -801,7 +803,8 @@ class Runner:
         self._write(self.f_states, {"frame": frame, "wave": self.wave_no, "level": lv.name,
                                     "agents": [[i, round(float(states[i][0]), 2), round(float(states[i][1]), 2),
                                                 round(float(states[i][2]), 2), round(float(states[i][3]), 2),
-                                                int(states[i][6])] for i in range(min(self.n_plan, n))]})
+                                                int(states[i][6])]
+                                               for i in range(n if self.demo is not None else min(self.n_plan, n))]})
         if self.tel is not None:
             C.go("telemetry")
             self.send_frame(m, frame, states, act_idx, boxes, kept, fboxes, dt)
@@ -809,6 +812,10 @@ class Runner:
             C.go("wm_data")
             self.wm.agents(self.wave_no, frame, states, alive_before, held_before, act_idx, [float("nan")] * n)
         C.go("other")
+        if self.demo is not None and frame >= self.demo.end_frame:
+            # the demo's actions ran out a second ago: copies still standing count as done (they would keep the
+            # wave going to --wave-seconds); realgame.js ends the wave on "end" before stepping anyone
+            return {"a": acts, "leader": int(leader), "end": "demo done"}
         return {"a": acts, "leader": int(leader)}
 
     def on_plan(self, plan, s, trigger=()):
@@ -1155,6 +1162,8 @@ class Runner:
                 self.on_wave_end(p)
             elif ev == "level":
                 print(f"[game] level {p['name']}", flush=True)
+                if self.wm is not None:
+                    self.wm.cut("level change")     # the wave in progress is kept as a partial shard
                 self.level = None
                 self.cur_plan = {}
                 self.commit.reset()
@@ -1225,9 +1234,16 @@ class Runner:
                   f"the agent's best {secs:.2f} s is not written ({why})") + ": 999.99", flush=True)
             secs = None
         self.event("save", None, level=level, seconds=secs, backup=self.save_backup)
+        if self.wm is not None:
+            self.wm.cut("S")                        # the wave in progress is kept as a partial shard
         self.script.post({"type": "finish", "payload": {"time": secs}})
 
     def close(self):
+        if self.wm is not None:
+            try:
+                self.wm.cut("stop")                 # Ctrl+C / STOP: the wave in progress is kept (partial)
+            except OSError as e:
+                print(f"[wm] could not write the cut wave: {e}", flush=True)
         self.flush()
         for f in (self.f_plans, self.f_events, self.f_states, self.f_times):
             try:
