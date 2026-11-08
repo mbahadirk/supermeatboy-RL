@@ -62,13 +62,14 @@ STILL_MOVES = ("wait",)            # move-name prefixes that do nothing (plan.mo
 
 
 def resolve_run(arg: str, runs_dir: str = RUNS) -> str:
-    """'latest' = the newest runs/plan_* folder (by name); else a path as given or a folder under runs/."""
+    """'latest' = the newest runs/plan_* folder (by name); else a folder under runs/ (smbrl/runs, whatever the
+    current folder), then under smbrl/, then a path as given."""
     if arg == "latest":
         cands = sorted(d for d in glob.glob(os.path.join(runs_dir, "plan_*")) if os.path.isdir(d))
         if not cands:
             raise SystemExit(f"no plan_* run folder in {runs_dir}")
         return cands[-1]
-    for p in (arg, os.path.join(runs_dir, arg), os.path.join(HERE, arg)):
+    for p in (os.path.join(runs_dir, arg), os.path.join(HERE, arg), arg):     # smbrl/runs first, from any folder
         if os.path.isdir(p):
             return os.path.abspath(p)
     raise SystemExit(f"no run folder {arg!r}")

@@ -1,14 +1,19 @@
 """Fixed benchmark: the beam planner (agent.py) with a frozen config over a fixed World-1 level set, turned into
 one comparable record per run (or set of runs), with before/after deltas against a saved baseline.
 
-    python -m plan.benchmark cmd                       # the agent.py command to run, and the level / wave plan
-    python -m plan.benchmark report runs/bench_20261108-120000 [more folders] [--label NAME] [--set-baseline]
+    python smbrl/plan/benchmark.py cmd                 # from the folder above smbrl/: the agent.py command to run
+    python smbrl/plan/benchmark.py report bench_20261108-120000 [more folders] [--label NAME] [--set-baseline]
+    python -m plan.benchmark cmd | report ...          # the same from smbrl/
 
-Run from smbrl/ (the `plan` package lives there). The printed agent.py command is for the folder above smbrl/
-(`python smbrl/agent.py ...`).
+Run folder names resolve under smbrl/runs from either folder (then as paths). The printed commands are for the
+folder above smbrl/ (`python smbrl/agent.py ...`, `python smbrl/plan/benchmark.py report ...`). The agent.py
+command draws the overlay (the plans are visible) and passes --wm-collect (runs/<name>/wm_data, for offline
+replays: plan/offline.py); --learn must not be added (it changes the model between waves); changing the level
+with S is fine.
 
 The spec is smbrl/benchmark.json: levels (disjoint from eval_levels.json's held-out levels, checked at load),
-waves per level and the frozen agent.py config. The config there is resolved from agent.py (DEFAULT_MODEL,
+waves per level, the frozen agent.py config and "switches" (on/off agent.py flags the benchmark always passes,
+not agent.py defaults: --wm-collect). The config there is resolved from agent.py (DEFAULT_MODEL,
 REPLAN_DEFAULT, TUBE_DEFAULT, HYSTERESIS_FRAMES and build_parser()'s defaults) by freeze(), so a later default
 change shows as a diff of benchmark.json when it is frozen again; `cmd` notes any drift.
 
@@ -102,11 +107,14 @@ def command(spec: dict, now: float | None = None) -> str:
     name = time.strftime("bench_%Y%m%d-%H%M%S", time.localtime(now))
     cfg = spec["config"]
     cmd = "python smbrl/agent.py " + " ".join(f"{fl} {_arg(cfg[k])}" for k, fl in FLAGS)
-    cmd += f" --name {name} --no-overlay"
-    out = ["run from the folder above smbrl/:", "  " + cmd, "",
+    cmd += "".join(f" {s}" for s in spec.get("switches") or []) + f" --name {name}"
+    out = ["run from the folder above smbrl/ (the overlay shows the plans; --wm-collect keeps the world-model data "
+           "for offline replays):", "  " + cmd, "",
            f"in that one run, play each level for {spec['waves_per_level']} waves:"]
     out += [f"  {lv}: {spec['waves_per_level']} waves" for lv in spec["levels"]]
-    out += ["", "then, from smbrl/:", f"  python -m plan.benchmark report {name}"]
+    out += ["", "do not add --learn (it trains and swaps the model between waves: not the frozen config); changing "
+            "the level with S is fine.", "", "then, from the same folder:",
+            f"  python smbrl/plan/benchmark.py report {name}"]
     return "\n".join(out)
 
 
@@ -213,7 +221,7 @@ def build_record(folders: list, spec: dict, label: str | None = None, runs_dir: 
     return {"label": label or "+".join(os.path.basename(r) for r in runs),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "comparability": COMPARABILITY,
             "levels_spec": spec["levels"], "waves_per_level": spec["waves_per_level"],
-            "config": spec["config"], "model": model_info(spec["config"]["model"]), "git_commit": git_commit(),
+            "config": spec["config"], "switches": spec.get("switches") or [], "model": model_info(spec["config"]["model"]), "git_commit": git_commit(),
             "runs": [{"run": r, "skipped_lines": {k: v for per in res.values() for k, v in per["skipped_lines"].items()}}
                      for r, res in results],
             "wave_counts": {lv: v["waves"] for lv, v in levels.items()},

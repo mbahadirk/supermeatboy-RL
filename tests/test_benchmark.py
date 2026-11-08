@@ -100,10 +100,33 @@ def test_cmd_has_every_frozen_flag_and_no_placeholder():
     text = B.command(SPEC, now=0)
     for k, fl in B.FLAGS:
         assert f"{fl} {SPEC['config'][k]}" in text
-    assert "--no-overlay" in text and "--name bench_" in text and "python smbrl/agent.py" in text
+    assert "--no-overlay" not in text and "--name bench_" in text and "python smbrl/agent.py" in text
+    assert SPEC["switches"] == ["--wm-collect"] and " --wm-collect --name bench_" in text
+    assert "do not add --learn" in text and "changing the level with S is fine" in text
+    name = text.split("--name ")[1].split()[0]
+    assert f"python smbrl/plan/benchmark.py report {name}" in text and "python -m plan.benchmark" not in text
     assert "<" not in text and ">" not in text
     for lv in SPEC["levels"]:
         assert f"{lv}: {SPEC['waves_per_level']} waves" in text
+
+
+def test_runs_from_either_folder(tmp_path):
+    """`python smbrl/plan/benchmark.py` from the folder above smbrl/ and `python -m plan.benchmark` from smbrl/;
+    a run folder name resolves under smbrl/runs whatever the current folder."""
+    import subprocess
+    root = os.path.dirname(HERE)
+    for cwd, argv in ((root, [os.path.join("smbrl", "plan", "benchmark.py")]), (HERE, ["-m", "plan.benchmark"])):
+        r = subprocess.run([sys.executable, *argv, "cmd"], cwd=cwd, capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, r.stderr
+        assert "python smbrl/plan/benchmark.py report bench_" in r.stdout
+    runs = _two_runs(tmp_path)
+    os.makedirs(tmp_path / "elsewhere" / "bench_a")                 # a same-named folder in the current one
+    cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path / "elsewhere")
+        assert B.resolve_run("bench_a", str(runs)) == str(runs / "bench_a")
+    finally:
+        os.chdir(cwd)
 
 
 def test_levels_disjoint_from_held_out(tmp_path):
