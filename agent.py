@@ -80,7 +80,7 @@ from mpc.future import FutureWorld                                       # noqa:
 from plan import safety as S                                             # noqa: E402
 from plan.commit import Committer, REPLAN_DEFAULT, TUBE_DEFAULT, kind_of  # noqa: E402
 from plan.moves import LIBRARY, MAX_LEN                                  # noqa: E402
-from plan.planner import (HYSTERESIS_FRAMES, MoveMemory, Planner, future_inputs,   # noqa: E402
+from plan.planner import (EXPLORE_EVERY, HYSTERESIS_FRAMES, MoveMemory, Planner, future_inputs,   # noqa: E402
                           state_row)
 from plan.progress import ProgressField                                  # noqa: E402
 from shutdown import Shutdown, bounded                                   # noqa: E402
@@ -110,6 +110,8 @@ COL_PLAN, COL_LAND, COL_WALL = 0xE020E040, 0xF0FFE020, 0xF020E0FF
 COL_ALT_VETO, COL_ALT = 0x60FF4040, 0x50B0B0B0
 COL_GOAL, COL_KEY = 0xF0FF78B9, 0xF0FFE628      # where the plan touches the princess / picks a key
 COL_COMP = 0x9020E040                             # the airborne completion after the plan (fainter, dashed)
+# the chosen path in its planning mode's colour (plan/planner.py MODES; viz/viewer.py uses the same colours)
+MODE_COL = {"long-safe": 0xE04080FF, "normal": COL_PLAN, "reflex": 0xE0FF3030, "explore": 0xE0B040F0}
 OVERLAY_ALTS, PLAN_STEP, ALT_STEP = 3, 3, 4
 
 
@@ -190,7 +192,8 @@ def overlay_payload(plan) -> list:
         if len(a["path"]) >= 2:
             out.append({"pts": _sub(a["path"], ALT_STEP), "col": COL_ALT_VETO if a.get("vetoed") else COL_ALT,
                         "w": 1})
-    out.append({"pts": _sub(plan.path, PLAN_STEP), "col": COL_PLAN, "w": 3})
+    out.append({"pts": _sub(plan.path, PLAN_STEP), "col": MODE_COL.get(getattr(plan, "mode", "normal"), COL_PLAN),
+                "w": 3})
     comp = getattr(plan, "completion", None)
     if comp and len(comp.get("path") or []) >= 2:
         out.append({"pts": _sub(comp["path"], PLAN_STEP), "col": COL_COMP, "w": 2, "dash": True})
@@ -477,6 +480,7 @@ class Runner:
         self.last_decision = {}
         self.ex_queue = [[] for _ in range(n)]
         self.ex_prev = [-1] * n
+        self.ex_plan = {}                      # explore agent -> its current plan (Planner.explore)
         self.last_msg = None
         self.overlay_frame = ()                # the (frame, id) of agent 0's plan last drawn; () nothing yet
         self.st = {"finished": 0, "died": 0, "explained": 0, "unexplained": 0, "estimated": 0, "memory": 0,
@@ -576,7 +580,8 @@ class Runner:
         if self.model is not None:
             if self.planner is None:
                 self.planner = Planner(self.model, lv, field, budget_ms=self.args.budget_ms,
-                                       hysteresis=self.args.hysteresis, moves=self.moves)
+                                       hysteresis=self.args.hysteresis, moves=self.moves,
+                                       modes=self.args.modes == "on")
             elif self.planner_level is not lv:
                 self.planner.set_level(lv, field)
             else:
@@ -709,7 +714,8 @@ class Runner:
                 s = states[i]
                 row = state_row(s[0], s[1], s[2], s[3], s[4], s[5], s[7] if len(s) > 7 else 0, held_before[i])
                 try:
-                    plan = pl.plan(row, frame, worlds, fboxes, dt, agent=i)
+                    plan = pl.plan(row, frame, worlds, fboxes, dt, agent=i,
+                                   danger=any(kind_of(t) == "danger" for t in trig))
                 except Exception as e:                  # never leave the agent without an answer
                     self.st["errors"] += 1
                     if self.st["errors"] <= 3:
@@ -729,7 +735,8 @@ class Runner:
         C.go("explore")
         for i in range(self.n_plan, n):
             if self.alive[i] and int(states[i][6]) == 0:
-                a = self.explore_action(i)
+                a = self.explore_plan(i, frame, states[i], held_before[i], dt, fut) if pl is not None and \
+                    pl.modes else self.explore_action(i)
                 acts[i], act_idx[i] = list(ACTIONS[a]), a
         C.go("other")
         for i in range(n):
@@ -872,6 +879,27 @@ class Runner:
             self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds,
                        dt_ms=rec["dt_ms"], lock=self.lock, best=float(best["seconds"]) if best else None,
                        new_best=new)
+
+    def explore_plan(self, i: int, frame: int, s, held: int, dt: float, fut: dict) -> int:
+        """EXPLORE (planning modes on): the explore agent's action from its plan (Planner.explore: members 3 and 4,
+        the safe plan they disagree on most), decided every EXPLORE_EVERY frames; on a planner error the old
+        sticky random action."""
+        pl, lv = self.planner, self.level
+        p = self.ex_plan.get(i)
+        if p is None or not 0 <= frame - p.frame < min(EXPLORE_EVERY, len(p.actions)):
+            if "w" not in fut:
+                fut["w"], fut["fb"], _ = future_inputs(self.fw, frame, pl.H, dt, lv.name, self.deaths)
+            row = state_row(s[0], s[1], s[2], s[3], s[4], s[5], s[7] if len(s) > 7 else 0, held)
+            try:
+                p = self.ex_plan[i] = pl.explore(row, frame, fut["w"], fut["fb"], dt, agent=i)
+            except Exception as e:
+                self.st["errors"] += 1
+                self.event("explore error", frame, agent=i, error=f"{type(e).__name__}: {e}")
+                self.ex_plan.pop(i, None)
+                return self.explore_action(i)
+            self.st["explore_ms"] = self.st.get("explore_ms", 0.0) + p.timing["total"]
+            self.st["explore_decisions"] = self.st.get("explore_decisions", 0) + 1
+        return int(p.actions[frame - p.frame])
 
     def explore_action(self, i: int) -> int:
         """Sticky random actions mixed with random chains of library moves (world-model data only)."""
@@ -1222,6 +1250,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="replan on triggers (start, interval, move end, surprise, support, danger, short, missed: "
                          "plan/commit.py) or only every --replan frames (off) (default on)")
     ap.add_argument("--budget-ms", type=float, default=120.0, help="planner time budget per decision (default 120)")
+    ap.add_argument("--modes", choices=("on", "off"), default="on",
+                    help="planning modes (plan/planner.py): long-safe (member 0, blue), normal (member 1, green), "
+                         "reflex (member 2, red); explore agents plan on members 3 and 4 (purple) instead of random "
+                         "actions (default on)")
     ap.add_argument("--model", default=DEFAULT_MODEL, help="world model (default runs/wm_step4/wm_model.pt, 4 frames per step; the 1-frame "
                          "runs/wm_locked/wm_model.pt works too)")
     ap.add_argument("--name", default=None, help="run folder under runs/ (default plan_<time>)")
