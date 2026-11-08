@@ -1,0 +1,25 @@
+{
+  "about": "Fixed benchmark (python -m plan.benchmark): levels disjoint from eval_levels.json held_out; config = agent.py defaults resolved by plan.benchmark.freeze(), passed as explicit flags.",
+  "levels": [
+    "1-5",
+    "1-8",
+    "1-11",
+    "1-13",
+    "1-14"
+  ],
+  "waves_per_level": 20,
+  "config": {
+    "model": "runs/wm_step4/wm_model.pt",
+    "budget_ms": 120.0,
+    "replan": 8,
+    "tube": 1.5,
+    "hysteresis": 16.0,
+    "modes": "on",
+    "triggers": "on",
+    "agents": 1,
+    "end_after": 1,
+    "wave_seconds": 20.0,
+    "seed": 0,
+    "threads": 2
+  }
+}
