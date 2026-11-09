@@ -244,7 +244,7 @@ def main():
                     help="closed loop: the 1-frame model standing in for the game (default --model if it steps 1 "
                          "frame, else runs/wm_locked/wm_model.pt)")
     ap.add_argument("--decisions", type=int, default=20)
-    ap.add_argument("--budget", type=float, default=120.0, help="ms per decision (the cheap stages' deadline)")
+    ap.add_argument("--budget", type=float, default=120.0, help="target ms per decision (reported only: no stage is cut by time)")
     ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", default=None, help="write every Plan.to_dict() here (one JSON line each)")

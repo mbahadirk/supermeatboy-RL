@@ -1441,7 +1441,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--triggers", choices=("on", "off"), default="on",
                     help="replan on triggers (start, interval, move end, surprise, support, danger, short, missed: "
                          "plan/commit.py) or only every --replan frames (off) (default on)")
-    ap.add_argument("--budget-ms", type=float, default=120.0, help="planner time budget per decision (default 120)")
+    ap.add_argument("--budget-ms", type=float, default=120.0,
+                    help="target planner time per decision, reported only: no stage is cut by time, the search is "
+                         "deterministic (default 120)")
     ap.add_argument("--modes", choices=("on", "off"), default="on",
                     help="planning modes (plan/planner.py): long-safe (member 0, blue), normal (member 1, green), "
                          "reflex (member 2, red); explore agents plan on members 3 and 4 (purple) instead of random "

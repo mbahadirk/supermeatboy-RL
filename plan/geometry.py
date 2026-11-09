@@ -238,14 +238,21 @@ class Terrain:
         map there, so the wall probes of a centre below the map look at the map's bottom row (y = oy + 0.5).
         dy: the body's vertical motion into this position (units / frame, y up; None unknown): a rising body (dy > 0,
         e.g. the frame after such a wall jump) is not standing on anything."""
-        x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
-        g, side = self.support(x, y, plats)
-        yw = np.maximum(y, self.oy + 0.5)                   # wall probes clamped into the bottom row
-        wall = (side != 0) | self.point_solid(x - WALL_PROBE, yw) | self.point_solid(x + WALL_PROBE, yw)
+        x, y = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64))
+        out = y <= self.oy + BODY + tol
+        if dy is not None:
+            out = out & ~(np.asarray(dy, np.float64) > 0)
+        if not out.any():                                   # nothing near the bottom edge: no probes needed
+            return out
+        out = out.copy()
+        xi, yi = x[out], y[out]
+        g, side = self.support(xi, yi, plats)
+        yw = np.maximum(yi, self.oy + 0.5)                  # wall probes clamped into the bottom row
+        wall = (side != 0) | self.point_solid(xi - WALL_PROBE, yw) | self.point_solid(xi + WALL_PROBE, yw)
         if plats:
-            wall |= _in_plats(plats, x - WALL_PROBE, yw) | _in_plats(plats, x + WALL_PROBE, yw)
-        out = (y <= self.oy + BODY + tol) & ~g & ~wall
-        return out if dy is None else out & ~(np.asarray(dy, np.float64) > 0)
+            wall |= _in_plats(plats, xi - WALL_PROBE, yw) | _in_plats(plats, xi + WALL_PROBE, yw)
+        out[out] = ~g & ~wall
+        return out
 
     def supported(self, x, y, plats=None) -> np.ndarray:
         """On the ground or on a wall."""

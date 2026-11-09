@@ -340,6 +340,23 @@ def test_no_budget_runs_every_stage_complete(flat):
 
 
 @needs_model
+def test_the_search_does_not_depend_on_the_clock(flat):
+    """No stage is cut by elapsed time: a planner with a 0.001 ms budget decides exactly as one without, every
+    stage complete (the same state and inputs give the same decision on any machine load)."""
+    from plan.planner import Planner
+    lv, pl = flat
+    tight = Planner(pl.model, lv, pl.field, budget_ms=1e-3)
+    worlds, frames = empty_inputs(pl.H)
+    pl.new_wave()
+    a, b = pl.plan(standing(), 100, worlds, frames), tight.plan(standing(), 100, worlds, frames)
+    assert a.actions == b.actions and a.chosen == b.chosen and a.score == b.score
+    c = b.counts
+    assert c["stage1"]["complete"] == c["stage1"]["candidates"] and c["stage2"]["steps"] == c["stage2"]["of_steps"]
+    assert c["stage2"]["candidates"] == pl.B1 * pl.branch
+    pl.new_wave()
+
+
+@needs_model
 def test_a_move_into_a_hazard_is_vetoed_and_explained(flat):
     lv, pl = flat
     pl.new_wave()

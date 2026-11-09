@@ -63,21 +63,21 @@ best's by more than RISK_SWITCH is dropped. hysteresis 0 (the default here): no 
 Plan.switch records the outcome {kept, gain (frames), margin, unit "frames", reason}. A kept plan is registered
 once: SurpriseTracker.add only for a plan not taken from the previous one (its predictions stay those of its
 adoption); FailureMemory.decided records every decision (a kept plan's too) from its start state's key.
-A time budget (120 ms) gives stage 1 a deadline at 30% of it and stage 2 one at the budget minus the final
-stage's measured cost (a running average, completion included; at least 45% of the budget); a cut stage is
-recorded as cut (candidates and steps actually evaluated in Plan.counts), never passed off as complete, and its
-candidates are ranked on the frames they have. The final stage (and its completion) always runs to the end, so
-a decision can exceed the budget by what the final stage takes beyond its estimate. budget_ms=None: no
-deadlines, every stage runs complete (tests and offline checks whose result must not depend on the machine's
-load).
+Deterministic search (since 2026-11-10): every stage runs complete, capped by its candidate and step counts
+(stage 1: the 73 library moves to 24 frames; stage 2: B1 x branch = 128 continuations to H; final: S + the
+previous, long-safe, reflex and route candidates to H, plus the completion), never by elapsed time, so the same
+state and inputs give the same decision on a loaded or an idle machine. (Until then a 120 ms budget cut stage 1
+at 30% of it and stage 2 at the budget minus the final stage's running-average cost: bench_20261110-003407 cut
+stage 2 in 2-39% of the decisions per level; offline at 120 ms 3 of 17 decisions of a 1-8 wave changed between
+repeats of the same state.) budget_ms is the target time per decision, reported (agent.py, the benchmark), not a
+deadline.
 
 Score of a candidate: the estimated frames to reach the goal (lower is better; total = -estimate):
   estimate = frames used + T(end) + DEATH_FRAMES x (soft risk, or the point-of-no-return rate) + failure frames.
   DEATH_FRAMES = max(T_support(spawn) - T(start), DEAD_END_FRAMES): one death costs the progress it throws away
   (at least a dead end's charge), the same everywhere: soft risk, a completion where every continuation dies, and
   the point-of-no-return memory.
-- frames used: stage 1 the common end (24, or the frames rolled before its deadline), stage 2 H (or the frames
-  rolled before its deadline), final H, or H + k with the airborne completion (below).
+- frames used: stage 1 the common end (24), stage 2 H, final H, or H + k with the airborne completion (below).
 - T(end): plan/progress.py's time field (frames to the goal on realpath's graph, measured frames per tile) at the
   end on the agent's leg after the path's key pickups: T_support where the end is supported (Planner.support:
   ground, or a wall while the downward speed is at most CLING_SPEED, measured inf), else T_rise / T_fall by the
@@ -174,7 +174,6 @@ from wm.model import WorldModel
 from wm.rollout import World, advance, step_actions, _stacked
 
 H_DEFAULT, B1_DEFAULT, BRANCH_DEFAULT, S_DEFAULT, BUDGET_MS = 48, 8, 16, 16, 120.0
-STAGE1_SHARE, STAGE2_SHARE = 0.30, 0.45      # of the budget: stage 1's deadline, stage 2's earliest one
 # penalties in frames, from the former V-unit weights by FX_GROUND frames per tile (on open ground 1 V unit ~ 1 tile)
 DEAD_END = 100.0                             # the former weight (V units)
 DEAD_END_FRAMES = DEAD_END * FX_GROUND       # an end with T = +inf: T(start) + this
@@ -225,7 +224,6 @@ RISK_SWITCH = 0.2                            # soft risk: a previous plan riskie
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
 N_ALTERNATIVES = 5
 HAZ_FAR = 300.0                              # wm.features.hazard_features clips offsets and distances here
-FINAL_MS0 = 60.0                             # first guess of the final stage's cost (then measured, averaged)
 COLLIDE_TOL = 1.0                            # units: the collision guard moves imagined bodies overlapping more
 # planning modes (Planner(modes=True), module docstring): the ensemble members' roles
 MEMBERS = {"long-safe": 0, "normal": 1, "reflex": 2, "explore": (3, 4)}
@@ -243,7 +241,7 @@ CONTACT_EPS = 0.01                           # units: a body put back to contact
 # ---- world model rollouts with per-row time offsets -------------------------------------------------------
 @torch.inference_mode()
 def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.ndarray, dt_ms: float,
-            worlds: list, offsets=None, deadline: float | None = None, keep_rows: bool = False,
+            worlds: list, offsets=None, keep_rows: bool = False,
             terrain: Terrain | None = None, tol: float = None) -> dict:
     """wm.rollout.rollout_batched for a subset of ensemble members (`members`, a slice) whose rows may start at
     different future frames: row i at step k sees the level's moving parts worlds[offsets[i] + k] (clamped to
@@ -251,8 +249,7 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     per step as position differences (units / frame, y up; step 0: the start rows' vx, vy x dt); last (E, n)
     ROW: the rows after the last step run; alive (E, n, K+1) (the learned
     death head: a second opinion only), finish (E, n, K+1) (the learned finish head's probability per step:
-    a cross-check only), rows (E, n, K+1) when keep_rows, and steps (how many steps ran before the deadline;
-    positions after that are held at the last one). terrain: the collision guard (collide) after every step
+    a cross-check only), rows (E, n, K+1) when keep_rows, and steps (K: every step runs). terrain: the collision guard (collide) after every step
     against these tiles with tolerance tol (default COLLIDE_TOL); clip (E, n, K+1) says which steps it moved
     (None without a terrain).
     A step-k model (model.step = f > 1): actions, dt_ms, offsets and worlds stay per frame; every array is per
@@ -316,13 +313,6 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
         fin[:, :, k + 1] = pb[:, EVENTS["finish"]].reshape(E, n)
         if rows is not None:
             rows[:, :, k + 1] = s.reshape(E, n)
-        if deadline is not None and time.perf_counter() > deadline and k + 1 < K:
-            done = k + 1
-            break
-    if done < K:
-        xs[:, :, done + 1:] = xs[:, :, done:done + 1]
-        ys[:, :, done + 1:] = ys[:, :, done:done + 1]
-        alive[:, :, done + 1:] = alive[:, :, done:done + 1]
     vx, vy = np.empty_like(xs), np.empty_like(ys)
     vx[:, :, 1:], vy[:, :, 1:] = np.diff(xs, axis=2), np.diff(ys, axis=2)
     if f > 1:
@@ -977,13 +967,12 @@ class Planner:
                  collide_tol: float | None = COLLIDE_TOL, moves: "MoveMemory | None | str" = "new",
                  complete_max: int = COMPLETE_MAX, modes: bool = False):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
-        self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms
+        self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms   # budget: reported only
         self.hysteresis = float(hysteresis)          # frames (switch rule); 0: the best total is chosen
         self.collide_tol = collide_tol               # the collision guard's tolerance; None: no guard
         self.complete_max = int(complete_max)        # airborne completion frames (0: none)
         self.modes = bool(modes) and len(self.model.members) >= 5     # long-safe / normal / reflex on own members
         self.member = MEMBERS["normal"] if self.modes else member
-        self.final_ms = FINAL_MS0
         self.f = int(getattr(self.model, "step", 1))   # frames per model step (a step-4 model: 4)
         self.lib = list(LIBRARY)
         self.lib_len = np.array([len(m) for m in self.lib])
@@ -1004,7 +993,7 @@ class Planner:
 
     # ---- level state -------------------------------------------------------------------------------------
     def set_level(self, level, field: ProgressField, memory: FailureMemory | None = None):
-        """A (new) level for this planner; the loaded model and the final stage's cost estimate stay. The level
+        """A (new) level for this planner; the loaded model stays. The level
         geometry, the progress field and every per-level memory (previous plans, failed moves, the surprise
         tracker's predictions) start again; the point-of-no-return memory switches to this level's entries."""
         self.lv = level
@@ -1438,7 +1427,6 @@ class Planner:
         # ---- stage 1: every library move, one member ------------------------------------------------------
         n1 = len(self.lib)
         out1 = imagine(self.model, mem, self.geom, np.repeat(row, n1), self.lib_actions, dt_ms, worlds,
-                       deadline=None if self.budget is None else t0 + STAGE1_SHARE * self.budget / 1000.0,
                        keep_rows=True, **ck)
         steps1 = out1["steps"]                       # model steps (columns); f frames each
         up1 = np.minimum(self.lib_end, steps1 * f)   # the move's frames (a step-f model: the next step boundary)
@@ -1481,67 +1469,55 @@ class Planner:
                 seconds.append(self.lib[i])
         seconds = seconds[:self.branch]
         cands = []                                       # (segments, actions H)
-        stage2 = steps1 * f >= self.lib_end[keep1].max() if len(keep1) else False
-        if stage2:
-            K2 = H - int(self.lib_end[keep1].min())
-            s0, acts2, offs, firsts = [], [], [], []
-            for i in keep1:
-                L0, L = int(self.lib_len[i]), int(self.lib_end[i])     # the move; its step boundary (f = 1: same)
-                first = self.lib[i].array if L == L0 else padded(self.lib[i].array, L)
-                for sm in seconds:
-                    full = padded(np.concatenate([first, sm.array]), H)
-                    cont = padded(full[L:], K2)
-                    s0.append(out1["rows"][0, i, L // f])
-                    acts2.append(cont)
-                    offs.append(L)
-                    firsts.append(i)
-                    L2 = min(H, L + len(sm))
-                    segs = ([(self.lib[i].name, 0, L0)] + ([("pad", L0, L)] if L > L0 else []) + [(sm.name, L, L2)]
-                            + ([("pad", L2, H)] if L2 < H else []))
-                    cands.append((segs, full))
-            s0 = np.array(s0, ROW)
-            dl2 = (None if self.budget is None else
-                   t0 + max(STAGE2_SHARE * self.budget, self.budget - self.final_ms) / 1000.0)
-            out2 = imagine(self.model, mem, self.geom, s0, np.stack(acts2), dt_ms, worlds, offsets=offs, deadline=dl2,
-                           **ck)
-            steps2 = out2["steps"]
-            n2 = len(cands)
-            xs2, ys2 = np.zeros((1, n2, Hc + 1)), np.zeros((1, n2, Hc + 1))
-            vye2 = np.zeros(n2)
-            up2 = np.zeros(n2, np.int64)
-            for c in range(n2):
-                i, L = firsts[c], offs[c] // f                           # columns
-                m = min(steps2, Hc - L)
-                xs2[0, c, :L + 1], ys2[0, c, :L + 1] = out1["x"][0, i, :L + 1], out1["y"][0, i, :L + 1]
-                xs2[0, c, L + 1:L + m + 1], ys2[0, c, L + 1:L + m + 1] = out2["x"][0, c, 1:m + 1], out2["y"][0, c, 1:m + 1]
-                xs2[0, c, L + m + 1:], ys2[0, c, L + m + 1:] = xs2[0, c, L + m], ys2[0, c, L + m]
-                up2[c] = (L + m) * f
-                vye2[c] = out2["vy"][0, c, m] if m > 0 else out1["vy"][0, i, L]
-            K = int(up2.max()) // f
-            fr2 = _near_frames(_cols(frames, K + 1, f), xs2[:, :, :K + 1], ys2[:, :, :K + 1])
-            sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds, self.floor, f)
-            tg2, legs2, _ = self._contacts(xs2[:, :, :K + 1], ys2[:, :, :K + 1], up2, sw2.contact_frame, leg)
-            tg2, legs2 = tg2[0], legs2[0]
-            succ2 = tg2 > 0
-            veto2, vf2, _, _, soft2, _ = _verdict(sw2, np.where(succ2, np.minimum(up2, tg2), up2))
-            tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2)
-            pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
-            est2 = up2 + self._tt(tend2) + pen2
-            score2 = np.where(veto2, vetoed_total(vf2, est2), -est2)
-            score2 = np.where(succ2, success_total(tg2, pen2), score2)
-            pick = np.argsort(-score2, kind="stable")[:self.S]
-            final = [cands[c] for c in pick]
-            counts["stage2"] = {"candidates": n2, "steps": int(steps2), "of_steps": int(-(-K2 // f)),
-                                "complete": int((up2 >= H).sum()), "vetoed": int(veto2.sum()),
-                                "second_moves": [sm.name for sm in seconds], "goal": int(succ2.sum()),
-                                "clipped": n_clip(out2["clip"])}
-        else:
-            final = []
-            for i in order1[:self.S]:
-                L = int(self.lib_len[i])
-                final.append(([(self.lib[i].name, 0, L)] + ([("pad", L, H)] if L < H else []),
-                              padded(self.lib[i].array, H)))
-            counts["stage2"] = {"candidates": 0, "steps": 0, "skipped": "stage 1 was cut by the deadline"}
+        K2 = H - int(self.lib_end[keep1].min())
+        s0, acts2, offs, firsts = [], [], [], []
+        for i in keep1:
+            L0, L = int(self.lib_len[i]), int(self.lib_end[i])     # the move; its step boundary (f = 1: same)
+            first = self.lib[i].array if L == L0 else padded(self.lib[i].array, L)
+            for sm in seconds:
+                full = padded(np.concatenate([first, sm.array]), H)
+                cont = padded(full[L:], K2)
+                s0.append(out1["rows"][0, i, L // f])
+                acts2.append(cont)
+                offs.append(L)
+                firsts.append(i)
+                L2 = min(H, L + len(sm))
+                segs = ([(self.lib[i].name, 0, L0)] + ([("pad", L0, L)] if L > L0 else []) + [(sm.name, L, L2)]
+                        + ([("pad", L2, H)] if L2 < H else []))
+                cands.append((segs, full))
+        s0 = np.array(s0, ROW)
+        out2 = imagine(self.model, mem, self.geom, s0, np.stack(acts2), dt_ms, worlds, offsets=offs, **ck)
+        steps2 = out2["steps"]
+        n2 = len(cands)
+        xs2, ys2 = np.zeros((1, n2, Hc + 1)), np.zeros((1, n2, Hc + 1))
+        vye2 = np.zeros(n2)
+        up2 = np.zeros(n2, np.int64)
+        for c in range(n2):
+            i, L = firsts[c], offs[c] // f                           # columns
+            m = min(steps2, Hc - L)
+            xs2[0, c, :L + 1], ys2[0, c, :L + 1] = out1["x"][0, i, :L + 1], out1["y"][0, i, :L + 1]
+            xs2[0, c, L + 1:L + m + 1], ys2[0, c, L + 1:L + m + 1] = out2["x"][0, c, 1:m + 1], out2["y"][0, c, 1:m + 1]
+            xs2[0, c, L + m + 1:], ys2[0, c, L + m + 1:] = xs2[0, c, L + m], ys2[0, c, L + m]
+            up2[c] = (L + m) * f
+            vye2[c] = out2["vy"][0, c, m] if m > 0 else out1["vy"][0, i, L]
+        K = int(up2.max()) // f
+        fr2 = _near_frames(_cols(frames, K + 1, f), xs2[:, :, :K + 1], ys2[:, :, :K + 1])
+        sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds, self.floor, f)
+        tg2, legs2, _ = self._contacts(xs2[:, :, :K + 1], ys2[:, :, :K + 1], up2, sw2.contact_frame, leg)
+        tg2, legs2 = tg2[0], legs2[0]
+        succ2 = tg2 > 0
+        veto2, vf2, _, _, soft2, _ = _verdict(sw2, np.where(succ2, np.minimum(up2, tg2), up2))
+        tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2)
+        pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
+        est2 = up2 + self._tt(tend2) + pen2
+        score2 = np.where(veto2, vetoed_total(vf2, est2), -est2)
+        score2 = np.where(succ2, success_total(tg2, pen2), score2)
+        pick = np.argsort(-score2, kind="stable")[:self.S]
+        final = [cands[c] for c in pick]
+        counts["stage2"] = {"candidates": n2, "steps": int(steps2), "of_steps": int(-(-K2 // f)),
+                            "complete": int((up2 >= H).sum()), "vetoed": int(veto2.sum()),
+                            "second_moves": [sm.name for sm in seconds], "goal": int(succ2.sum()),
+                            "clipped": n_clip(out2["clip"])}
         t2 = time.perf_counter()
         timing["stage2"] = 1000 * (t2 - t1)
 
@@ -1780,7 +1756,6 @@ class Planner:
                            "soft_frame": saf.soft_frame, "comp_risk": comp_risk}  # offline checks
         t3 = time.perf_counter()
         timing["final"] = 1000 * (t3 - t2)
-        self.final_ms = 0.7 * self.final_ms + 0.3 * timing["final"]
         counts["final"] = {"candidates": n3, "members": E, "steps": Hc, "vetoed": int(saf.veto.sum()),
                            "prev_included": prev_idx >= 0, "goal": int(succ3.sum()), "start_in_goal": start_in_goal,
                            "clipped": n_clip(out3["clip"]), "landing": int(lands.sum()), "completed": int(len(need)),
