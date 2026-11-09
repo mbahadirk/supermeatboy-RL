@@ -574,7 +574,9 @@ class FailureMemory:
       loop (key, frames since, predicted vs real drop). At least half: delivered (no charge).
     - the plan's end passed without a return: judged the same way, but only a delivered plan has an effect.
     A delivered plan forgives the latest charge of its (cell, first move), so a retry that works is not punished
-    for good. A death drops the agent's visits and counts nothing (MoveMemory owns deaths: no double charge).
+    for good, and a finish clears every charge of the (cell, first move) pairs the agent decided in that wave
+    (finished(): the route worked). A death drops the agent's visits and counts nothing (MoveMemory owns deaths:
+    no double charge).
     Penalty: the sum of the charges, in frames, for plans starting with that move from that cell. Kept per level
     for the run (Planner.set_level makes a new one; new waves keep the charges), not saved."""
 
@@ -584,6 +586,7 @@ class FailureMemory:
 
     def new_wave(self):
         self.visits: dict[int, dict] = {}                # agent -> {key: _Visit}
+        self.used: dict[int, set] = {}                   # agent -> {(cell, first move)} decided this wave
         self.real: dict[int, dict] = {}                  # agent -> {frame: real T}
         self.entered: dict[int, tuple] = {}              # agent -> (cell, frame it entered the cell)
 
@@ -603,6 +606,7 @@ class FailureMemory:
 
     def decided(self, agent: int, frame: int, key: tuple, move: str, moves, t0: float, t_end: float, frames: int):
         vs = self.visits.setdefault(int(agent), {})
+        self.used.setdefault(int(agent), set()).add(self._key(key[0], move))
         c0 = self.entered.get(int(agent))
         if c0 is None or c0[0] != key[0]:                    # the agent is in the decision's cell now
             self.entered[int(agent)] = (key[0], int(frame))
@@ -669,6 +673,17 @@ class FailureMemory:
                     self._forgive(v)
         return out
 
+    def finished(self, agent: int) -> list:
+        """The agent finished: every charge of the (cell, first move) pairs it decided this wave is cleared.
+        Returns [[cell, move, frames cleared]]."""
+        out = []
+        for ck in sorted(self.used.pop(int(agent), set())):
+            ch = self.charges.pop(ck, None)
+            if ch:
+                out.append([list(ck[0]), ck[1], round(float(sum(ch)), 1)])
+        self.visits.pop(int(agent), None)
+        return out
+
     def _forgive(self, v: _Visit):
         ck = self._key(v.key[0], v.move)
         ch = self.charges.get(ck)
@@ -687,7 +702,9 @@ class MoveMemory:
     previous one) counts a try of its first move from its start cell. On the agent's death (explained or not:
     Planner.observe(dead=True)) the point of no return is the latest decision of the wave with a safe
     alternative; its (cell, first move) gets a death, and a "point of no return" event says where (decision
-    frame, cell, move, death frame, cause); none found: the event says so and nothing is charged.
+    frame, cell, move, death frame, cause); none found: the event says so and nothing is charged. A finish
+    forgives: every (cell, first move) the agent decided in the finishing wave loses one charged death
+    (finished()), so one accident does not ban a route that has worked; tries still count adoptions.
     Penalty, frames, for candidates whose first move matches from the start cell: deaths / (tries + 1) x
     max(T_support(spawn) - T(start), DEAD_END_FRAMES) (the progress the death throws away, at least a dead
     end's charge). Keyed by cell and move only, not by the wave frame (moving hazards' timing is not part of
@@ -768,6 +785,21 @@ class MoveMemory:
         if adopted and move != "pad" and self.learn:
             self._ent(cell, move, make=True)[1] += 1
             self.dirty = True
+
+    def finished(self, agent: int) -> list:
+        """The agent finished the wave: one death less for each (cell, first move) it decided in it (learn
+        only). Returns [[cell, move, deaths left]]."""
+        decs = self.wave.pop(int(agent), [])
+        out = []
+        if not self.learn:
+            return out
+        for c, mv in sorted({(d[1], d[2]) for d in decs if d[2] != "pad"}):
+            e = self._ent(c, mv)
+            if e is not None and e[0] > 0:
+                e[0] -= 1
+                self.dirty = True
+                out.append([list(c), mv, e[0]])
+        return out
 
     def died(self, agent: int, frame: int, cause=None) -> dict:
         """The agent died at `frame`: charge its point of no return. Returns the event."""
@@ -1128,10 +1160,13 @@ class Planner:
         self.surprise.played(agent, frame, action)
         self.route.played(agent, frame, action)
 
-    def finished(self, agent: int, frame: int) -> bool:
+    def finished(self, agent: int, frame: int) -> dict:
         """The runner reports a planned agent's goal touch in wave frame `frame`: its wave becomes the level's
-        best route when it is the fastest finish of this run (BestRoute). True if it did."""
-        return self.route.finished(agent, frame)
+        best route when it is the fastest finish of this run (BestRoute); the route worked, so the failure
+        charges of its (cell, first move) pairs are cleared and the point-of-no-return memory forgives one death
+        on each. Returns {best_route, failures_cleared, deaths_forgiven}."""
+        return {"best_route": self.route.finished(agent, frame), "failures_cleared": self.memory.finished(agent),
+                "deaths_forgiven": [] if self.moves is None else self.moves.finished(agent)}
 
     # ---- airborne completion -----------------------------------------------------------------------------
     def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H):

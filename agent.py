@@ -940,8 +940,13 @@ class Runner:
                "time": time.strftime("%Y-%m-%d %H:%M:%S")}
         self._write(self.f_times, rec)
         self.fin[source].append(seconds)
-        if planned and self.planner is not None and self.planner.finished(i, int(finish_frame)):
-            self.event("best route", int(finish_frame), agent=int(i), frames=frames, seconds=seconds)
+        if planned and self.planner is not None:
+            r = self.planner.finished(i, int(finish_frame))
+            if r["best_route"]:
+                self.event("best route", int(finish_frame), agent=int(i), frames=frames, seconds=seconds)
+            if r["failures_cleared"] or r["deaths_forgiven"]:
+                self.event("forgiven", int(finish_frame), agent=int(i), failures=r["failures_cleared"],
+                           deaths=r["deaths_forgiven"])
         new = False
         if self.lock is True and lv is not None and self.demo is None:
             new = self.best.offer(lv, source, {"seconds": seconds, "frames": frames, "run": self.args.name,

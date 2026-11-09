@@ -614,6 +614,35 @@ def test_move_memory_charges_the_point_of_no_return(tmp_path):
     assert MoveMemory.load(str(tmp_path / "missing.json")).levels == {}
 
 
+def test_a_finish_forgives_the_pairs_it_decided(tmp_path):
+    """A finished wave clears every failure charge of the (cell, first move) pairs the agent decided in it and
+    forgives one death of each in the point-of-no-return memory; other pairs and other agents keep theirs."""
+    from plan.planner import MoveMemory
+    m = FailureMemory()
+    key = Planner.state_key((5, 2), False, 3.0, 4.0)
+    m.charges = {((5, 2), "run R 16f"): [10.0, 14.0], ((7, 2), "wait 8f"): [5.0]}
+    m.decided(0, 10, key, "run R 16f", ["run R 16f"], 163.0, 163.0, 48)     # no predicted drop: still decided
+    m.decided(1, 10, Planner.state_key((7, 2), True, 0.0, 0.0), "wait 8f", ["wait 8f"], 163.0, 130.0, 48)
+    assert m.finished(0) == [[[5, 2], "run R 16f", 24.0]]
+    assert m.penalty((5, 2), "run R 16f") == 0.0 and m.penalty((7, 2), "wait 8f") == 5.0   # agent 1's untouched
+    assert m.finished(0) == [] and 0 not in m.visits                        # once per wave
+    mm = MoveMemory(str(tmp_path / "moves.json"))
+    mm.set_level("1-8")
+    mm.levels["1-8"] = {(3, 2, "run R 16f"): [2, 3], (4, 2, "jump up hold 15"): [0, 1], (9, 9, "wait 8f"): [1, 1]}
+    mm.decided(0, 10, (3, 2), "run R 16f", 1, adopted=False)
+    mm.decided(0, 18, (3, 2), "run R 16f", 1, adopted=False)                 # the same pair twice: one death
+    mm.decided(0, 26, (4, 2), "jump up hold 15", 1, adopted=False)           # no deaths: nothing to forgive
+    mm.decided(0, 30, (4, 2), "pad", 0, adopted=False)
+    assert mm.finished(0) == [[[3, 2], "run R 16f", 1]]
+    assert mm.stats((3, 2), "run R 16f") == (1, 3) and mm.stats((9, 9), "wait 8f") == (1, 1) and mm.dirty
+    held = MoveMemory()
+    held.set_level("1-8")
+    held.levels["1-8"] = {(3, 2, "run R 16f"): [2, 3]}
+    held.learn = False                                                      # held-out level: nothing changes
+    held.decided(0, 10, (3, 2), "run R 16f", 1, adopted=False)
+    assert held.finished(0) == [] and held.stats((3, 2), "run R 16f") == (2, 3)
+
+
 def test_best_route_keeps_the_fastest_finish_and_matches_states():
     from plan.planner import BestRoute, ROUTE_RADIUS
     r = BestRoute()

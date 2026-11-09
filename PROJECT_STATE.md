@@ -515,6 +515,11 @@ from frame 0 through frame 114, past the live divergence at frame 94, and again 
 route already rejoins it. **Open:** the world model's soft risk on a route the game has proven safe keeps 1-8 off
 it. **Unverified** in the game.
 
+**Forgiveness** (2026-11-10): a finished wave clears every failure-memory charge of the (cell, first move) pairs the
+agent decided in it, and the point-of-no-return memory forgives one death of each (not on held-out levels); an
+event `forgiven` lists both. A route that worked is no longer kept off by earlier charges. **Unverified** in the
+game.
+
 **Drawn in the game** (first planned agent, at most every `--replan` frames): the chosen plan's predicted path
 (green), its airborne completion (since step 4: fainter green, dashed, landing yellow), predicted landings (yellow
 dots), wall jumps (cyan dots), the top 3 rejected alternatives faintly (red when vetoed, grey otherwise).
