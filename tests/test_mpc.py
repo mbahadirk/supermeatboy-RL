@@ -305,3 +305,14 @@ def test_future_starts_a_new_recording_after_a_level_switch_mid_wave():
     assert fw.trusted and recorded == 4 and check[0][0][0][1] == pytest.approx(50.0 - 3 * 6)
     info = fw.new_wave()
     assert info == {"frames": 6, "recording": 20, "trusted": True, "mismatch": None, "extended": 0}
+
+
+def test_step_chains_of_a_wave_shorter_than_the_step():
+    """A wave cut after 1-3 rows (a level change) gives the step-4 trainer no full chain, and no crash."""
+    from wm.buffer import ROW, chains
+    for n in (1, 2, 3, 5):
+        rows = np.zeros(n, ROW)
+        rows["frame"] = np.arange(n)
+        rows["action"] = 2
+        c = chains(rows, 4)
+        assert len(c["s"]) == max(0, n - 4) and len(c["s2"]) == len(c["s"])

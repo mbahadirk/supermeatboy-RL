@@ -226,8 +226,8 @@ def chains(rows: np.ndarray, k: int) -> dict:
                           (rows["frame"][j:] == rows["frame"][:-j] + j))
         return ok
 
-    def sh(a, j):                                     # a[i + j] (the last j rows: a's last value, never used)
-        return np.concatenate([a[j:], np.repeat(a[-1:], j)]) if j else a
+    def sh(a, j):                                     # a[i + j] (the last j rows: a's last value, never used;
+        return np.concatenate([a[j:], np.repeat(a[-1:], min(j, n))]) if j else a   # a wave shorter than j rows too)
     air = (rows["flags"] & AIRF) != 0
     vx = np.abs(rows["vx"])
     land1 = air & ~sh(air, 1)                         # transition i -> i + 1
