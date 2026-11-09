@@ -318,7 +318,6 @@ def test_kept_plan_is_registered_once():
         st = state_row(210.0, 46.0, 0.0, 0.0, 0, 5, 0, 0)
         p0 = pl.plan(st, 100, worlds, frames)
         assert p0.switch is None and len(pl.surprise.plans[0]) == 1
-        pend = pl.memory.pending.get(0)
         pl.hysteresis = 1e9                                          # nothing beats the committed plan
         for k, a in enumerate(p0.actions[:2]):
             pl.played(0, 100 + k, a)
@@ -326,8 +325,8 @@ def test_kept_plan_is_registered_once():
         assert p1.from_prev and p1.switch["kept"] and p1.switch["reason"].startswith("kept: best other")
         assert p1.actions[:46] == p0.actions[2:]                     # the same committed actions
         assert [e[0] for e in pl.surprise.plans[0]] == [100]          # still only its adoption's predictions
-        if pend is not None:                                         # the move's expectation is the original one
-            assert pl.memory.pending[0] is pend
+        v = list(pl.memory.visits.get(0, {}).values())              # the kept plan's decision replaces the visit
+        assert all(x.frame == 102 for x in v)
         assert all("within the switch margin" in a["reason"] for a in p1.alternatives
                    if a.get("total") is not None and a["total"] > p1.score["total"])
         pl.hysteresis = 0.0

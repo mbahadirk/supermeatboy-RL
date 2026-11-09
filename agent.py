@@ -722,7 +722,7 @@ class Runner:
                 if st == 1:
                     self.on_death(i, frame, self.prev_xy[i], (x, y), keys, m, None, estimated=False)
                 else:
-                    self.observe(i, frame, x, y, keys, dead=False)
+                    self.observe(i, frame, x, y, keys, dead=False, vx=float(s[2]), vy=float(s[3]))
             if st != 0:
                 self.alive[i] = False
                 planned = i < self.n_plan
@@ -866,9 +866,9 @@ class Runner:
             self.tel.send(T.plan_message(self.level.name, self.wave_no, d))
         self.cost.go(prev)
 
-    def observe(self, i, frame, x, y, keys, dead, cause=None):
+    def observe(self, i, frame, x, y, keys, dead, cause=None, vx=None, vy=None):
         """Planner.observe: surprises, failed moves and (deaths) the point of no return, counted and logged."""
-        for ev in self.planner.observe(i, frame, x, y, keys, dead, cause=cause):
+        for ev in self.planner.observe(i, frame, x, y, keys, dead, cause=cause, vx=vx, vy=vy, dt_ms=self.dt_ms):
             k = ev.get("kind")
             if k == "position":
                 self.st["surprise_pos"] += 1

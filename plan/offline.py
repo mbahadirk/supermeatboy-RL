@@ -130,7 +130,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
             lv.set_platforms(w["pf"])
         dt = dt_of(w)
         x, y, keys = float(s["x"][0]), float(s["y"][0]), int(s["keys"][0])
-        planner.observe(0, f, x, y, keys)
+        planner.observe(0, f, x, y, keys, vx=float(s["vx"][0]), vy=float(s["vy"][0]), dt_ms=dt)
         fut = {}
 
         def fboxes_now():

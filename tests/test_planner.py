@@ -15,7 +15,7 @@ from plan import safety as S                                          # noqa: E4
 from plan.explain import Plan, SurpriseTracker, HORIZONS, ERR90_AT, SURPRISE_FACTOR   # noqa: E402
 from plan.geometry import Terrain                                     # noqa: E402
 from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MIN_LEN, MAX_LEN, padded       # noqa: E402
-from plan.planner import FAIL_FRAMES, FailureMemory                   # noqa: E402
+from plan.planner import FailureMemory, Planner                       # noqa: E402
 
 MODEL = os.path.join(HERE, "runs", "wm_locked", "wm_model.pt")
 DATA_113 = os.path.join(HERE, "runs", "real_20261102-165351", "wm_data")
@@ -183,25 +183,37 @@ def test_imagined_paths_stay_out_of_the_floor(flat):
 
 
 # ---- failure memory and surprises (no model) ----------------------------------------------------------------
-def test_failure_memory_counts_a_move_that_did_not_deliver():
+def test_failure_memory_charges_a_plan_refuted_by_a_return():
+    """A plan judged by its own prediction when the agent comes back to the state it was decided from: less than
+    half the predicted T drop charges the shortfall to (cell, first move); a delivered plan forgives a charge;
+    leaving the cell is needed (staying is no return); other keys (velocity / support) do not match; a death
+    drops the visits and counts nothing."""
     m = FailureMemory()
-    acts = BY_NAME["run R 16f"].array
-    m.expect(0, 100, "run R 16f", 16, padded(acts, 48), (5, 2), 40.0, 36.0)       # expects a drop of 4
-    assert m.update(0, 110, 39.0) == []                                            # not finished yet
-    ev = m.update(0, 116, 39.0)                                                    # dropped 1 < 4 / 2
-    assert len(ev) == 1 and ev[0]["move"] == "run R 16f" and ev[0]["count"] == 1
-    assert m.penalty((5, 2), "run R 16f") == pytest.approx(FAIL_FRAMES)
-    assert m.reason((5, 2), "run R 16f") == "run R 16f from (5,2) failed 1 times (+5 frames)"
-    m.expect(0, 200, "run R 16f", 16, padded(acts, 48), (5, 2), 40.0, 36.0)
-    m.expect(0, 202, "wait 8f", 8, padded(BY_NAME["wait 8f"].array, 48), (5, 2), 40.0, 39.8)   # changed move:
-    assert m.update(0, 216, 40.0) == []                                            # abandoned, expects nothing
-    m.expect(0, 300, "run R 16f", 16, padded(acts, 48), (5, 2), 40.0, 36.0)
-    m.expect(0, 302, "run R 16f", 16, padded(acts, 48)[2:], (5, 2), 39.5, 36.0)   # the same move continued
-    assert m.update(0, 316, 37.5) == []                                            # dropped 2.5 >= 2: fine
-    assert m.count((5, 2), "run R 16f") == 1
-    # a death is not a failure here (the point-of-no-return memory owns deaths): no count, no event
-    m.expect(0, 400, "run R 16f", 16, padded(acts, 48), (5, 2), 40.0, 36.0)
-    assert m.update(0, 405, None, dead=True) == [] and m.count((5, 2), "run R 16f") == 1 and 0 not in m.pending
+    key = Planner.state_key((5, 2), False, 3.0, 4.0)                      # airborne, moving right and up
+    assert key == ((5, 2), False, 1, 1) and Planner.state_key((5, 2), True, 0.5, -0.9) == ((5, 2), True, 0, 0)
+    m.decided(0, 100, key, "run-jump L hold 10", ["run-jump L hold 10", "run L 24f"], 163.0, 138.0, 48)
+    assert m.update(0, 101, (5, 2), 163.0, key) == []                     # still in the cell: no return
+    for f in range(102, 120):
+        assert m.update(0, f, (6, 2), 162.0, ((6, 2), False, 1, 1)) == []  # left; best real T 162
+    assert m.update(0, 120, (5, 2), 163.0, ((5, 2), False, -1, -1)) == []  # back, falling: another state
+    ev = m.update(0, 128, (5, 2), 163.0, key)                             # back in the same state
+    assert len(ev) == 1 and ev[0]["kind"] == "failed move" and ev[0]["move"] == "run-jump L hold 10"
+    assert ev[0]["frames_since"] == 28 and ev[0]["expected_drop"] == 25.0 and ev[0]["real_drop"] == 1.0
+    assert ev[0]["charge"] == 24.0 and "loop: back at (5,2) airborne" in ev[0]["reason"]
+    assert m.penalty((5, 2), "run-jump L hold 10") == pytest.approx(24.0) and m.count((5, 2), "run-jump L hold 10") == 1
+    assert m.reason((5, 2), "run-jump L hold 10") == "run-jump L hold 10 from (5,2) refuted 1 times (+24 frames)"
+    assert m.update(0, 160, (6, 2), 162.0, None) == [] and m.update(0, 170, (5, 2), 163.0, key) == []  # judged once
+    # a retry from there that delivers (half the drop or more by its end) forgives the charge
+    m.decided(0, 200, key, "run-jump L hold 10", ["run-jump L hold 10"], 163.0, 138.0, 48)
+    for f in range(201, 249):
+        m.update(0, f, (6, 2), 163.0 - (f - 200) * 0.5, None)              # T 139 at frame 248: drop 24
+    assert m.penalty((5, 2), "run-jump L hold 10") == 0.0
+    # no predicted drop: nothing recorded; a death: nothing charged
+    m.decided(0, 300, key, "wait 8f", ["wait 8f"], 163.0, 163.0, 48)
+    assert not m.visits[0]
+    m.decided(0, 400, key, "run R 16f", ["run R 16f"], 163.0, 130.0, 48)
+    assert m.update(0, 405, (6, 2), 163.0, None) == [] and m.update(0, 406, (5, 2), 163.0, dead=True) == []
+    assert m.penalty((5, 2), "run R 16f") == 0.0 and 0 not in m.visits
 
 
 def fake_plan(frame=10, preds=None, veto=None, risk=0.0):
@@ -351,12 +363,12 @@ def test_failure_memory_penalty_changes_the_choice(flat):
     worlds, frames = empty_inputs(pl.H)
     p1 = pl.plan(standing(), 300, worlds, frames)
     cell = tuple(p1.state["cell"])
-    pl.memory.counts[(cell, p1.chosen[0])] = 50
+    pl.memory.charges[(cell, p1.chosen[0])] = [250.0]
     pl.prev = {}
     p2 = pl.plan(standing(), 300, worlds, frames)
     assert p2.chosen[0] != p1.chosen[0]
-    assert pl.memory.penalty(cell, p1.chosen[0]) == pytest.approx(50 * FAIL_FRAMES)
-    pl.memory.counts.clear()
+    assert pl.memory.penalty(cell, p1.chosen[0]) == pytest.approx(250.0)
+    pl.memory.charges.clear()
 
 
 @needs_model

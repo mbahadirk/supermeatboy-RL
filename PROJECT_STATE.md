@@ -513,10 +513,11 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
 - **Time field T** (`plan/progress.py`): frames to the goal on realpath's graph (same states, modes, closed cells,
   key legs as V), step frames from measured speeds (**measured**: 5.00 frames per tile on the ground and in the
   air, 5.41 per tile up, 7.74 down; `plan/measure_time.py`). T_support, and airborne T_rise / T_fall by the
-  body's vertical velocity. V stays for display and the failure memory.
+  body's vertical velocity. V stays for display.
 - **Score** (`plan/planner.py`): estimated frames to the goal = frames used + T(end) + penalty frames; every
   expected death (soft risk, a completion where all continuations die, the point-of-no-return rate) costs
-  DEATH_FRAMES = max(T_support(spawn) - T(start), 500); failures 5 each; lower is better; no uncertainty factor.
+  DEATH_FRAMES = max(T_support(spawn) - T(start), 500); refuted plans: their shortfall in frames (failure
+  memory below); lower is better; no uncertainty factor.
   `--hysteresis` defaults to 160 frames, the measured 90% re-score noise of a kept plan (closed loops: switch rate
   0.62 -> 0.09, but 2 deaths in the 1-14 pit kept longer; PLAN_PLANNER_ROUND2.md 7.6). Wall contact is support
   at any speed (**measured**: wall jumps work at every recorded falling speed).
@@ -524,6 +525,17 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
   neutral / reverse for up to 90 frames and scored at its best landing; all die: one death (DEATH_FRAMES).
 - **MoveMemory** (`--move-memory smbrl/move_memory.json`): each death charges the move taken at the latest
   decision of the wave that had a safe alternative; `point of no return` events.
+- **Failure memory, the loop breaker** (`plan.planner.FailureMemory`, since 2026-11-09; replaces the first-move
+  V check, which never judged a plan whose payoff was in its later moves): every decision records its start
+  state's key (cell, supported, sign of vx and vy beyond 1 unit / frame), its first move, T there and the T its
+  plan predicts at its end (whole horizon). When the agent leaves the cell and comes back to the same key in the
+  same wave, that plan is judged by the best real T from its decision to the return (or its end): under half the
+  predicted drop is a failure charged to (cell, first move) as the shortfall in frames (what its estimate
+  overclaimed), with a `failed move` event naming the loop; at least half (also at its end without a return)
+  forgives the latest charge. Deaths are MoveMemory's. Per level for the run (not saved; waves keep it).
+  Offline on bench_20261109-023841's real states: 1-5 wave 7's 28-frame loop is charged from frame 205 and the
+  first move at the loop cell changes from 232 on (24 frames into the loop); 1-14's timeouts are not caught (its
+  plans reach half their predicted drop, the progress is lost later). **Unverified** in the game.
 - **Known limits (measured)**: the world model stops falling about 6 units above the map's bottom edge (its tile
   input pads outside the map with solid; open padding with the model unchanged fails, see 9.13: retrain), so
   falls out of the 1-14 pit are not predicted; after the speed work (7.6) a decision takes 142-175 ms median at

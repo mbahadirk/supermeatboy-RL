@@ -62,7 +62,7 @@ beats a non-success; a vetoed previous plan never blocks a switch; a previous pl
 best's by more than RISK_SWITCH is dropped. hysteresis 0 (the default here): no rule, the best total is chosen.
 Plan.switch records the outcome {kept, gain (frames), margin, unit "frames", reason}. A kept plan is registered
 once: SurpriseTracker.add only for a plan not taken from the previous one (its predictions stay those of its
-adoption); FailureMemory.expect keeps the expectation of a move while the same move goes on.
+adoption); FailureMemory.decided records every decision (a kept plan's too) from its start state's key.
 A time budget (120 ms) gives stage 1 a deadline at 30% of it and stage 2 one at the budget minus the final
 stage's measured cost (a running average, completion included; at least 45% of the budget); a cut stage is
 recorded as cut (candidates and steps actually evaluated in Plan.counts), never passed off as complete, and its
@@ -86,11 +86,12 @@ Score of a candidate: the estimated frames to reach the goal (lower is better; t
 - death: contact within the first 16 frames (plan.safety.VETO_FRAMES) in any member is a hard veto; contact or near
   contact later is a soft risk in [0, 1] (safety's margin from the measured position error), DEATH_FRAMES each;
   on a never-planned tail (pad, stage 1's held last action) only contact counts (1).
-- failure memory: FAIL_FRAMES x the times this first move failed from this start cell (FailureMemory).
+- failure memory: the frames by which plans with this first move from this start cell overclaimed when the game
+  refuted them (FailureMemory: the agent came back to the same state without half the predicted T drop).
 - point-of-no-return memory: deaths / (tries + 1) x DEATH_FRAMES for this first move from this start cell
   (MoveMemory).
-FAIL_FRAMES and DEAD_END_FRAMES are the former V-unit weights (FAIL_COST, DEAD_END) x FX_GROUND frames per tile (on
-open ground 1 V unit is about 1 tile). (Until step 4's follow-up a soft risk cost RISK_FRAMES = 50 frames, about
+DEAD_END_FRAMES is the former V-unit weight DEAD_END x FX_GROUND frames per tile (on open ground 1 V unit is about
+1 tile). (Until step 4's follow-up a soft risk cost RISK_FRAMES = 50 frames, about
 what waiting out the window costs, so plans ran into hazards after frame 16.) Vetoed candidates sort below every other one, by their veto frame (later is
 better), then by estimate. Waiting costs its frames; no uncertainty factor (the members' end spread is logged:
 Plan.score["spread_end"]); no hand-tuned shaping.
@@ -175,8 +176,7 @@ from wm.rollout import World, advance, step_actions, _stacked
 H_DEFAULT, B1_DEFAULT, BRANCH_DEFAULT, S_DEFAULT, BUDGET_MS = 48, 8, 16, 16, 120.0
 STAGE1_SHARE, STAGE2_SHARE = 0.30, 0.45      # of the budget: stage 1's deadline, stage 2's earliest one
 # penalties in frames, from the former V-unit weights by FX_GROUND frames per tile (on open ground 1 V unit ~ 1 tile)
-FAIL_COST, DEAD_END = 1.0, 100.0                          # the former weights (V units)
-FAIL_FRAMES = FAIL_COST * FX_GROUND          # per counted failure of the first move from the start cell
+DEAD_END = 100.0                             # the former weight (V units)
 DEAD_END_FRAMES = DEAD_END * FX_GROUND       # an end with T = +inf: T(start) + this
 DEAD_FAR = 1e4                               # frames: T of a dead end when the start is one too
 # wall contact is support (for scoring) only up to this downward speed (units / frame). Measured (plan/measure_time.py,
@@ -190,7 +190,9 @@ COMPLETE_MAX = 45
 COMPLETE_CHUNK = 10                          # frames rolled out per completion batch (early stop between them)
 NO_PROGRESS = 0.0                            # frames: "no progress" when T(start) - T(end) is not above this
 SAFE_RISK = 0.5                              # soft risk (completion's deaths included) under which a landing alternative counts as safe
-MIN_EXPECT = 0.5                             # FailureMemory: an expected V drop below this expects nothing
+# FailureMemory's state key: a velocity component (units / frame) is "moving" beyond this, else "still". In the
+# 1-5 loop of bench_20261109-023841 one cell held three states (vy +5.3, -0.8, -2.0; vx +3.5, 0.0, -1.9 u/f).
+KEY_SPEED = 1.0
 VETO_SCORE = -1e6
 VETO_TIE = 1e-6                              # vetoed: by veto frame, then (tiny) by estimate
 SUCCESS_SCORE = 1e5                          # a plan touching the goal at frame t: SUCCESS_SCORE - t
@@ -540,75 +542,131 @@ def hit_reason(kind, hid, frame) -> str:
 
 # ---- failure memory --------------------------------------------------------------------------------------
 @dataclass
-class _Expect:
-    start: int
-    end: int
-    move: str
-    cell: tuple
-    actions: np.ndarray
-    v_start: float
-    drop: float
+class _Visit:
+    frame: int                                   # the decision's frame
+    key: tuple                                   # Planner.state_key of its start state
+    move: str                                    # its first move ("pad": none)
+    moves: list                                  # its moves (for the event)
+    t0: float                                    # T at the start
+    drop: float                                  # predicted T drop by the plan's end (frames)
+    end: int                                     # frame + the plan's frames (H, or H + its completion)
 
 
 class FailureMemory:
-    """Moves that did not deliver the progress their plan predicted, per (start cell, move name).
+    """Plans the game refuted, per (start cell, first move): a loop breaker.
 
-    Planner.plan calls expect() with every chosen plan: its first move, the start cell, V at the start and the
-    predicted V drop by the move's end. The expectation stays while later plans keep playing the same move
-    (their actions continue it); a plan that changes the move drops it (abandoned, not failed). update() (the
-    runner, or Planner.observe) gives the real V each frame; once the move has been played to its end, a
-    real drop below half the expected one counts a failure. A death counts nothing here (the point-of-no-return
-    memory, MoveMemory, owns deaths: no double charge). Expected drops below MIN_EXPECT expect nothing.
-    Penalty: fail_cost (default FAIL_FRAMES) x count, in frames, for plans starting with that move from that
-    cell."""
+    Planner.plan calls decided() with every decision of a planned agent: its start state's key
+    (Planner.state_key: cell, supported, the signs of vx and vy beyond KEY_SPEED), its first move, T at the start
+    and the T the plan predicts at its end (over its whole horizon, not only the first move); a plan predicting no
+    drop records nothing, a later decision from the same key replaces the earlier one. update() (Planner.observe,
+    every real frame) keeps the agent's real T and checks each recorded visit of the agent's cell:
+    - the agent came back (it left the cell and is in the same key again, same wave): the visit's plan is judged by
+      the best real T from its decision to the return or to its end, whichever is first. Less than half the
+      predicted drop: a failure, charged to (cell, first move) as the shortfall in frames (predicted drop minus the
+      real one, at most the predicted drop): what the plan's estimate overclaimed. A "failed move" event names the
+      loop (key, frames since, predicted vs real drop). At least half: delivered (no charge).
+    - the plan's end passed without a return: judged the same way, but only a delivered plan has an effect.
+    A delivered plan forgives the latest charge of its (cell, first move), so a retry that works is not punished
+    for good. A death drops the agent's visits and counts nothing (MoveMemory owns deaths: no double charge).
+    Penalty: the sum of the charges, in frames, for plans starting with that move from that cell. Kept per level
+    for the run (Planner.set_level makes a new one; new waves keep the charges), not saved."""
 
-    def __init__(self, fail_cost: float = FAIL_FRAMES):
-        self.fail_cost = fail_cost
-        self.counts: dict[tuple, int] = {}
-        self.pending: dict[int, _Expect] = {}
+    def __init__(self):
+        self.charges: dict[tuple, list] = {}             # (cell, move) -> shortfall frames, one per failure
+        self.new_wave()
+
+    def new_wave(self):
+        self.visits: dict[int, dict] = {}                # agent -> {key: _Visit}
+        self.real: dict[int, dict] = {}                  # agent -> {frame: real T}
+        self.entered: dict[int, tuple] = {}              # agent -> (cell, frame it entered the cell)
+
+    @staticmethod
+    def _key(cell, move):
+        return (int(cell[0]), int(cell[1])), move
 
     def count(self, cell, move: str) -> int:
-        return self.counts.get((tuple(int(v) for v in cell), move), 0)
+        return len(self.charges.get(self._key(cell, move), ()))
 
     def penalty(self, cell, move: str) -> float:
-        return self.fail_cost * self.count(cell, move)
+        return float(sum(self.charges.get(self._key(cell, move), ())))
 
     def reason(self, cell, move: str) -> str:
-        return (f"{move} from ({int(cell[0])},{int(cell[1])}) failed {self.count(cell, move)} times "
+        return (f"{move} from ({int(cell[0])},{int(cell[1])}) refuted {self.count(cell, move)} times "
                 f"(+{self.penalty(cell, move):.0f} frames)")
 
-    def expect(self, agent: int, frame: int, move: str, move_frames: int, actions, cell, v_start, v_end_pred):
-        p = self.pending.get(agent)
-        actions = np.asarray(actions, np.int64)
-        if p is not None and frame < p.end:
-            k = p.end - frame
-            if np.array_equal(actions[:k], p.actions[frame - p.start:]):
-                return                                   # still playing the same move
-        if v_start is None or v_end_pred is None or not (math.isfinite(v_start) and math.isfinite(v_end_pred)) \
-                or v_start - v_end_pred < MIN_EXPECT or move_frames <= 0:
-            self.pending.pop(agent, None)
+    def decided(self, agent: int, frame: int, key: tuple, move: str, moves, t0: float, t_end: float, frames: int):
+        vs = self.visits.setdefault(int(agent), {})
+        c0 = self.entered.get(int(agent))
+        if c0 is None or c0[0] != key[0]:                    # the agent is in the decision's cell now
+            self.entered[int(agent)] = (key[0], int(frame))
+        drop = t0 - t_end if math.isfinite(t0) and math.isfinite(t_end) else -math.inf
+        if drop <= NO_PROGRESS or frames <= 0:
+            vs.pop(key, None)
             return
-        self.pending[agent] = _Expect(int(frame), int(frame) + int(move_frames), move,
-                                      tuple(int(v) for v in cell), actions[:move_frames].copy(), float(v_start),
-                                      float(v_start - v_end_pred))
+        vs[key] = _Visit(int(frame), key, move, list(moves), float(t0), float(drop), int(frame) + int(frames))
 
-    def update(self, agent: int, frame: int, v_real: float | None, dead: bool = False) -> list[dict]:
-        """The agent's real V at this frame (None / inf when unknown). Returns the failures counted now (a death
-        drops the expectation and counts nothing)."""
-        p = self.pending.get(agent)
-        if p is None or (frame < p.end and not dead):
-            return []
-        del self.pending[agent]
+    def _judge(self, agent: int, v: _Visit, upto: int):
+        """(delivered, real drop): the best real T on frames v.frame + 1 .. upto."""
+        rt = self.real.get(agent, {})
+        ts = [rt[k] for k in range(v.frame + 1, upto + 1) if k in rt and math.isfinite(rt[k])]
+        real = v.t0 - min(ts) if ts else -math.inf
+        return real >= v.drop / 2, real
+
+    def update(self, agent: int, frame: int, cell=None, t: float | None = None, key=None,
+               dead: bool = False) -> list[dict]:
+        """The agent's real state at this frame: its cell, real T (None / inf: unknown) and key (a callable
+        giving Planner.state_key, evaluated only when needed). Returns the failures counted now."""
+        agent = int(agent)
         if dead:
+            self.visits.pop(agent, None)
+            self.real.pop(agent, None)
+            self.entered.pop(agent, None)
             return []
-        real = None if v_real is None or not math.isfinite(v_real) else p.v_start - float(v_real)
-        if real is not None and real >= p.drop / 2:
+        cell = (int(cell[0]), int(cell[1]))
+        self.real.setdefault(agent, {})[int(frame)] = math.inf if t is None else float(t)
+        c0 = self.entered.get(agent)
+        if c0 is None or c0[0] != cell:
+            self.entered[agent] = c0 = (cell, int(frame))
+        vs = self.visits.get(agent)
+        if not vs:
             return []
-        key = (p.cell, p.move)
-        self.counts[key] = self.counts.get(key, 0) + 1
-        return [{"kind": "failed move", "agent": int(agent), "frame": int(frame), "move": p.move, "cell": list(p.cell),
-                 "expected_drop": round(p.drop, 3), "real_drop": None if real is None else round(real, 3),
-                 "dead": False, "count": self.counts[key], "reason": self.reason(p.cell, p.move)}]
+        out, k_now = [], None
+        for k, v in list(vs.items()):
+            back = k[0] == cell and c0[1] > v.frame          # left the cell after the decision, back in it now
+            if back and k_now is None:
+                k_now = key() if callable(key) else key
+            if back and k == k_now:
+                ok, real = self._judge(agent, v, min(v.end, int(frame)))
+                del vs[k]
+                if ok:
+                    self._forgive(v)
+                    continue
+                short = v.drop - max(real, 0.0)
+                ck = self._key(k[0], v.move)
+                self.charges.setdefault(ck, []).append(short)
+                real_r = None if not math.isfinite(real) else round(real, 1)
+                real_t = "-" if real_r is None else f"{real_r:.0f}"
+                out.append({"kind": "failed move", "agent": agent, "frame": int(frame), "move": v.move,
+                            "cell": list(k[0]), "key": [list(k[0]), *k[1:]], "decision_frame": v.frame,
+                            "frames_since": int(frame) - v.frame, "plan": v.moves,
+                            "expected_drop": round(v.drop, 1), "real_drop": real_r, "charge": round(short, 1),
+                            "count": len(self.charges[ck]), "dead": False,
+                            "reason": (f"loop: back at ({k[0][0]},{k[0][1]}) {'supported' if k[1] else 'airborne'} "
+                                       f"vx {k[2]:+d} vy {k[3]:+d} {int(frame) - v.frame} frames after deciding "
+                                       f"{' > '.join(v.moves) or 'pad'} there; predicted T drop {v.drop:.0f}, real "
+                                       f"best {real_t}: +{short:.0f} frames to {v.move} from there "
+                                       f"({len(self.charges[ck])} times)")})
+            elif frame >= v.end and not back:
+                del vs[k]                                    # its plan's end passed: only a delivery counts
+                if self._judge(agent, v, v.end)[0]:
+                    self._forgive(v)
+        return out
+
+    def _forgive(self, v: _Visit):
+        ck = self._key(v.key[0], v.move)
+        ch = self.charges.get(ck)
+        if ch:
+            ch.pop()
 
 
 # ---- point-of-no-return memory ---------------------------------------------------------------------------
@@ -852,7 +910,7 @@ class Planner:
     def new_wave(self):
         self.prev = {}
         self.long = {}                               # agent -> the last long-safe plan {frame, actions, segs, valid}
-        self.memory.pending = {}
+        self.memory.new_wave()
         if self.moves is not None:
             self.moves.new_wave()
         self.surprise.new_wave()
@@ -931,16 +989,31 @@ class Planner:
         return goal, legs, keys
 
     def observe(self, agent: int, frame: int, x: float, y: float, keys: int = 0, dead: bool = False,
-                cause=None) -> list[dict]:
+                cause=None, vx: float | None = None, vy: float | None = None, dt_ms: float = 16.667) -> list[dict]:
         """The runner calls this with every real state: surprise events (SurpriseTracker), failed moves
-        (FailureMemory.update) and, on a death (cause: what killed it, for the log), the point of no return
-        (MoveMemory.died)."""
+        (FailureMemory.update: real T and the state key; vx, vy as recorded, units / s, None: unknown) and, on a
+        death (cause: what killed it, for the log), the point of no return (MoveMemory.died)."""
         ev = self.surprise.observe(agent, frame, x, y, dead)
-        v = None if dead else float(self.value(np.array([x]), np.array([y]), keys)[0][0])
-        ev = ev + self.memory.update(agent, frame, v, dead)
+        if dead:
+            ev = ev + self.memory.update(agent, frame, dead=True)
+        else:
+            vyf = None if vy is None else float(vy) * dt_ms / 1000.0
+            vxf = None if vx is None else float(vx) * dt_ms / 1000.0
+            t, sup, _, _, _ = self.time_to_go(np.array([x]), np.array([y]), keys,
+                                              vy=None if vyf is None else np.array([vyf]))
+            cell = self.cell(x, y)
+            ev = ev + self.memory.update(agent, frame, cell, float(t[0]),
+                                         key=lambda: self.state_key(cell, bool(sup[0]), vxf, vyf))
         if dead and self.moves is not None:
             ev.append(self.moves.died(agent, frame, cause))
         return ev
+
+    @staticmethod
+    def state_key(cell, supported: bool, vx, vy) -> tuple:
+        """FailureMemory's key of a state: (cell, supported, sign of vx, sign of vy), a speed (units / frame)
+        within KEY_SPEED counting 0 (None: 0)."""
+        sg = lambda v: 0 if v is None or abs(v) <= KEY_SPEED else (1 if v > 0 else -1)
+        return (int(cell[0]), int(cell[1])), bool(supported), sg(vx), sg(vy)
 
     def played(self, agent: int, frame: int, action: int):
         """The runner calls this with the action index it really played for the agent on this frame (the
@@ -1472,9 +1545,10 @@ class Planner:
         if self.moves is not None:
             self.moves.decided(agent, frame, cell0, plan.chosen[0] if plan.chosen else "pad", safe_alts,
                                adopted=not plan.from_prev)
-        if first_frames > 0 and v0_ok:
-            vm = self.value(np.array([mx[first_frames]]), np.array([my[first_frames]]), keys)[0][0]
-            self.memory.expect(agent, frame, plan.chosen[0], first_frames, acts, cell0, v0, float(vm))
+        if T0_ok:                                    # judged by its own prediction when the agent comes back
+            key0 = self.state_key(cell0, bool(sup0[0]), float(row["vx"][0]) * dt_ms / 1000.0, float(vy0[0]))
+            self.memory.decided(agent, frame, key0, first_name[best], plan.chosen, T0, float(t_end3[best]),
+                                int(frames_used[best]))
         return plan
 
     # ---- planning modes -----------------------------------------------------------------------------------
