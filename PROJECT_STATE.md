@@ -671,7 +671,9 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
     of 1559563 and the tail rule. **Unverified** in the game: the tail rule.
 - **Still share** (`5209c61`): plan.analyze_run.is_still (chosen plan only wait / pad), per level in
   plan.benchmark. **Benchmark** (`3f19070`): `python smbrl/plan/benchmark.py cmd | report <run>` from the folder
-  above smbrl/; the run command keeps the overlay and passes --wm-collect.
+  above smbrl/; the run command keeps the overlay and passes --wm-collect. Since 2026-11-10 it also gives the run
+  its own empty death and point-of-no-return memories (`--death-memory` / `--move-memory` in runs/<name>/), and
+  the report shows median_s next to best_s (also in the deltas).
 - Closed loops (13 starts: 9 as before + 1-11 x3 + 1-1 demo; 300 frames, no deadlines): 9cabc9b (h16) 4 finished,
   4 died, switch 0.29, still 0.27; now (h3) 4 finished, 3 died, switch 0.58, still 0.06. 1-1 from the right wall
   (plan_20261108-172037 wave 2): 9cabc9b stands and dies; now leaves (h3: moves, no finish in 300 frames; h16

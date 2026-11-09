@@ -61,6 +61,7 @@ def test_record_aggregates_benchmark_levels(tmp_path):
     assert L5["deaths"] == {"hazard saw": 1} and L5["deaths_per_wave"] == pytest.approx(1 / 3, abs=1e-4)
     assert (L8["waves"], L8["finishes"], L8["completion"], L8["best_s"]) == (3, 1, pytest.approx(1 / 3, abs=1e-4), 6.5)
     assert L8["deaths"] == {"hazard saw": 1, "kill box": 1}
+    assert L5["median_s"] == pytest.approx(3.75) and L8["median_s"] == 6.5 and rec["levels"]["1-11"]["median_s"] is None
     assert L5["decisions"] == 9 and L5["ms_per_decision"] == 60.0 and L5["replan_interval"] == 4.0
     assert L5["approx_medians"] and [r["waves"] for r in L5["runs"]] == [2, 1]
     # still (plan.analyze_run.is_still): bench_b's 1-5 wave, 3 of the 9 decisions, summed over the runs exactly
@@ -90,10 +91,11 @@ def test_baseline_deltas(tmp_path, capsys):
     assert d["1-5"]["completion"] == pytest.approx(1.0 - 0.5) and d["1-5"]["best_s"] == pytest.approx(-0.5)
     assert d["1-5"]["deaths_per_wave"] == pytest.approx(-0.5) and d["1-5"]["ms_per_decision"] == 0.0
     assert d["1-8"]["completion"] == pytest.approx(-0.5) and d["1-8"]["best_s"] is None
+    assert d["1-5"]["median_s"] == pytest.approx(-0.5) and d["1-8"]["median_s"] is None
     assert d["1-11"]["completion"] is None
     assert d["1-5"]["still"] == pytest.approx(1.0) and d["1-8"]["still"] == 0.0
     out = capsys.readouterr().out
-    assert "d compl" in out and "d still" in out and "still: decisions whose chosen plan" in out
+    assert "d compl" in out and "d still" in out and "med_s" in out and "d med" in out and "still: decisions whose chosen plan" in out
 
 
 def test_cmd_has_every_frozen_flag_and_no_placeholder():
@@ -104,6 +106,8 @@ def test_cmd_has_every_frozen_flag_and_no_placeholder():
     assert SPEC["switches"] == ["--wm-collect"] and " --wm-collect --name bench_" in text
     assert "do not add --learn" in text and "changing the level with S is fine" in text
     name = text.split("--name ")[1].split()[0]
+    assert (f"--death-memory smbrl/runs/{name}/death_memory.json --move-memory smbrl/runs/{name}/move_memory.json"
+            in text)                                                    # the run's own memories, empty at start
     assert f"python smbrl/plan/benchmark.py report {name}" in text and "python -m plan.benchmark" not in text
     assert "<" not in text and ">" not in text
     for lv in SPEC["levels"]:

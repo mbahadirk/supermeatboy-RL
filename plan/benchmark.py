@@ -9,7 +9,9 @@ Run folder names resolve under smbrl/runs from either folder (then as paths). Th
 folder above smbrl/ (`python smbrl/agent.py ...`, `python smbrl/plan/benchmark.py report ...`). The agent.py
 command draws the overlay (the plans are visible) and passes --wm-collect (runs/<name>/wm_data, for offline
 replays: plan/offline.py); --learn must not be added (it changes the model between waves); changing the level
-with S is fine.
+with S is fine. It also gives the run its own death and point-of-no-return memories in the run folder
+(--death-memory / --move-memory runs/<name>/...json, created empty), so every benchmark run starts with empty
+memories (the failure memory and the best route are per run already) and runs stay comparable.
 
 The spec is smbrl/benchmark.json: levels (disjoint from eval_levels.json's held-out levels, checked at load),
 waves per level, the frozen agent.py config and "switches" (on/off agent.py flags the benchmark always passes,
@@ -21,7 +23,8 @@ Run folders are read only through plan/analyze_run.py: analyze(folder, level) pe
 waves, finishes, completion (finishes / waves), best seconds, deaths by cause (and per wave), decisions, median
 total ms per decision, median replan interval, the still share (decisions whose chosen plan has no moves other
 than wait / pad: plan.analyze_run.is_still) and the position error per horizon (followed / not followed).
-Records go to runs/benchmarks/<label>.json; --set-baseline also writes runs/benchmarks/baseline.json.
+Per level the median finish time is shown next to the best (median_s, best_s). Records go to
+runs/benchmarks/<label>.json; --set-baseline also writes runs/benchmarks/baseline.json.
 
 Comparability: completion is over the waves actually played per level (shown with every record), not trimmed to
 a fixed K; fixed-K trimming is a deliberate later refinement, not silently omitted. A level played in several
@@ -35,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import statistics
 import subprocess
 import sys
 import time
@@ -108,6 +112,8 @@ def command(spec: dict, now: float | None = None) -> str:
     cfg = spec["config"]
     cmd = "python smbrl/agent.py " + " ".join(f"{fl} {_arg(cfg[k])}" for k, fl in FLAGS)
     cmd += "".join(f" {s}" for s in spec.get("switches") or []) + f" --name {name}"
+    cmd += (f" --death-memory smbrl/runs/{name}/death_memory.json"       # the run's own memories, empty at start
+            f" --move-memory smbrl/runs/{name}/move_memory.json")
     out = ["run from the folder above smbrl/ (the overlay shows the plans; --wm-collect keeps the world-model data "
            "for offline replays):", "  " + cmd, "",
            f"in that one run, play each level for {spec['waves_per_level']} waves:"]
@@ -185,6 +191,7 @@ def aggregate(results: list, spec: dict) -> tuple[dict, dict]:
         for _, _, L in parts:
             deaths.update(L["deaths"])
         bests = [L["best_s"] for _, _, L in parts if L["best_s"] is not None]
+        secs = [x["seconds"] for _, _, L in parts for x in L["finishes"] if x.get("seconds") is not None]
         dec = sum(r["decisions"] for _, r, _ in parts)
         still = sum(L.get("still_n") or 0 for _, _, L in parts)    # analyze_run.is_still decisions
         ms = [((r["timing_ms"].get("total") or [None])[0], r["decisions"]) for _, r, _ in parts]
@@ -192,6 +199,7 @@ def aggregate(results: list, spec: dict) -> tuple[dict, dict]:
         levels[lv] = {
             "waves": waves, "waves_planned": spec["waves_per_level"], "finishes": fins,
             "completion": _ratio(fins, waves), "best_s": min(bests) if bests else None,
+            "median_s": round(float(statistics.median(secs)), 3) if secs else None,
             "deaths": dict(deaths.most_common()), "deaths_total": sum(deaths.values()),
             "deaths_per_wave": _ratio(sum(deaths.values()), waves), "decisions": dec,
             "still_decisions": still, "still": _ratio(still, dec),
@@ -228,7 +236,7 @@ def build_record(folders: list, spec: dict, label: str | None = None, runs_dir: 
             "levels": levels, "overall": overall}
 
 
-DELTA_KEYS = ("completion", "best_s", "deaths_per_wave", "ms_per_decision", "still")
+DELTA_KEYS = ("completion", "best_s", "median_s", "deaths_per_wave", "ms_per_decision", "still")
 
 
 def deltas(rec: dict, base: dict) -> dict:
@@ -276,19 +284,19 @@ def table(rec: dict, base: dict | None = None) -> str:
           + ("; MODEL CHANGED since the baseline" if (bm.get("mtime"), bm.get("size"), bm.get("path"))
              != (m["mtime"], m["size"], m["path"]) else "")
           + ("; CONFIG DIFFERS from the baseline" if base.get("config") != rec["config"] else ""))
-    hdr = (f"{'level':<8}{'waves':>8}{'fin':>5}{'compl':>7}{'best_s':>8}{'d/wave':>8}{'dec':>7}{'ms/dec':>8}{'replan':>7}"
-           f"{'still':>7}")
+    hdr = (f"{'level':<8}{'waves':>8}{'fin':>5}{'compl':>7}{'best_s':>8}{'med_s':>8}{'d/wave':>8}{'dec':>7}{'ms/dec':>8}"
+           f"{'replan':>7}{'still':>7}")
     if dl:
-        hdr += f"  | {'d compl':>8}{'d best':>8}{'d d/w':>8}{'d ms':>8}{'d still':>8}"
+        hdr += f"  | {'d compl':>8}{'d best':>8}{'d med':>8}{'d d/w':>8}{'d ms':>8}{'d still':>8}"
     w(hdr)
     rows = list(rec["levels"].items()) + [("overall", rec["overall"])]
     for lv, v in rows:
         s = (f"{lv:<8}{str(v['waves']) + '/' + str(v['waves_planned']):>8}{v['finishes']:>5}{_p(v['completion']):>7}"
-             f"{_f(v.get('best_s')):>8}{_f(v['deaths_per_wave']):>8}{v['decisions']:>7}"
+             f"{_f(v.get('best_s')):>8}{_f(v.get('median_s')):>8}{_f(v['deaths_per_wave']):>8}{v['decisions']:>7}"
              f"{_f(v['ms_per_decision'], '.0f'):>8}{_f(v.get('replan_interval'), '.0f'):>7}{_p(v.get('still')):>7}")
         if dl:
             x = dl[lv]
-            s += (f"  | {_d(x['completion'], '', True):>8}{_d(x['best_s'], '.2f'):>8}"
+            s += (f"  | {_d(x['completion'], '', True):>8}{_d(x['best_s'], '.2f'):>8}{_d(x['median_s'], '.2f'):>8}"
                   f"{_d(x['deaths_per_wave'], '.2f'):>8}{_d(x['ms_per_decision'], '.0f'):>8}"
                   f"{_d(x['still'], '', True):>8}")
         w(s)
