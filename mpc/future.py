@@ -2,8 +2,9 @@
 
 With the game's time step locked, hazards sit at the same place at the same wave frame in every wave
 (measured: 0.0 units off on 1-13 and 1-14). So the first wave on a level is recorded, and later waves look
-the future up in it ("recorded"), but only while the current positions keep matching the recording.
-Otherwise (first wave, a mismatch, or frames past the recording) positions are extrapolated with their
+the future up in it ("recorded"), but only while the current positions keep matching the recording. A new
+level starts a new recording: a wave cut by the level switch (no wave end) belongs to the old level and is
+dropped. Otherwise (first wave, a mismatch, or frames past the recording) positions are extrapolated with their
 current velocity ("extrapolated"), with an uncertainty radius that grows with time: the planner keeps that
 much more distance, so a guessed future is never treated as known.
 
@@ -31,21 +32,33 @@ class FutureWorld:
 
     def new_level(self):
         self.ref: dict[int, tuple] = {}       # wave frame -> (hz raw, pf, sh) of the reference recording
+        self.cur: dict[int, tuple] = {}       # a wave cut by the level switch belongs to the old level: dropped
         self.keep, self.fans = None, []
         self.new_wave()
 
-    def new_wave(self):
+    def new_wave(self) -> dict:
+        """The wave ended: it extends the recording when it is the level's first or matched it. Returns what this
+        wave did: {frames: frames observed, recording: frames recorded before it (0: it ran extrapolated),
+        trusted: it still matched at its end (None without a recording), mismatch: [frame, units off] of the
+        first mismatch or None, extended: frames it added to the recording}."""
         cur = getattr(self, "cur", {})
-        if cur and (not self.ref or self.trusted):  # the first wave, or one that matched: extends the recording
+        trusted, mismatch = getattr(self, "trusted", True), getattr(self, "mismatch", None)
+        before, added = len(self.ref), 0
+        if cur and (not self.ref or trusted):  # the first wave, or one that matched: extends the recording
             top = max(self.ref) if self.ref else -1
             for f, v in cur.items():
                 if f > top:
                     self.ref[f] = v
+                    added += 1
+        info = {"frames": len(cur), "recording": before, "trusted": bool(trusted) if before else None,
+                "mismatch": None if mismatch is None else [int(mismatch[0]), round(float(mismatch[1]), 1)],
+                "extended": added}
         self.cur: dict[int, tuple] = {}
         self.trusted = True                   # this wave still matches the recording
         self.mismatch = None                  # (frame, units off) of the first mismatch
         self.last = None                      # (frame, hz, pf, sh, dt_ms) now
         self.prev = None                      # the frame before
+        return info
 
     def observe(self, frame: int, hz: list, pf, sh, keep, fans, dt_ms: float):
         if keep is not None:

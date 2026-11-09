@@ -764,7 +764,8 @@ class Runner:
             self.st["check_s"] += time.perf_counter() - t_chk
         fboxes = fut.get("fb")                      # computed for a check or a decision: telemetry reuses it
         if need:                                    # decisions: inputs to H + the airborne completion's frames
-            fut["w"], fut["fb"], _ = future_inputs(self.fw, frame, pl.future_frames, dt, lv.name, self.deaths)
+            fut["w"], fut["fb"], self.fut_rec = future_inputs(self.fw, frame, pl.future_frames, dt, lv.name,
+                                                              self.deaths)
             worlds, fboxes = fut["w"], fut["fb"]
             for i, trig in need.items():
                 s = states[i]
@@ -857,7 +858,9 @@ class Runner:
             st["cut2"] += 1
         prev = self.cost.go("logging")
         d = plan.to_dict()
+        # future_rec: frames of the hazards' future taken from the recording (0: all extrapolated)
         d.update({"level": self.level.name, "wave": self.wave_no, "trigger": list(trigger),
+                  "future_rec": int(getattr(self, "fut_rec", 0)),
                   "real": {"x": s[0], "y": s[1], "vx": s[2], "vy": s[3], "flags": int(s[4]), "state": int(s[5]),
                            "status": int(s[6]), "keys": int(s[7]) if len(s) > 7 else 0}})
         self._write(self.f_plans, d)
@@ -1135,14 +1138,14 @@ class Runner:
             self.demo.wave_done()
         if cost is not None:
             print(self.cost.text(cost), flush=True)
-        self.event("wave", frame, **(cost or {}), why=m.get("why"), frames=frame,
+        fut = self.fw.new_wave()                     # the hazard recording: what this wave used and added
+        self.event("wave", frame, **(cost or {}), why=m.get("why"), frames=frame, future=fut,
                    **{k: v for k, v in st.items() if k not in ("ms", "gaps", "check_s")},
                    ms_median=float(np.median(ms)) if ms is not None else None,
                    ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f, **com,
                    tube=self.commit.tube.summary() if self.commit.on else None,
                    finish_s=fin_p, explore_finish_s=fin_x, best_s=float(best_p["seconds"]) if best_p else None,
                    new_best=self.new_best, lock=self.lock)
-        self.fw.new_wave()
         if self.moves is not None and self.moves.dirty:
             try:
                 self.moves.save()

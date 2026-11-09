@@ -276,3 +276,32 @@ def test_future_follows_the_kill_shapes_not_the_piece():
     fw2.observe(1, [_saw_row(99.0)], None, [], [True], None, 10.0)
     _, check, recorded = fw2.worlds(1, 2, 10.0)
     assert recorded == 0 and check[1][0][0][1] == pytest.approx(97.0) and check[1][1][0] > 0
+
+
+def test_future_starts_a_new_recording_after_a_level_switch_mid_wave():
+    """The user switches level mid-wave (no wave end): the old level's unfinished wave must not become the new
+    level's recording. The new level's first wave records (extrapolated meanwhile), its second wave is trusted
+    and looks the future up in the recording; new_wave says what each wave did."""
+    from mpc.future import FutureWorld
+    fw = FutureWorld()
+    for f in range(30):                                  # level A, first wave: recorded
+        fw.observe(f, [_saw_row(100.0 - f)], None, [], [True], None, 16.667)
+    info = fw.new_wave()
+    assert info == {"frames": 30, "recording": 0, "trusted": None, "mismatch": None, "extended": 30}
+    for f in range(12):                                  # level A, second wave, cut by the level switch
+        fw.observe(f, [_saw_row(100.0 - f)], None, [], [True], None, 16.667)
+    fw.new_level()                                       # level B: its saw falls 3 units a frame from 50
+    assert fw.ref == {} and fw.cur == {}
+    for f in range(20):
+        fw.observe(f, [_saw_row(50.0 - 3 * f)], None, [], [True], None, 16.667)
+        if f == 5:
+            assert fw.worlds(5, 4, 16.667)[2] == 0          # first wave of B: extrapolated
+    info = fw.new_wave()
+    assert info == {"frames": 20, "recording": 0, "trusted": None, "mismatch": None, "extended": 20}
+    assert sorted(fw.ref) == list(range(20))
+    for f in range(6):                                   # second wave of B: matches, uses the recording
+        fw.observe(f, [_saw_row(50.0 - 3 * f)], None, [], [True], None, 16.667)
+    _, check, recorded = fw.worlds(5, 4, 16.667)
+    assert fw.trusted and recorded == 4 and check[0][0][0][1] == pytest.approx(50.0 - 3 * 6)
+    info = fw.new_wave()
+    assert info == {"frames": 6, "recording": 20, "trusted": True, "mismatch": None, "extended": 0}

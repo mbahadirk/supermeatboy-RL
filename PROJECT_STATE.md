@@ -452,6 +452,17 @@ rebuilt between waves when moving hazards are seen in new places, the kill box c
 new cells (at most 4 times per level). V is built on the level's start tiles, as the routes are; tile changes
 (crumble blocks, locks) reach the planner's model inputs and support geometry every frame (`Planner.tiles`).
 
+**Hazard future** (`mpc.future.FutureWorld`): a level's first wave is recorded (meanwhile the moving hazards are
+extrapolated with a growing radius); later waves look the future up in the recording while their hazards match it
+(time step locked), and a matching wave extends it. Until 2026-11-09 a level switch mid-wave (no wave end) left the
+old level's unfinished wave as the new level's "recording": frame 0 mismatched and no wave after the first level
+ever used the recording (bench_20261109-023841 / -001206 / 20261108-221922: 0 waves on 1-8, 1-11, 1-13, 1-14;
+only 1-5, the first level, did), so every saw was extrapolated (half size 20.4 predicted as about 41 at +32 frames).
+`new_level` now drops it: the same sequences use the recording on every wave but each level's first. Logged:
+plans.jsonl `future_rec` (frames of the decision's hazard future from the recording, 0 = all extrapolated) and the
+wave event's `future` {frames, recording (frames before the wave, 0 = it ran extrapolated), trusted, mismatch
+[frame, units], extended}. **Unverified** in the game.
+
 **Deaths.** Every death of a planned agent is checked with `plan.safety.explain_death` (the move into the death
 position against that frame's hazards and shots, or leaving the level). An unexplained one is added to the
 death memory (level, wave frame, position) and saved; the planner treats it as a hazard at that wave frame
