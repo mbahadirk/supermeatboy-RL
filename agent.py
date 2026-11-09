@@ -139,7 +139,8 @@ COL_ALT_VETO, COL_ALT = 0x60FF4040, 0x50B0B0B0
 COL_GOAL, COL_KEY = 0xF0FF78B9, 0xF0FFE628      # where the plan touches the princess / picks a key
 COL_COMP = 0x9020E040                             # the airborne completion after the plan (fainter, dashed)
 # the chosen path in its planning mode's colour (plan/planner.py MODES; viz/viewer.py uses the same colours)
-MODE_COL = {"long-safe": 0xE04080FF, "normal": COL_PLAN, "reflex": 0xE0FF3030, "explore": 0xE0B040F0}
+MODE_COL = {"long-safe": 0xE04080FF, "normal": COL_PLAN, "reflex": 0xE0FF3030, "explore": 0xE0B040F0,
+            "best-route": 0xE0FFC020}
 OVERLAY_ALTS, PLAN_STEP, ALT_STEP = 3, 3, 4
 COL_DEMO = 0xE0FFFFFF                             # --demo: the demo's path (white)
 DEMO_TRAIL_EVERY = 15                             # --demo without recorded positions: redraw agent 0's path this often
@@ -939,6 +940,8 @@ class Runner:
                "time": time.strftime("%Y-%m-%d %H:%M:%S")}
         self._write(self.f_times, rec)
         self.fin[source].append(seconds)
+        if planned and self.planner is not None and self.planner.finished(i, int(finish_frame)):
+            self.event("best route", int(finish_frame), agent=int(i), frames=frames, seconds=seconds)
         new = False
         if self.lock is True and lv is not None and self.demo is None:
             new = self.best.offer(lv, source, {"seconds": seconds, "frames": frames, "run": self.args.name,

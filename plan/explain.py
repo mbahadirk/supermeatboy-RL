@@ -120,6 +120,8 @@ class Plan:
     model_clipped: int | None = None
     completion: dict | None = None
     mode: str = "normal"                              # the planning mode that produced it (plan/planner.py MODES)
+    best_route: dict | None = None                    # the run's best route matched here: {frame, dist, frames,
+    #                                                   finish, used, why (when not used)} (plan.planner.BestRoute)
 
     @property
     def name(self) -> str:

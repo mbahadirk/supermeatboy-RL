@@ -614,6 +614,90 @@ def test_move_memory_charges_the_point_of_no_return(tmp_path):
     assert MoveMemory.load(str(tmp_path / "missing.json")).levels == {}
 
 
+def test_best_route_keeps_the_fastest_finish_and_matches_states():
+    from plan.planner import BestRoute, ROUTE_RADIUS
+    r = BestRoute()
+    assert r.match(0.0, 0.0, 0.0, 0.0, 0) is None                      # nothing recorded: no influence
+
+    def wave(n, finish, agent=0):
+        r.new_wave()
+        for f in range(n):
+            r.observe(agent, f, 10.0 + 3 * f, 50.0, 3.0, 0.0)
+            r.played(agent, f, 6)
+        return r.finished(agent, finish)
+    assert wave(21, 20) and r.best["finish"] == 20 and len(r.best["f"]) == 21
+    assert not wave(31, 30) and r.best["finish"] == 20                # slower: kept the faster one
+    assert wave(16, 15) and r.best["finish"] == 15
+    j, d = r.match(10.0 + 3 * 5 + 2.0, 50.0, 3.5, 0.0, 5)            # 2 units and 0.5 u/f off frame 5 (4-7 match: nearest in time)
+    assert r.best["f"][j] == 5 and d == pytest.approx(2.0)
+    assert r.match(10.0 + 15, 50.0 + ROUTE_RADIUS + 1, 3.0, 0.0, 5) is None   # too far
+    assert r.match(10.0 + 15, 50.0, 1.5, 0.0, 5) is None                      # too slow
+    a, n = r.actions(j, 48)
+    assert n == 11 and list(a) == [6] * 11                            # frames 5..15: what was recorded
+    r.new_wave()
+    r.observe(0, 0, 10.0, 50.0, None, None)                           # no velocities: not recorded
+    assert not r.finished(0, 0)
+    # a death while playing the route marks where (best-wave frame); one off the route marks nothing
+    r.new_wave()
+    assert r.dead(0, 30) is None and r.died_at is None
+    r.using[0] = (20, 4)                                              # adopted at wave frame 20 from route frame 4
+    assert r.dead(0, 27) == 11 and r.died_at == 11
+    assert wave(10, 9) and r.died_at is None                          # a faster finish: a new route, nothing marked
+
+
+@needs_model
+def test_best_route_is_not_injected_where_it_killed(flat):
+    from mpc.candidates import act
+    lv, pl = flat
+    pl.new_wave()
+    pl.prev = {}
+    worlds, frames = empty_inputs(pl.future_frames)
+    x0 = float(standing()["x"][0])
+    n = 120
+    pl.route.best = {"finish": 200, "f": np.arange(100, 100 + n), "x": np.full(n, x0), "y": np.full(n, 46.0),
+                     "vx": np.zeros(n), "vy": np.zeros(n), "a": np.full(n, act(0))}
+    pl.route.died_at = 130                                            # within the horizon of frame 100's match
+    try:
+        p = pl.plan(standing(), 100, worlds, frames)
+        assert p.best_route is not None and not p.best_route["used"] and "killed" in p.best_route["why"]
+        assert "best route" not in pl.last_final["first"] and p.mode != "best-route"
+    finally:
+        pl.route.best, pl.route.died_at = None, None
+        pl.prev = {}
+        pl.new_wave()
+
+
+@needs_model
+def test_best_route_is_chosen_when_safe_and_never_over_danger(flat):
+    """A recorded best route through the agent's state is chosen over the field's choice; a deadly box on it
+    leaves the normal choice; without a recorded route nothing is reported."""
+    from mpc.candidates import act
+    lv, pl = flat
+    pl.new_wave()
+    pl.prev = {}
+    worlds, frames = empty_inputs(pl.future_frames)
+    p0 = pl.plan(standing(), 100, worlds, frames)
+    assert p0.best_route is None and p0.chosen[0] != "best route"
+    x0 = float(standing()["x"][0])
+    n = 120                                                         # the best wave stood still here for 120 frames
+    pl.route.best = {"finish": 200, "f": np.arange(100, 100 + n), "x": np.full(n, x0), "y": np.full(n, 46.0),
+                     "vx": np.zeros(n), "vy": np.zeros(n), "a": np.full(n, act(0))}
+    try:
+        pl.prev = {}
+        p1 = pl.plan(standing(), 100, worlds, frames)
+        assert p1.chosen == ["best route"] and p1.mode == "best-route", (p1.chosen, p1.best_route)
+        assert p1.best_route["used"] and p1.best_route["frame"] == 100 and p1.best_route["dist"] == 0.0
+        assert p1.switch is None or p1.switch["reason"].startswith("best route")
+        pl.prev = {}
+        worlds, frames = empty_inputs(pl.future_frames, [(x0, 46.0, 4.0, 4.0, 0.0)])   # a deadly box on it
+        p2 = pl.plan(standing(), 100, worlds, frames)
+        assert not p2.best_route["used"] and p2.best_route["why"].startswith("vetoed") and p2.mode != "best-route"
+    finally:
+        pl.route.best = None
+        pl.prev = {}
+        pl.new_wave()
+
+
 @needs_model
 def test_move_memory_penalty_changes_the_choice_and_failures_ignore_deaths(flat):
     lv, pl = flat

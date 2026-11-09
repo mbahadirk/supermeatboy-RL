@@ -108,7 +108,8 @@ ALIVEBOX = (90, 92, 110)
 PLAN = (40, 225, 70)
 PLAN_DONE = (30, 120, 45)
 # the chosen path in its planning mode's colour (plan/planner.py MODES; agent.py MODE_COL in the game)
-MODE_COLORS = {"long-safe": (64, 128, 255), "normal": PLAN, "reflex": (255, 48, 48), "explore": (176, 64, 240)}
+MODE_COLORS = {"long-safe": (64, 128, 255), "normal": PLAN, "reflex": (255, 48, 48), "explore": (176, 64, 240),
+               "best-route": (255, 192, 32)}
 
 
 def mode_color(plan: dict) -> tuple:

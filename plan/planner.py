@@ -205,6 +205,13 @@ SUCCESS_MARGIN = 3                           # frames: a success replaces a succ
 # demo) at 3 / 8 / 11 / 16 frames: finished 4 / 5 / 4 / 2, died 3 / 4 / 5 / 4, switch rate 0.58 / 0.50 / 0.43 / 0.44;
 # 3 is the smallest value (and the only one tried) with no more deaths and no fewer finishes than 3.
 HYSTERESIS_FRAMES = 3.0
+# best route (BestRoute): a state matches a state of the run's fastest finish of the level when within the body's
+# half size (realpath.BODY, units) and KEY_SPEED (units / frame) per velocity component: well inside the world
+# model's 90% error at the next decision (+4: 2-4 units, +8: 5-9 measured), so the recorded actions start from
+# practically the same situation; the final stage still judges them like any candidate
+ROUTE_RADIUS = BODY
+ROUTE_SPEED = KEY_SPEED
+ROUTE_MOVE = "best route"                    # the candidate's move name (failure and point-of-no-return memories)
 RISK_SWITCH = 0.2                            # soft risk: a previous plan riskier than the best by more is dropped
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
 N_ALTERNATIVES = 5
@@ -783,6 +790,99 @@ class MoveMemory:
         return ev
 
 
+# ---- best route --------------------------------------------------------------------------------------------
+class BestRoute:
+    """The level's fastest finish of this run: the planned agent's real states and actions of that wave, so the
+    planner can stay on (or rejoin) a route the game has proven.
+
+    Planner.observe / played record every planned agent's real state (x, y, vx, vy in units / frame) and action
+    per wave frame; Planner.finished(agent, frame) keeps that wave's record when it finishes in fewer frames than
+    the level's best so far in this run. match(): the best wave's frame whose state is within ROUTE_RADIUS units
+    and ROUTE_SPEED units / frame (each velocity component) of a given state, the nearest in wave frames (then
+    in distance); the best wave's actions from there are a final-stage candidate (Planner.plan), re-scored with
+    every member and the full safety check like the others, and chosen over the best plan as an incumbent would
+    be kept: unless vetoed, riskier than the best plan by more than RISK_SWITCH (soft risk with the completion's
+    deaths), or another plan touches the goal sooner (the field's T is optimistic along proven routes: real
+    remaining frames / T median 1.29 on 1-5, 1.70 on 1-13, 1.23 on 1-14 in bench_20261109-161551, so an
+    estimate comparison would leave the route). Plan.best_route logs the match {frame, dist, frames, finish,
+    used, why}; the chosen plan's mode is "best-route". A death while
+    the agent plays the route (the route itself became deadly) marks the best wave's frame where it died
+    (died_at): from then on the route is not injected where its actions would reach that frame within the
+    horizon (normal planning there), until a faster finish replaces the route. Kept per level for the run
+    (Planner.set_level makes a new one), not saved; without a recorded best it does nothing."""
+
+    def __init__(self):
+        self.best: dict | None = None                    # {frames, finish, f (frames), x, y, vx, vy, a (arrays)}
+        self.died_at: int | None = None                  # the best wave's frame where playing it killed an agent
+        self.new_wave()
+
+    def new_wave(self):
+        self.cur: dict[int, dict] = {}                   # agent -> {frame: [x, y, vx, vy, action]}
+        self.using: dict[int, tuple] = {}                # agent -> (decision frame, best-wave frame) while on it
+
+    def observe(self, agent: int, frame: int, x: float, y: float, vx, vy):
+        if vx is None or vy is None:
+            self.cur.pop(int(agent), None)               # no velocities: no route from this agent
+            self.cur[int(agent)] = None
+            return
+        tr = self.cur.setdefault(int(agent), {})
+        if tr is not None:
+            tr[int(frame)] = [float(x), float(y), float(vx), float(vy), None]
+
+    def played(self, agent: int, frame: int, action: int):
+        tr = self.cur.get(int(agent))
+        if tr is not None and int(frame) in tr:
+            tr[int(frame)][4] = int(action)
+
+    def dead(self, agent: int, frame: int):
+        """Agent died at wave frame `frame`. While it was playing the route, returns the best wave's frame where
+        that took it (now died_at), else None."""
+        self.cur.pop(int(agent), None)
+        u = self.using.pop(int(agent), None)
+        if u is None or self.best is None:
+            return None
+        at = int(u[1]) + int(frame) - int(u[0])
+        self.died_at = at if self.died_at is None else min(self.died_at, at)
+        return at
+
+    def finished(self, agent: int, frame: int) -> bool:
+        """Agent touched the goal in wave frame `frame`: its wave becomes the best when faster. True if so."""
+        tr = self.cur.pop(int(agent), None)
+        if not tr or (self.best is not None and int(frame) >= self.best["finish"]):
+            return False
+        fs = sorted(f for f, v in tr.items() if f <= int(frame) and v[4] is not None)
+        if not fs:
+            return False
+        f = np.array(fs, np.int64)
+        v = np.array([tr[k] for k in fs], np.float64)
+        self.best = {"finish": int(frame), "f": f, "x": v[:, 0], "y": v[:, 1], "vx": v[:, 2], "vy": v[:, 3],
+                     "a": v[:, 4].astype(np.int64)}
+        self.died_at = None
+        return True
+
+    def match(self, x: float, y: float, vx: float, vy: float, frame: int):
+        """(index into the best wave, distance) of the matching state nearest in wave frames, or None."""
+        b = self.best
+        if b is None:
+            return None
+        d = np.hypot(b["x"] - x, b["y"] - y)
+        ok = (d <= ROUTE_RADIUS) & (np.abs(b["vx"] - vx) <= ROUTE_SPEED) & (np.abs(b["vy"] - vy) <= ROUTE_SPEED)
+        if not ok.any():
+            return None
+        idx = np.nonzero(ok)[0]
+        j = idx[np.lexsort((d[idx], np.abs(b["f"][idx] - int(frame))))[0]]
+        return int(j), float(d[j])
+
+    def actions(self, j: int, H: int):
+        """The best wave's actions from index j, as many as recorded contiguously (<= H), and their count."""
+        b = self.best
+        f, a = b["f"], b["a"]
+        n = 1
+        while n < H and j + n < len(f) and f[j + n] == f[j] + n:
+            n += 1
+        return a[j:j + n].copy(), n
+
+
 # ---- the planner ------------------------------------------------------------------------------------------
 def state_row(x, y, vx, vy, flags, state, keys=0, held=0) -> np.ndarray:
     """One agent row (wm.buffer.ROW) from the game's state values."""
@@ -865,6 +965,7 @@ class Planner:
         self.goal_boxes = np.asarray(getattr(level, "goal_boxes", list)(), np.float64).reshape(-1, 5)
         self.key_boxes = list(getattr(level, "key_boxes", list)())
         self.memory = memory if memory is not None else FailureMemory()
+        self.route = BestRoute()
         if self.moves is not None:
             self.moves.set_level(getattr(level, "name", None))
         self.surprise = SurpriseTracker()
@@ -911,6 +1012,7 @@ class Planner:
         self.prev = {}
         self.long = {}                               # agent -> the last long-safe plan {frame, actions, segs, valid}
         self.memory.new_wave()
+        self.route.new_wave()
         if self.moves is not None:
             self.moves.new_wave()
         self.surprise.new_wave()
@@ -996,9 +1098,14 @@ class Planner:
         ev = self.surprise.observe(agent, frame, x, y, dead)
         if dead:
             ev = ev + self.memory.update(agent, frame, dead=True)
+            at = self.route.dead(agent, frame)
+            if at is not None:
+                ev.append({"kind": "best route died", "agent": int(agent), "frame": int(frame), "route_frame": at,
+                           "reason": f"died playing the best route (its frame {at}): not injected near there"})
         else:
             vyf = None if vy is None else float(vy) * dt_ms / 1000.0
             vxf = None if vx is None else float(vx) * dt_ms / 1000.0
+            self.route.observe(agent, frame, x, y, vxf, vyf)
             t, sup, _, _, _ = self.time_to_go(np.array([x]), np.array([y]), keys,
                                               vy=None if vyf is None else np.array([vyf]))
             cell = self.cell(x, y)
@@ -1017,8 +1124,14 @@ class Planner:
 
     def played(self, agent: int, frame: int, action: int):
         """The runner calls this with the action index it really played for the agent on this frame (the
-        surprise check counts a prediction only while its plan was followed)."""
+        surprise check counts a prediction only while its plan was followed; the best route records it)."""
         self.surprise.played(agent, frame, action)
+        self.route.played(agent, frame, action)
+
+    def finished(self, agent: int, frame: int) -> bool:
+        """The runner reports a planned agent's goal touch in wave frame `frame`: its wave becomes the level's
+        best route when it is the fastest finish of this run (BestRoute). True if it did."""
+        return self.route.finished(agent, frame)
 
     # ---- airborne completion -----------------------------------------------------------------------------
     def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H):
@@ -1362,6 +1475,30 @@ class Planner:
             timing["reflex"] = 1000 * (time.perf_counter() - tr)
             counts["modes"] = {"long_safe": cl, "reflex": cr}
 
+        # ---- best route: the run's fastest finish passed through this state ---------------------------------
+        gi, route = None, None
+        if self.route.best is not None:
+            mt = self.route.match(x0, y0, float(row["vx"][0]) * dt_ms / 1000.0, float(vy0[0]), frame)
+            if mt is not None:
+                j, dist = mt
+                acts_g, L = self.route.actions(j, H)
+                acts_g = padded(acts_g, H)
+                route = {"frame": int(self.route.best["f"][j]), "dist": round(dist, 2), "frames": int(L),
+                         "finish": int(self.route.best["finish"]), "used": False}
+                da = self.route.died_at
+                if da is not None and route["frame"] + H > da:
+                    route["why"] = f"the route killed an agent at its frame {da}"
+                    acts_g = None
+                dup = [] if acts_g is None else [c for c, (_, a) in enumerate(final) if np.array_equal(a, acts_g)]
+                if acts_g is None:
+                    pass
+                elif dup:
+                    gi = dup[0]
+                else:
+                    final.append(([(ROUTE_MOVE, 0, L)] + ([("pad", L, H)] if L < H else []), acts_g))
+                    modes3.append("best-route")
+                    gi = len(final) - 1
+
         # ---- final: re-score with all members and the full check -------------------------------------------
         prev = self.prev.get(agent)
         prev_idx, shift = -1, 0
@@ -1446,7 +1583,27 @@ class Planner:
             sel = total3.copy()
             sel[ri] = -np.inf
         best, switch = self.switch_rule(int(np.argmax(sel)), prev_idx, sel, succ3, tg3, saf, soft3)
+        if gi is not None:            # the proven route wins, judged like an incumbent: never over a veto, a risk
+            sooner = bool(succ3[best]) and (not succ3[gi] or tg3[best] < tg3[gi])   # above the best's, a sooner goal
+            if saf.veto[gi]:
+                route["why"] = f"vetoed f{int(saf.veto_frame[gi])}"
+            elif soft3[gi] > soft3[best] + RISK_SWITCH:
+                route["why"] = f"soft risk {soft3[gi]:.2f} vs {soft3[best]:.2f}"
+            elif sooner:
+                route["why"] = f"another plan touches the goal sooner (f{int(tg3[best])})"
+            else:
+                if best != gi:
+                    switch = {"kept": False, "gain": None, "margin": None, "unit": "frames",
+                              "reason": f"best route: the run's fastest finish (f{route['finish']}) passed here "
+                                        f"at frame {route['frame']}"}
+                best = gi
+            route["used"] = best == gi
         mode = getattr(prev, "mode", "normal") if best == prev_idx else modes3[best]
+        if mode == "best-route" and route is not None and route["used"]:
+            if not (best == prev_idx and agent in self.route.using):
+                self.route.using[agent] = (int(frame), route["frame"])
+        elif mode != "best-route":
+            self.route.using.pop(agent, None)
         if ri is not None:
             er = early_risk(saf.sweep)
             if saf.veto[best] or er[best] > 0:       # REFLEX overrides a chosen plan with early danger
@@ -1537,7 +1694,7 @@ class Planner:
             timing={**{k: round(v, 2) for k, v in timing.items()}, "total": round(1000 * (time.perf_counter() - t0), 2)},
             counts=counts, segments=[[nm, int(a), int(b)] for nm, a, b in segs], switch=switch,
             model_clipped=None if out3["clip"] is None else int(out3["clip"][:, best].any(0).sum()),
-            completion=completion, mode=mode)
+            completion=completion, mode=mode, best_route=route)
         plan.first_move_frames = int(first_frames)
         self.prev[agent] = plan
         if not plan.from_prev:                       # a kept plan keeps the predictions of its adoption

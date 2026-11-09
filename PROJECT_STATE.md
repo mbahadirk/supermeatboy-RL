@@ -499,6 +499,22 @@ the hazard recording's length (decisions within 93 frames of its end are partly 
 extends it: 460 of 2,885 on 1-8); a field rebuild after wave 1 (1-13, 1-14); stage 2 cut by the wall-clock
 deadline (0.3-2.7% of decisions, not changed).
 
+**Best route** (2026-11-10, plan/planner.py `BestRoute`): per level and run, the fastest finished wave's real
+states (x, y, vx, vy) and played actions are kept (agent.py's finish -> `Planner.finished`). A decision state within
+6 units (body half size) and 1 unit / frame per velocity component of a state of that wave adds the wave's recorded
+actions from there as a final-stage candidate ("best route"), re-scored with every member and the full safety
+check. It is chosen like an incumbent: unless vetoed, its soft risk exceeds the chosen plan's by more than
+RISK_SWITCH (0.2), or another plan touches the goal sooner. A death while playing it blocks injection wherever the
+route would reach that frame within the horizon, until a faster finish replaces it. Logged per decision as
+`best_route` {frame, dist, frames, finish, used, why}; the mode is `best-route` (gold path). Not saved across runs.
+Offline replay of bench_20261109-161551 (live states, so open loop: it shows the choice at each real state, not
+where the route would lead): 1-11 (no finish) 0 matches. 1-13 waves 13-26: the route (wave 2, 338 frames) is taken
+from frame 0 through frame 114, past the live divergence at frame 94, and again at 131; then rejected for soft risk
+0.45. 1-8 waves 15-26: the route (wave 3, 174 frames) matches every early decision but is rejected for soft risk
+0.35-1.00 vs 0.00 (also at the divergence, frame 23), so it is taken only in the last ~35 frames where the slow
+route already rejoins it. **Open:** the world model's soft risk on a route the game has proven safe keeps 1-8 off
+it. **Unverified** in the game.
+
 **Drawn in the game** (first planned agent, at most every `--replan` frames): the chosen plan's predicted path
 (green), its airborne completion (since step 4: fainter green, dashed, landing yellow), predicted landings (yellow
 dots), wall jumps (cyan dots), the top 3 rejected alternatives faintly (red when vetoed, grey otherwise).
