@@ -728,6 +728,52 @@ def test_best_route_is_chosen_when_safe_and_never_over_danger(flat):
 
 
 @needs_model
+def test_best_route_is_judged_on_its_recorded_real_path(flat):
+    """With the hazard future recorded for the judged frames and an exact match, the route's safety is its REAL
+    recorded path's (here it runs right while its actions, imagined, stand still): a box where the model puts it
+    does not refuse it, a box on the real path does; a future recorded too briefly falls back to the model."""
+    from mpc.candidates import act
+    from plan.planner import REAL_RADIUS
+    lv, pl = flat
+    x0 = float(standing()["x"][0])
+    n = 120
+    real_x = x0 + 2.0 * np.arange(n)
+    H = pl.future_frames
+
+    def inputs(box_at, k0):
+        worlds, frames = empty_inputs(H)
+        fb = S.FrameBoxes(np.array([box_at], float), np.zeros(1, np.int8), ["h0"])
+        return worlds, [frames[k] if k < k0 else fb for k in range(H + 1)]
+    pl.route.best = {"finish": 400, "f": np.arange(100, 100 + n), "x": real_x, "y": np.full(n, 46.0),
+                     "vx": np.zeros(n), "vy": np.zeros(n), "a": np.full(n, act(0))}
+    try:
+        pl.new_wave()
+        worlds, frames = inputs((x0, 46.0, 4.0, 4.0, 0.0), 30)      # from frame 30 on, where the model stands
+        p_model = pl.plan(standing(), 100, worlds, frames, recorded=10)          # recording too short: the model
+        assert p_model.best_route["judged"].startswith("model: hazard future recorded for 10")
+        assert not p_model.best_route["used"] and p_model.best_route["why"].startswith("soft risk 1.00")
+        pl.new_wave()
+        p_real = pl.plan(standing(), 100, worlds, frames, recorded=H)
+        br = p_real.best_route
+        assert br["judged"] == "real" and br["used"] and p_real.mode == "best-route", br
+        assert br["real"]["soft"] == 0.0 and br["real"]["window"] == H and br["real"]["margin"] == [0.0, 0.0]
+        assert p_real.path[30][0] == pytest.approx(real_x[30])                     # the prediction is the real path
+        pl.new_wave()
+        worlds, frames = inputs((real_x[5], 46.0, 4.0, 4.0, 0.0), 1)        # on the real path at frame 5
+        p_hit = pl.plan(standing(), 100, worlds, frames, recorded=H)
+        assert p_hit.best_route["judged"] == "real" and not p_hit.best_route["used"]
+        assert p_hit.best_route["why"].startswith("vetoed f"), p_hit.best_route
+        pl.new_wave()                                                   # a match further off than REAL_RADIUS
+        off = standing(x0 + REAL_RADIUS + 1.0)
+        p_off = pl.plan(off, 100, *inputs((x0, 46.0, 4.0, 4.0, 0.0), 30), recorded=H)
+        assert p_off.best_route["judged"].startswith("model: match")
+    finally:
+        pl.route.best = None
+        pl.prev = {}
+        pl.new_wave()
+
+
+@needs_model
 def test_move_memory_penalty_changes_the_choice_and_failures_ignore_deaths(flat):
     lv, pl = flat
     pl.new_wave()

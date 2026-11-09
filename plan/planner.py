@@ -212,6 +212,15 @@ HYSTERESIS_FRAMES = 3.0
 ROUTE_RADIUS = BODY
 ROUTE_SPEED = KEY_SPEED
 ROUTE_MOVE = "best route"                    # the candidate's move name (failure and point-of-no-return memories)
+# the route candidate is judged on its recorded REAL path (Planner._route_real) when the decision's state is within
+# REAL_RADIUS units and REAL_SPEED units / frame (each component) of the route's state and the hazard future of the
+# judged frames is the trusted recording: with the time-step lock the game repeats that path. The margin of its
+# soft risk is the match's own offset growing with the speed difference (dist + dv x k units at frame k): 0 for an
+# exact match (only contact counts), never the world model's ERR90. 1 unit is the collision guard's tolerance;
+# 0.5 u/f keeps that margin under 25 units at 48 frames. Live (bench_20261110-003407, 1-8) 101 of 160 matches had
+# distance 0.0; the other rejoins were 0.3 to 6 units off.
+REAL_RADIUS = 1.0
+REAL_SPEED = 0.5
 RISK_SWITCH = 0.2                            # soft risk: a previous plan riskier than the best by more is dropped
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
 N_ALTERNATIVES = 5
@@ -831,13 +840,18 @@ class BestRoute:
     per wave frame; Planner.finished(agent, frame) keeps that wave's record when it finishes in fewer frames than
     the level's best so far in this run. match(): the best wave's frame whose state is within ROUTE_RADIUS units
     and ROUTE_SPEED units / frame (each velocity component) of a given state, the nearest in wave frames (then
-    in distance); the best wave's actions from there are a final-stage candidate (Planner.plan), re-scored with
-    every member and the full safety check like the others, and chosen over the best plan as an incumbent would
-    be kept: unless vetoed, riskier than the best plan by more than RISK_SWITCH (soft risk with the completion's
-    deaths), or another plan touches the goal sooner (the field's T is optimistic along proven routes: real
+    in distance); the best wave's actions from there are a final-stage candidate (Planner.plan), chosen over the
+    best plan as an incumbent would be kept: unless vetoed, riskier than the best plan by more than RISK_SWITCH
+    (soft risk), or another plan touches the goal sooner (the field's T is optimistic along proven routes: real
     remaining frames / T median 1.29 on 1-5, 1.70 on 1-13, 1.23 on 1-14 in bench_20261109-161551, so an
-    estimate comparison would leave the route). Plan.best_route logs the match {frame, dist, frames, finish,
-    used, why}; the chosen plan's mode is "best-route". A death while
+    estimate comparison would leave the route). Its veto, soft risk, goal touch and estimate come from its
+    recorded REAL path (Planner._route_real: the game repeats it with the time-step lock) when the state matches
+    within REAL_RADIUS / REAL_SPEED and the hazard future of those frames is the trusted recording; otherwise
+    (and with plan(recorded=None)) it is re-scored with every member and the full safety check like the others
+    (live, bench_20261110-003407: 1-8's route was refused at frame 0 with the model's soft risk 1.00 vs 0.00 on
+    a path the game had just finished). Plan.best_route logs the match {frame, dist, frames, finish, used, why,
+    judged ("real" or "model: <why>"), real {window, veto_frame, soft, soft_frame, finish_in, margin, offset}};
+    the chosen plan's mode is "best-route" and, judged real, its path and predictions are the real path. A death while
     the agent plays the route (the route itself became deadly) marks the best wave's frame where it died
     (died_at): from then on the route is not injected where its actions would reach that frame within the
     horizon (normal planning there), until a faster finish replaces the route. Kept per level for the run
@@ -914,6 +928,14 @@ class BestRoute:
             n += 1
         return a[j:j + n].copy(), n
 
+    def run(self, j: int) -> int:
+        """How many states of the best wave are recorded contiguously from index j (j itself included)."""
+        f = self.best["f"]
+        n = 1
+        while j + n < len(f) and f[j + n] == f[j] + n:
+            n += 1
+        return n
+
 
 # ---- the planner ------------------------------------------------------------------------------------------
 def state_row(x, y, vx, vy, flags, state, keys=0, held=0) -> np.ndarray:
@@ -989,6 +1011,7 @@ class Planner:
         self.set_field(field)
         self.geom = LevelGeom(level.words0, {"ox": level.ox, "oy": level.oy})
         self.words = np.asarray(level.words0, np.uint32).copy()
+        self.tiles_changed = False                   # a tile differs from the level's start (crumble, lock, switch)
         self.terrain = Terrain(level.words0, level.ox, level.oy)
         self.guard = Terrain(level.words0, level.ox, level.oy, slopes=False)    # the collision guard's tiles
         self._guard_keys = {}
@@ -1020,6 +1043,7 @@ class Planner:
             r, c = divmod(int(idx), self.terrain.W)
             if 0 <= r < self.terrain.H:
                 self.words[r, c] = word
+        self.tiles_changed = bool((self.words != np.asarray(self.lv.words0, np.uint32)).any())
         self.terrain.update(self.words)
         self.guard.update(self.words)
         self._guard_keys = {}
@@ -1296,14 +1320,83 @@ class Planner:
         out = np.where(np.isfinite(T), T, self._dead_t)
         return float(out) if out.ndim == 0 else out
 
+    def _route_real(self, j: int, dist: float, vx0: float, vy0: float, frame: int, frames: list, recorded,
+                    keys: int, leg: int):
+        """The best route's verdict on its recorded REAL path (the best wave's states from index j), or (None, why
+        the model judges it). With the time-step lock the game repeats that path from the same state, so it is
+        judged by plan.safety's geometry against this decision's deadly boxes, not by the world model:
+        - only when the state is within REAL_RADIUS units and REAL_SPEED units / frame (each component) of the
+          route's state, the hazard future of every judged frame is the trusted recording (recorded >= the
+          window), and, for a route state at another wave frame, the level has no moving platforms and no tile
+          differs from its start (their timing would change the path);
+        - window: the frames to the route's finish when the finish lies within the given future frames (a
+          success: the goal is touched in update tg = finish frame - route frame + 1, the path's last state is the
+          finish frame's), else every recorded frame the future covers (min(recorded run, len(frames) - 1));
+        - veto: contact in frames 1..VETO_FRAMES; soft risk on the later frames: contact 1, else 1 - clearance /
+          margin with margin = dist + dv x k units at frame k (dv: the largest velocity component difference; an
+          exact match has margin 0: contact only); early (REFLEX's override test): the same on 1..VETO_FRAMES;
+        - estimate parts: frames = tg (success) or the window, t_end = 0 (success) or T at the window's end
+          (its real velocity), supported: the real end state's support.
+        Returns (dict, None) or (None, reason)."""
+        b = self.route.best
+        dv = max(abs(float(b["vx"][j]) - vx0), abs(float(b["vy"][j]) - vy0))
+        if dist > REAL_RADIUS or dv > REAL_SPEED:
+            return None, f"match {dist:.2f} units, {dv:.2f} u/f off (real path within {REAL_RADIUS:g} / {REAL_SPEED:g})"
+        if recorded is None:
+            return None, "the hazard future's source is unknown"
+        offset = int(frame) - int(b["f"][j])
+        if offset and (self.lv.plats or self.tiles_changed):
+            return None, f"route state {offset:+d} frames away with moving platforms or changed tiles"
+        n = self.route.run(j)
+        F = len(frames) - 1
+        reaches = int(b["f"][j + n - 1]) == int(b["finish"])
+        tg = int(b["finish"]) - int(b["f"][j]) + 1
+        success = reaches and tg - 1 <= F
+        W = tg - 1 if success else min(n - 1, F)
+        if int(recorded) < W:
+            return None, f"hazard future recorded for {int(recorded)} of {W} frames"
+        xs, ys = b["x"][j:j + W + 1], b["y"][j:j + W + 1]
+        out = {"window": int(W), "veto": False, "veto_frame": -1, "veto_kind": S.KIND_NONE, "veto_id": None,
+               "soft": 0.0, "soft_frame": -1, "early": 0.0, "success": bool(success), "tg": int(tg) if success else -1,
+               "finish_in": int(tg) if reaches else None, "margin": [round(dist, 2), round(dv, 3)], "offset": offset,
+               "x": np.asarray(xs, np.float64), "y": np.asarray(ys, np.float64)}
+        if W >= 1:
+            X, Y = xs[None, None, :], ys[None, None, :]
+            sw = S.sweep(X, Y, _near_frames(frames[:W + 1], X, Y), self.bounds, self.floor, 1)
+            cf = int(sw.contact_frame[0, 0])
+            c = sw.step_clear[0, 0]
+            ks = np.arange(1, W + 1)
+            m = dist + dv * ks
+            with np.errstate(invalid="ignore", divide="ignore"):
+                near = np.where(c < 0, 1.0, np.where(m > 0, np.clip(1.0 - c / m, 0.0, 1.0), 0.0))
+            near = np.nan_to_num(near, nan=0.0)
+            if 1 <= cf <= S.VETO_FRAMES:
+                kind = int(sw.contact_kind[0, 0])
+                out.update(veto=True, veto_frame=cf, veto_kind=kind,
+                           veto_id=S.contact_id(kind, sw.ids, sw.contact_box[0, 0]))
+            late = ks > S.VETO_FRAMES
+            if late.any() and near[late].max() > 0:
+                i = int(np.argmax(np.where(late, near, -1.0)))
+                out.update(soft=float(near[i]), soft_frame=int(ks[i]))
+            out["early"] = float(near[~late].max()) if (~late).any() else 0.0
+        if success:
+            out.update(t_end=0.0, frames=int(tg), supported=True)
+        else:
+            vy = np.array([float(b["vy"][j + W])])
+            t, sup, _, _, _ = self.time_to_go(xs[-1:], ys[-1:], keys, leg, vy)
+            out.update(t_end=float(self._tt(t[0])), frames=int(W), supported=bool(sup[0]))
+        return out, None
+
     # ---- one decision ------------------------------------------------------------------------------------
     def plan(self, row, frame: int, worlds: list, frames: list, dt_ms: float = 16.667, agent: int = 0,
-             danger: bool = False) -> Plan:
+             danger: bool = False, recorded: int | None = None) -> Plan:
         """row: the agent's state (wm.buffer.ROW, one row; state_row builds one). worlds: at least H World
         (model inputs, index k = frame + k); frames: H + 1 plan.safety.FrameBoxes (index k = frame + k; index 0
         unused); for the airborne completion they should cover H + complete_max (Planner.future_frames: the
         last given ones are repeated beyond them). Returns the chosen Plan (also kept as this agent's previous
-        plan). danger: the commit "danger" trigger fired (REFLEX runs; modes only)."""
+        plan). danger: the commit "danger" trigger fired (REFLEX runs; modes only). recorded: how many of the
+        future frames 1.. come from the trusted hazard recording (future_inputs' third value; None unknown: the
+        best route is then judged by the model like every candidate)."""
         t0 = time.perf_counter()
         f = self.f                                   # frames per model step; arrays are per step (column)
         H = -(-self.H // f) * f                      # frames, whole steps
@@ -1511,11 +1604,13 @@ class Planner:
             counts["modes"] = {"long_safe": cl, "reflex": cr}
 
         # ---- best route: the run's fastest finish passed through this state ---------------------------------
-        gi, route = None, None
+        gi, route, route_j = None, None, None
+        vx0f = float(row["vx"][0]) * dt_ms / 1000.0
         if self.route.best is not None:
-            mt = self.route.match(x0, y0, float(row["vx"][0]) * dt_ms / 1000.0, float(vy0[0]), frame)
+            mt = self.route.match(x0, y0, vx0f, float(vy0[0]), frame)
             if mt is not None:
                 j, dist = mt
+                route_j = (j, dist)
                 acts_g, L = self.route.actions(j, H)
                 acts_g = padded(acts_g, H)
                 route = {"frame": int(self.route.best["f"][j]), "dist": round(dist, 2), "frames": int(L),
@@ -1586,10 +1681,33 @@ class Planner:
         base3 = H + tend3                                            # frames used + T at the end
         frames_used = np.full(n3, H, np.int64)
         t_end3 = tend3.copy()
+        # the best route on its recorded real path, not the model's imagination (when the match is close and the
+        # hazard future of those frames is the trusted recording; else judged as above, and the log says why)
+        real = None
+        if gi is not None:
+            real, why_model = self._route_real(route_j[0], route_j[1], vx0f, float(vy0[0]), frame, frames, recorded,
+                                               keys, leg)
+            if real is None:
+                route["judged"] = f"model: {why_model}"
+            else:
+                route["judged"] = "real"
+                route["real"] = {k: real[k] for k in ("window", "veto_frame", "soft", "soft_frame", "finish_in",
+                                                      "margin", "offset")}
+                route["window"] = real["window"]
+                saf.veto[gi], saf.veto_frame[gi] = real["veto"], real["veto_frame"]
+                saf.veto_kind[gi], saf.veto_id[gi] = real["veto_kind"], real["veto_id"]
+                saf.soft_risk[gi], saf.soft_frame[gi] = real["soft"], real["soft_frame"]
+                succ3[gi], tg3[gi] = real["success"], real["tg"]
+                lands[gi] = real["supported"]
+                t_end3[gi], frames_used[gi] = real["t_end"], real["frames"]
+                base3[gi] = real["frames"] + real["t_end"]
         comp_risk = np.zeros(n3)
         comp_rec, comp_path = [None] * n3, [None] * n3
         tc = time.perf_counter()
-        need = np.nonzero(~lands & ~succ3 & ~saf.veto)[0] if self.complete_max > 0 else np.zeros(0, np.int64)
+        open_ = ~lands & ~succ3 & ~saf.veto
+        if real is not None:
+            open_[gi] = False                        # judged on the real path: nothing to complete
+        need = np.nonzero(open_)[0] if self.complete_max > 0 else np.zeros(0, np.int64)
         rolled = 0
         self.completion_clipped = 0
         if len(need):
@@ -1641,6 +1759,8 @@ class Planner:
             self.route.using.pop(agent, None)
         if ri is not None:
             er = early_risk(saf.sweep)
+            if real is not None:
+                er[gi] = real["early"]
             if saf.veto[best] or er[best] > 0:       # REFLEX overrides a chosen plan with early danger
                 why = (f"vetoed f{int(saf.veto_frame[best])}" if saf.veto[best] else f"early risk {er[best]:.2f}")
                 switch = {"kept": False, "gain": None, "margin": None, "unit": "frames",
@@ -1684,11 +1804,25 @@ class Planner:
         if f > 1:                                    # the chosen path per frame (commit tube, overlay, viewer)
             fr_c, fr_all = np.arange(Hc + 1) * f, np.arange(H + 1)
             mx, my, spread = (np.interp(fr_all, fr_c, v) for v in (mx, my, spread))
+        real_best = real is not None and best == gi
+        if real_best:                                # the route's recorded real path is the prediction
+            k = np.minimum(np.arange(H + 1), len(real["x"]) - 1)
+            mx, my, spread = real["x"][k], real["y"][k], np.zeros(H + 1)
+            g, side = self.terrain.support(mx[::f], my[::f], self.lv.plats or None)
+            sup = g | (side != 0)
+            landings = [{"frame": k * f, "x": float(mx[k * f]), "y": float(my[k * f]), "on": "ground" if g[k] else "wall"}
+                        for k in range(1, Hc + 1) if sup[k] and not sup[k - 1]]
+            wall_jumps = [{"frame": k * f, "x": float(mx[k * f]), "y": float(my[k * f]), "side": "L" if side[k] < 0 else "R"}
+                          for k in range(Hc) if side[k] != 0 and not g[k] and jump[k * f] and (k == 0 or not jump[k * f - 1])]
         fin_e = np.isfinite(vend_e[:, best])
         vend_mean = float(np.mean(vend_e[fin_e, best])) if fin_e.any() else None
         spread_end = np.sqrt(xe.var(0) + ye.var(0))
         goal_touch, key_touches = self._touches(out3["x"][:, best], out3["y"][:, best], tg_e[:, best],
                                                 [(j, t[:, best], w[:, best]) for j, t, w in keys_e], E, f)
+        if real_best:
+            t = real["tg"]
+            goal_touch = None if not (real["success"] and t <= H) else {
+                "frame": int(t), "x": float(real["x"][-1]), "y": float(real["y"][-1]), "members": 0, "real": True}
         parts = {"base": base3, "t_end": t_end3, "comp_death": comp_risk, "risk": risk3, "fail": fail3, "death": death3, "est": est3, "soft": soft3,
                  "first": first_name}
         alts = self._alternatives(final, best, saf, parts, total3, T0, cell0, scale, veto1, vf1, vk1, vid1, est1,

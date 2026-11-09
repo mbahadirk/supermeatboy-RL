@@ -772,7 +772,7 @@ class Runner:
                 row = state_row(s[0], s[1], s[2], s[3], s[4], s[5], s[7] if len(s) > 7 else 0, held_before[i])
                 try:
                     plan = pl.plan(row, frame, worlds, fboxes, dt, agent=i,
-                                   danger=any(kind_of(t) == "danger" for t in trig))
+                                   danger=any(kind_of(t) == "danger" for t in trig), recorded=self.fut_rec)
                 except Exception as e:                  # never leave the agent without an answer
                     self.st["errors"] += 1
                     if self.st["errors"] <= 3:
