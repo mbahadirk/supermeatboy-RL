@@ -106,7 +106,7 @@ from mpc.candidates import ACTIONS                                       # noqa:
 from mpc.future import FutureWorld                                       # noqa: E402
 from plan import safety as S                                             # noqa: E402
 from plan.commit import Committer, REPLAN_DEFAULT, TUBE_DEFAULT, kind_of  # noqa: E402
-from plan.moves import LIBRARY, MAX_LEN                                  # noqa: E402
+from plan.moves import LIBRARY                                           # noqa: E402
 from plan.planner import (EXPLORE_EVERY, HYSTERESIS_FRAMES, MoveMemory, Planner, future_inputs,   # noqa: E402
                           state_row)
 from plan.progress import ProgressField                                  # noqa: E402
@@ -131,7 +131,6 @@ STICKY = 0.75                    # explore: keep the previous action with this p
 CHAIN_P = 0.03                   # explore: per free frame, chance to start a chain of 1-3 library moves
 FLUSH_LINES = 200                # log lines between flushes (and at every wave end)
 LEVEL_EVERY_S = 2.0              # telemetry: the level message again after this long
-TUBE_REFRESH = 600               # frames: the error tube also takes the current wave's followed errors this often
 NOOP = [0, 0, 0, 0]
 
 # overlay colours (0xAARRGGBB) and widths (pixels, realgame.js drawPaths)
@@ -560,6 +559,7 @@ class Runner:
         if self.wm and not self.protected:
             self.wm.level(lv, info)
         self.fw.new_level()
+        self.commit.tube.refresh()                 # the surprise threshold, fixed for this level
         self.hz_start, self.moving, self.sweep = None, set(), set()
         self.field_built, self.field_dirty, self.rebuilds = False, False, 0
         self.lt_changes = 0
@@ -574,7 +574,8 @@ class Runner:
               + (" - held-out evaluation level: no world-model data, no death memory" if self.protected else ""),
               flush=True)
         self.event("level", None, name=lv.name, W=lv.W, H=lv.H, kill_box=list(kb) if kb else None,
-                   protected=self.protected, agents=info["agents"])
+                   protected=self.protected, agents=info["agents"],
+                   tube=self.commit.tube.summary() if self.commit.on else None)
         self.new_wave(info["agents"])
         if "hz" in info:                       # the game waits for the 'go' (no agent moves meanwhile)
             boxes, kept = hazard_boxes(info["hz"], lv.hz_keep)
@@ -751,8 +752,6 @@ class Runner:
             return fut["fb"]
         if live_plan:
             t_chk = time.perf_counter()
-            if self.commit.on and frame % TUBE_REFRESH == 0:
-                self.commit.tube.refresh(pl.surprise.err)
             tiles = bool(m.get("tc"))
             for i in live_plan:
                 s = states[i]
@@ -851,7 +850,7 @@ class Runner:
         st["clipped"] += int((getattr(plan, "model_clipped", None) or 0) > 0)
         st["completed"] += int(getattr(plan, "completion", None) is not None)
         c = plan.counts
-        if c.get("stage1", {}).get("steps", MAX_LEN) < MAX_LEN:
+        if c.get("stage1", {}).get("complete", 0) < c.get("stage1", {}).get("candidates", 0):   # moves cut short
             st["cut1"] += 1
         s2 = c.get("stage2", {})
         if "skipped" in s2 or s2.get("steps", 0) < s2.get("of_steps", 0):

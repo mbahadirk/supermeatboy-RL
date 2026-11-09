@@ -484,6 +484,20 @@ death memory (level, wave frame, position) and saved; the planner treats it as a
 
 **Per wave** one line: level, planned agents finished / died, deaths explained by geometry vs unexplained,
 surprises, decisions, ms per decision (median / 95%), decisions with stage 1 / stage 2 cut short, failed moves.
+(Stage 1 "cut short" counted every decision of a step-4 model until 2026-11-09: it compared model steps with
+frames. It now counts decisions whose 73 moves were not all rolled out; in bench_20261109-161551 that was 1 of
+10,840, stage 2 0.3-2.7% per level.)
+
+**Same state, same decision within a level** (2026-11-09): the surprise trigger's error table (plan/commit.py
+ErrorTube: the run's own 90% followed errors) used to be refreshed every wave and every 600 frames. In
+bench_20261109-161551 a drift of hundredths of a unit flipped a surprise trigger that sat at the threshold and
+broke 12 identical 2.9 s waves of 1-8 (wave 15) and 11 identical 5.65 s waves of 1-13 (wave 13). The table is now
+frozen at each level start (the first level of a run: plan.explain.ERR90_AT). Fixed constants were not chosen:
+the table's +4 entry ranged 4.4 to 12 units (median per run) over the last four runs. Other inputs that can still
+differ between identical waves, measured there: memories after a failure, death or unexplained death (by design);
+the hazard recording's length (decisions within 93 frames of its end are partly extrapolated until a longer wave
+extends it: 460 of 2,885 on 1-8); a field rebuild after wave 1 (1-13, 1-14); stage 2 cut by the wall-clock
+deadline (0.3-2.7% of decisions, not changed).
 
 **Drawn in the game** (first planned agent, at most every `--replan` frames): the chosen plan's predicted path
 (green), its airborne completion (since step 4: fainter green, dashed, landing yellow), predicted landings (yellow

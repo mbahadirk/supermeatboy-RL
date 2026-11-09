@@ -182,6 +182,7 @@ def test_surprise_tube_has_a_minimum_width():
     assert c.triggers(0, 101, 2.0 + 2.0, 0.0, planner=pl) == []      # 2 units off at +1: inside the minimum tube
     assert c.triggers(0, 101, 2.0 + 3.5, 0.0, planner=pl) == ["surprise +1 err 3.5 > 3.0"]
     c.tube.add({1: [0.1] * CM.MIN_SAMPLES})                          # the run's own +1 error: tiny, still the minimum
+    c.tube.refresh()
     assert c.tube.table[1][1] == "run" and c.triggers(0, 101, 2.0 + 2.0, 0.0, planner=pl) == []
     thr8 = 1.5 * c.tube.at(8)                                         # wider than the minimum: unchanged
     assert thr8 > CM.MIN_TUBE
@@ -230,11 +231,12 @@ def test_path_check_matches_the_planners_rule():
 def test_error_tube_takes_the_runs_errors():
     t = CM.ErrorTube()
     assert t.summary()["8"] == [ERR90_AT[8], "ERR90_AT", 0]
-    t.refresh({8: list(np.arange(CM.MIN_SAMPLES))})                  # the current wave alone: enough
+    t.add({8: list(np.arange(CM.MIN_SAMPLES))})                      # kept, but the table waits for refresh()
+    assert t.table[8][1] == "ERR90_AT" and t.at(8) == ERR90_AT[8]
+    t.refresh()                                                      # a level start: the run's own errors
     assert t.table[8][1] == "run" and t.at(8) == pytest.approx(np.percentile(np.arange(CM.MIN_SAMPLES), 90))
-    t.refresh()                                                      # not kept without add()
-    assert t.table[8][1] == "ERR90_AT"
     t.add({1: [1.0] * CM.MIN_SAMPLES})
+    t.refresh()
     assert t.at(1) == 1.0 and t.at(32) == dict(S.ERR90)[32] and t.at(100) == dict(S.ERR90)[48]
     assert CM.kind_of("surprise +8 err 14.2 > 11.0") == "surprise" and CM.kind_of("start: tiles") == "start"
 

@@ -8,7 +8,8 @@ Triggers, checked every frame (Committer.triggers), each recorded with the decis
 - move end: the committed plan's first move (not "pad") has been played to its end;
 - surprise: the real position is off the committed plan's prediction for this frame by more than
   max(tube x the 90% error of followed predictions at that horizon, MIN_TUBE) (ErrorTube: the run's own
-  followed errors once a horizon has MIN_SAMPLES of them, else plan.explain.ERR90_AT);
+  followed errors once a horizon has MIN_SAMPLES of them, else plan.explain.ERR90_AT; the table is frozen for a
+  level at its start, so identical waves of a level replan identically);
 - support: the real support (plan/geometry.py rule on the real position: ground, wall or air) matches none of
   the plan's predicted ones for this frame and the frames just before and after (landed early, not landed,
   lost the wall, on a wall);
@@ -64,8 +65,11 @@ class ErrorTube:
     """90% position error (units) of followed predictions per horizon (frames after a decision).
 
     Measured horizons are plan.explain.HORIZONS (1, 4, 8, 16): the run's own followed errors
-    (SurpriseTracker.err, added at every wave end with add(), plus the current wave's with refresh()) once a
-    horizon has MIN_SAMPLES of them, else ERR90_AT. Between horizons linear; beyond 16 frames the model's
+    (SurpriseTracker.err, added at every wave end with add()) once a horizon has MIN_SAMPLES of them, else
+    ERR90_AT. The table changes only with refresh(), which agent.py calls at each level start: within a level the
+    surprise threshold is fixed (bench_20261109-161551: a drift of 0.05 units in the +4 entry moved 1-8's first
+    surprise from frame 22 to 23 in wave 15 and broke 12 identical 2.9 s waves; 1-13's wave 13 diverged from 11
+    identical 5.65 s waves at "err 8.5 > 8.5"). Between horizons linear; beyond 16 frames the model's
     measured table plan.safety.ERR90 (32, 48 frames). horizons: the measured ones (a step-4 world model:
     4, 8, 16, the frames its predictions are made at; below the first the first one's error holds)."""
 
@@ -76,19 +80,18 @@ class ErrorTube:
         self.refresh()
 
     def add(self, err: dict):
-        """A finished wave's followed errors {horizon: [errors]}."""
+        """A finished wave's followed errors {horizon: [errors]} (kept; the table changes at the next refresh)."""
         for h in self.horizons:
             s = self.samples[h]
             s.extend(float(e) for e in (err.get(h) or []))
             if len(s) > KEEP_SAMPLES:
                 del s[:len(s) - KEEP_SAMPLES]
-        self.refresh()
 
-    def refresh(self, current: dict | None = None):
-        """Recompute the table from the run's samples plus the current wave's (not kept)."""
+    def refresh(self):
+        """Recompute the table from the run's samples (agent.py: at each level start)."""
         self.table = {}
         for h in self.horizons:
-            e = self.samples[h] + [float(v) for v in ((current or {}).get(h) or [])]
+            e = self.samples[h]
             if len(e) >= MIN_SAMPLES:
                 self.table[h] = (float(np.percentile(e, 90)), "run", len(e))
             else:
