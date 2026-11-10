@@ -72,6 +72,19 @@ learner.log). Between waves (never mid-wave) a newer published model replaces th
 loaded (+16 error a -> b)". A planned agent's new best time (lock on, not a held-out level) appends its wave rows
 to runs/demos/self.json (--self-demos), which the learner trains on as a demo.
     python smbrl/agent.py --learn
+Wave search (--search, --search-agents N, default 50; plan/search.py, PLAN_GAME_SEARCH.md section 5): no planner,
+no model ("none (search)" in the level event); the game is the simulator. Agent 0 replays the current best node
+(verification), the others replay picked nodes' actions exactly from the wave start and branch (library move chains,
+perturbed copies of longer known sequences or, after the first finish, of the fastest finish); the states at the
+move ends become nodes (soonest per cell key; crumble guard: only states whose agent broke its own blocks). A wave
+ends when every sequence ran out (+ plan.search.SETTLE frames: why "search done") or every agent is done; --end-after
+is 0 and --wave-seconds at least 60 (the game's limit). Logs: search.jsonl (per wave: picks, branches, insertions,
+verification, finishes, best T, archive size), states.jsonl with every agent, finish and death events and
+times.jsonl rows of every agent (source "search"), best_times.json under "search", the wave event's replay_route
+(a trusted finish was replayed) and all_agent_frames; --wm-collect shards have source "search". Not with --agents /
+--explore (set to 0), --demo or --learn. Held-out levels are searched too (no shards, no memory; the archive is
+in memory for the run only). S writes the planned agents' best as before (none in a search run: 999.99).
+    python smbrl/agent.py --search --wm-collect
 Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
 The wave summary line also says how often the planned agents decided: decisions per 100 alive frames, the
 median frames between an agent's decisions, the triggers by kind, the switch rate (decisions that switched
@@ -144,6 +157,9 @@ MODE_COL = {"long-safe": 0xE04080FF, "normal": COL_PLAN, "reflex": 0xE0FF3030, "
 OVERLAY_ALTS, PLAN_STEP, ALT_STEP = 3, 3, 4
 COL_DEMO = 0xE0FFFFFF                             # --demo: the demo's path (white)
 DEMO_TRAIL_EVERY = 15                             # --demo without recorded positions: redraw agent 0's path this often
+SEARCH_AGENTS = 50                                # --search: agents per wave (the user: 50 is enough)
+SEARCH_WAVE_SECONDS = 60.0                        # --search: the game's wave limit at least this (search waves end
+                                                  # themselves when every sequence ran out: plan/search.py)
 
 
 def other_runners() -> list[str]:
@@ -417,8 +433,20 @@ class Runner:
         self.demo_fin, self.demo_trail = None, []
         if self.demo is not None:
             args.agents, args.explore = 0, 0
+        self.search = None                                   # plan.search.Search (--search)
+        n_search = 0
+        if getattr(args, "search", False):
+            if self.demo is not None:
+                raise SystemExit("--search and --demo / --demo-level: give one")
+            from plan.search import Search
+            args.agents, args.explore, args.end_after = 0, 0, 0      # every agent plays its sequence out
+            args.wave_seconds = max(float(args.wave_seconds), SEARCH_WAVE_SECONDS)
+            n_search = int(args.search_agents)
+            if not 1 <= n_search <= MAX_AGENTS:
+                raise SystemExit(f"--search-agents {n_search}: 1 to {MAX_AGENTS}")
+            self.search = Search(n_search, args.seed, int(args.wave_seconds * HZ))
         self.n_plan, self.n_explore = max(0, int(args.agents)), max(0, int(args.explore))
-        self.n_total = self.n_plan + self.n_explore + (self.demo.n if self.demo is not None else 0)
+        self.n_total = self.n_plan + self.n_explore + (self.demo.n if self.demo is not None else 0) + n_search
         if self.n_total < 1:
             raise SystemExit("no agents: --agents and --explore are both 0")
         if self.n_total > MAX_AGENTS:
@@ -446,6 +474,8 @@ class Runner:
         self.f_events = open(os.path.join(self.run_dir, "events.jsonl"), "a", encoding="utf-8")
         self.f_states = open(os.path.join(self.run_dir, "states.jsonl"), "a", encoding="utf-8")
         self.f_times = open(os.path.join(self.run_dir, "times.jsonl"), "a", encoding="utf-8")
+        self.f_search = open(os.path.join(self.run_dir, "search.jsonl"), "a", encoding="utf-8") \
+            if self.search is not None else None
         self.best = BestTimes(args.best_times)
         self.find_save = locate_save            # S: where the game's save is (tests replace it)
         self.backup_root = BACKUPS
@@ -462,6 +492,9 @@ class Runner:
                                     source="demo" if not self.demo.copies else "demo+demo-noisy")
                 self.wm.meta_extra = {"agent_sources": {"demo": [0], "demo-noisy": list(range(1, self.n_total))},
                                       "demo": self.demo.demo["best"]}
+            elif self.search is not None:
+                self.wm = Collector(os.path.join(self.run_dir, "wm_data"), source="search")
+                self.wm.meta_extra = {"agent_sources": {"search": list(range(self.n_total))}}
             else:
                 src = "planner" if not self.n_explore else ("explore" if not self.n_plan else "planner+explore")
                 self.wm = Collector(os.path.join(self.run_dir, "wm_data"), source=src)
@@ -476,6 +509,7 @@ class Runner:
         self.level: Level | None = None
         self.planner: Planner | None = None
         self.planner_level = None
+        self.field = None                       # the level's progress field (the search's T)
         self.field_summary = None
         self.fw = FutureWorld()
         self.protected = False
@@ -498,7 +532,9 @@ class Runner:
 
     def flush(self):
         self.lines = 0
-        for f in (self.f_plans, self.f_events, self.f_states, self.f_times):
+        for f in (self.f_plans, self.f_events, self.f_states, self.f_times, self.f_search):
+            if f is None:
+                continue
             try:
                 f.flush()
             except (OSError, ValueError):
@@ -532,8 +568,8 @@ class Runner:
                    "surprise_pos": 0, "surprise_death": 0, "decisions": 0, "ms": [], "cut1": 0, "cut2": 0,
                    "failed": 0, "errors": 0, "ex_finished": 0, "ex_died": 0, "triggers": {}, "gaps": [],
                    "agent_frames": 0, "check_s": 0.0, "switched": 0, "kept": 0, "clipped": 0, "pnr": 0,
-                   "pnr_none": 0, "completed": 0}
-        self.fin = {"planned": [], "explore": [], "demo": []}     # this wave's finish times (s)
+                   "pnr_none": 0, "completed": 0, "all_agent_frames": 0}
+        self.fin = {"planned": [], "explore": [], "demo": [], "search": []}     # this wave's finish times (s)
         self.new_best = False
         if self.demo is not None:                 # this wave's perturbed copies (same for repeated calls)
             self.demo.new_wave()
@@ -576,7 +612,10 @@ class Runner:
               flush=True)
         self.event("level", None, name=lv.name, W=lv.W, H=lv.H, kill_box=list(kb) if kb else None,
                    protected=self.protected, agents=info["agents"],
-                   tube=self.commit.tube.summary() if self.commit.on else None)
+                   tube=self.commit.tube.summary() if self.commit.on else None,
+                   model=self.model_path if self.model is not None else ("none (search)" if self.search else None))
+        if self.search is not None:
+            self.search.set_level(lv)
         self.new_wave(info["agents"])
         if "hz" in info:                       # the game waits for the 'go' (no agent moves meanwhile)
             boxes, kept = hazard_boxes(info["hz"], lv.hz_keep)
@@ -635,6 +674,7 @@ class Runner:
                               blocks=lv.plat_blocks() | lv.sealed_haz | lv.sealed_wall, doors=lv.plat_doors(),
                               outside=lv.outside_cells if lv.kill_box is not None else None)
         self.field_summary = field.summary()
+        self.field = field
         if self.model is not None:
             if self.planner is None:
                 self.planner = Planner(self.model, lv, field, budget_ms=self.args.budget_ms,
@@ -734,6 +774,8 @@ class Runner:
                     self.on_finish(i, frame - 1, x, y)
                 elif planned and pl is None:
                     self.st["died"] += 1
+                elif self.search is not None:
+                    self.search_death(i, frame, x, y)
                 elif not planned:
                     self.st["ex_died"] += 1
             self.prev_xy[i] = (x, y)
@@ -790,6 +832,15 @@ class Runner:
             acts[i], act_idx[i] = list(ACTIONS[a]), a
             pl.played(i, frame, a)
         C.go("explore")
+        self.st["all_agent_frames"] += sum(1 for i in range(n) if self.alive[i] and int(states[i][6]) == 0)
+        if self.search is not None:
+            if not self.search.active:
+                self.search.begin_wave(self.wave_no, frame, states, self.field)
+            self.search.observe(frame, states, m.get("tc"))
+            for i in range(n):
+                if self.alive[i] and int(states[i][6]) == 0:
+                    a = self.search.action(i, frame)
+                    acts[i], act_idx[i] = list(ACTIONS[a]), a
         if self.demo is not None:
             if self.alive and self.alive[0] and int(states[0][6]) == 0:
                 self.demo_trail.append((float(states[0][0]), float(states[0][1])))
@@ -797,7 +848,7 @@ class Runner:
                 if self.alive[i] and int(states[i][6]) == 0:
                     a = self.demo.action(i, frame)
                     acts[i], act_idx[i] = list(ACTIONS[a]), a
-        for i in range(self.n_plan, n if self.demo is None else 0):
+        for i in range(self.n_plan, n if self.demo is None and self.search is None else 0):
             if self.alive[i] and int(states[i][6]) == 0:
                 a = self.explore_plan(i, frame, states[i], held_before[i], dt, fut) if pl is not None and \
                     pl.modes else self.explore_action(i)
@@ -820,7 +871,8 @@ class Runner:
                                     "agents": [[i, round(float(states[i][0]), 2), round(float(states[i][1]), 2),
                                                 round(float(states[i][2]), 2), round(float(states[i][3]), 2),
                                                 int(states[i][6])]
-                                               for i in range(n if self.demo is not None else min(self.n_plan, n))]})
+                                               for i in range(n if self.demo is not None or self.search is not None
+                                                              else min(self.n_plan, n))]})
         if self.tel is not None:
             C.go("telemetry")
             self.send_frame(m, frame, states, act_idx, boxes, kept, fboxes, dt)
@@ -832,6 +884,9 @@ class Runner:
             # the demo's actions ran out a second ago: copies still standing count as done (they would keep the
             # wave going to --wave-seconds); realgame.js ends the wave on "end" before stepping anyone
             return {"a": acts, "leader": int(leader), "end": "demo done"}
+        if self.search is not None and self.search.active and frame >= self.search.end_frame:
+            # every agent's sequence ran out SETTLE frames ago: the wave is done (realgame.js ends it on "end")
+            return {"a": acts, "leader": int(leader), "end": "search done"}
         return {"a": acts, "leader": int(leader)}
 
     def on_plan(self, plan, s, trigger=()):
@@ -928,8 +983,11 @@ class Runner:
         messages' dt; 16.667 ms with the time-step lock) / 1000. Every finish goes to times.jsonl; with the
         lock on it is offered as the level's best (planned and explore apart); planned finishes are events."""
         planned = i < self.n_plan
-        source = "planned" if planned else ("demo" if self.demo is not None else "explore")
-        self.st["finished" if planned else "ex_finished"] += 1
+        search = self.search is not None
+        source = "planned" if planned else ("demo" if self.demo is not None else ("search" if search else "explore"))
+        self.st["finished" if planned or search else "ex_finished"] += 1
+        if search:
+            self.search.finished(i, int(finish_frame) + 1, x, y)
         if self.demo is not None and i == 0:
             self.demo_fin = int(finish_frame)
         lv = self.level.name if self.level else None
@@ -960,6 +1018,18 @@ class Runner:
             self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds,
                        dt_ms=rec["dt_ms"], lock=self.lock, best=float(best["seconds"]) if best else None,
                        new_best=new)
+        elif search:
+            best = self.best.best(lv, "search") if lv is not None else None
+            self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds,
+                       dt_ms=rec["dt_ms"], lock=self.lock, best=float(best["seconds"]) if best else None,
+                       new_best=new, source="search")
+
+    def search_death(self, i: int, frame: int, x, y):
+        """A search agent died (seen at wave frame `frame`): counted and logged (place and frame: the benchmark's
+        distinct outcomes); no death memory, no geometry check (nothing is learned from it)."""
+        self.st["died"] += 1
+        self.event("death", frame, agent=i, x=x, y=y, explained=None, cause="search", estimated=False,
+                   memory_added=False)
 
     def explore_plan(self, i: int, frame: int, s, held: int, dt: float, fut: dict) -> int:
         """EXPLORE (planning modes on): the explore agent's action from its plan (Planner.explore: members 3 and 4,
@@ -1079,6 +1149,9 @@ class Runner:
                 last = final[i] if final is not None and i < len(final) else self.last_state[i]
                 fx, fy = (float(last[0]), float(last[1])) if last is not None else (None, None)
                 self.on_finish(i, ff, fx, fy)
+            elif self.search is not None:
+                last = final[i] if final is not None and i < len(final) else self.last_state[i]
+                self.search_death(i, frame, *((float(last[0]), float(last[1])) if last is not None else (None, None)))
             elif not planned:
                 self.st["ex_died"] += 1
             elif self.planner is None or lv is None:
@@ -1101,6 +1174,13 @@ class Runner:
                               int(s[7]) if len(s) > 7 else 0, self.last_msg, box1, estimated=True)
             self.alive[i] = False
         st = self.st
+        srec = None
+        if self.search is not None:
+            if final is not None:
+                self.search.observe(frame, final)
+            srec = self.search.wave_end(frame)
+            self._write(self.f_search, {"time": round(time.time(), 3), "level": lv.name if lv else None,
+                                        "wave": self.wave_no, **srec})
         ms = np.array(st["ms"]) if st["ms"] else None
         el = (time.time() - self.t0) / 60
         err_f = self.planner.surprise.errors() if self.planner is not None else None
@@ -1130,6 +1210,13 @@ class Runner:
                 + (f" | {st['errors']} plan errors" if st["errors"] else "")
                 + (f" | death memory +{st['memory']} ({len(self.deaths)})" if st["memory"] else "")
                 + f"  [{el:.1f} min]")
+        if srec is not None:
+            from plan.search import text as search_text
+            fin_s = min(self.fin["search"]) if self.fin["search"] else None
+            line = (f"[wave {self.wave_no}] {lv.name if lv else '?'} ({m.get('why')}, {frame} frames): search "
+                    f"{st['finished']}/{self.n_total} finished" + (f" (fastest {fin_s:.2f} s)" if fin_s is not None else "")
+                    + f", {st['died']} died, {st['all_agent_frames']} agent frames  [{el:.1f} min]\n"
+                    + search_text(lv.name if lv else "?", self.wave_no, srec, self.dt_ms))
         print(line, flush=True)
         if self.demo is not None and lv is not None:
             ok, why = self.demo.check(self.demo_fin)
@@ -1151,7 +1238,9 @@ class Runner:
                    ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f, **com,
                    tube=self.commit.tube.summary() if self.commit.on else None,
                    finish_s=fin_p, explore_finish_s=fin_x, best_s=float(best_p["seconds"]) if best_p else None,
-                   new_best=self.new_best, lock=self.lock)
+                   new_best=self.new_best, lock=self.lock,
+                   **({"replay_route": bool(srec.get("replay")), "search_finish_s": min(self.fin["search"])
+                       if self.fin["search"] else None} if srec is not None else {}))
         if self.moves is not None and self.moves.dirty:
             try:
                 self.moves.save()
@@ -1195,6 +1284,8 @@ class Runner:
                 self.level = None
                 self.cur_plan = {}
                 self.commit.reset()
+                if self.search is not None:
+                    self.search.abort_wave()
             elif ev == "save":
                 self.on_save(p.get("level"))
             elif ev == "stopped":
@@ -1346,7 +1437,9 @@ class Runner:
             except OSError as e:
                 print(f"[wm] could not write the cut wave: {e}", flush=True)
         self.flush()
-        for f in (self.f_plans, self.f_events, self.f_states, self.f_times):
+        for f in (self.f_plans, self.f_events, self.f_states, self.f_times, self.f_search):
+            if f is None:
+                continue
             try:
                 f.close()
             except OSError:
@@ -1380,7 +1473,9 @@ class Runner:
         self.script = session.create_script(src)
         self.script.on("message", self.on_message)
         self.script.load()
-        print(f"attached: {self.n_plan} planned + {self.n_explore} explore agents, waves of {self.args.wave_seconds:g}s, "
+        print(f"attached: {self.n_plan} planned + {self.n_explore} explore agents"
+              + (f" + {self.n_total} search agents (plan/search.py)" if self.search is not None else "")
+              + f", waves of {self.args.wave_seconds:g}s, "
               f"replan every {self.replan} frames" + (f" or on a trigger (tube x{self.args.tube:g})" if self.commit.on
                                                        else " (triggers off)") + f", budget {self.args.budget_ms:g} ms"
               + (f", model {self.model_path}" if self.model is not None else "")
@@ -1474,6 +1569,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="replay this PPO best finish (runs/real_*/levels/<level>/best.json; plan.demos inventory)")
     ap.add_argument("--demo-level", default=None, help="replay the level's fastest non-suspicious PPO best finish")
     ap.add_argument("--demo-copies", type=int, default=20, help="--demo: perturbed copies besides the exact one")
+    ap.add_argument("--search", action="store_true",
+                    help="wave search (plan/search.py): no planner, no model; every agent replays a known action "
+                         "prefix exactly, then branches; not with --agents / --explore / --demo / --learn")
+    ap.add_argument("--search-agents", type=int, default=SEARCH_AGENTS,
+                    help=f"--search: agents per wave, agent 0 the verifier (default {SEARCH_AGENTS})")
     ap.add_argument("--no-lock-step", action="store_true", help=argparse.SUPPRESS)
     return ap
 
@@ -1507,6 +1607,12 @@ def main():
         if args.learn:
             raise SystemExit("--learn needs planned agents: not with --demo / --demo-level")
         setup_demo(args)
+    if args.search:
+        if args.learn:
+            raise SystemExit("--learn needs planned agents: not with --search")
+        if args.demo or args.demo_level:
+            raise SystemExit("--search and --demo / --demo-level: give one")
+        args.name = args.name or time.strftime("search_%Y%m%d-%H%M%S")
     if args.learn:
         args.wm_collect = True                      # the learner trains on this run's shards too
     args.name = args.name or time.strftime("plan_%Y%m%d-%H%M%S")

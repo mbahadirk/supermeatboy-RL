@@ -33,8 +33,10 @@ has no moves other than wait / pad (is_still), and the share of decisions that k
 Per level also the decisions that replayed the recorded best route (plans.jsonl best_route.used, `replayed`) and
 `wave_list`: the level's completed waves in log order (a wave event ends a wave; the wave a level switch or a stop
 interrupted has none and is not listed, though its decisions count above), each with its end (why, finished,
-frames, agent_frames), its decisions and replayed decisions, whether a recorded demo was replayed (a "demo
-check" event), its planned finishes (frame, seconds), its deaths (x, y, frame) and, for a wave that ended without
+frames, agent_frames: every agent's alive frames, all_agent_frames, older logs the planned agents'), its decisions
+and replayed decisions, whether a recorded demo was replayed (a "demo check" event) or a search wave replayed a
+recorded finish (route_replay, the wave event's replay_route), its finishes (frame, seconds; planned agents, or a
+search run's agents: times.jsonl source "search"), its deaths (x, y, frame) and, for a wave that ended without
 either, the planned agent's last logged position. Plans and states are matched to the wave events per level in
 order by wave number: a plan or state segment without a wave event (interrupted) is skipped. `models`: the world
 models the run logged (agent.py's level or start event "model", --learn's "learn model" path); empty when the run
@@ -320,7 +322,7 @@ def analyze(run: str, level: str | None = None) -> dict:
     have_times = os.path.exists(os.path.join(run, "times.jsonl"))
     if have_times:
         for t in stream(os.path.join(run, "times.jsonl"), bad):
-            if t.get("source") == "planned" and (not level or t.get("level") == level):
+            if t.get("source") in ("planned", "search") and (not level or t.get("level") == level):
                 finishes[t.get("level")].append({"wave": t.get("wave"), "agent": t.get("agent"),
                                                  "frames": t.get("frames"), "seconds": t.get("seconds"),
                                                  "lock": t.get("lock"), "from": "times.jsonl"})
@@ -360,7 +362,9 @@ def analyze(run: str, level: str | None = None) -> dict:
             for pk in [pk for pk in pending if pk[0] == L]:          # an interrupted wave's outcomes: no wave event
                 del pending[pk]
             wave_list[L].append({"wave": e.get("wave"), "why": e.get("why"), "finished": int(e.get("finished") or 0),
-                                 "frames": e.get("frames"), "agent_frames": e.get("agent_frames", e.get("frames")),
+                                 "frames": e.get("frames"),
+                                 "agent_frames": e.get("all_agent_frames", e.get("agent_frames", e.get("frames"))),
+                                 "route_replay": bool(e.get("replay_route")),
                                  "decisions": 0, "replayed": 0, "demo": got["demo"], "finishes": got["finishes"],
                                  "deaths": got["deaths"], "end": None})
             W = waves[L]

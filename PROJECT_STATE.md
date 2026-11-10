@@ -1,4 +1,4 @@
-# Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10)
+# Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
 This document describes the project as it is: what it is for, what each part does and why it was built that
 way, what has been measured, what does not work, and where the code and ideas got tangled. Read it first
@@ -741,6 +741,40 @@ would lead).
 - **Unverified** in the game: all of the above. Not measured: ms/decision on an idle machine (live was 133-186 median
   per level at ab505ab).
 
+### 7.10 Wave search in the real game (2026-11-11, offline only; PLAN_GAME_SEARCH.md step 3)
+
+`agent.py --search` (`--search-agents`, default 50; `plan/search.py`): the game is the simulator, no world model, no
+planner. Step 2 (**measured**, 196 waves of 41-50 agents): crumble blocks are shared (the first toucher breaks a
+block for everyone 29-30 frames later) and one agent's replay reproduces exactly (780 / 780 trajectories).
+
+- Nodes: actions from the wave start, end frame, real end state; one per cell key (cell, supported, sign of vx / vy,
+  keys), the soonest. Selection by T (plan/progress.py) + 1 frame per branch already played + 60 x the death share.
+  Agent 0 replays the best node (the fastest trusted finish, else the lowest T) and is compared with the record
+  (0.5 units, 30 u/s, keys; a finish: the same frame); a mismatch drops the node ("interference" when another agent
+  touched a special tile on its recorded path first, else "mismatch"). The others replay their node exactly, then a
+  1-3 move library chain or (25%, when a longer sequence goes through the node) a perturbed copy of that sequence's
+  rest; after the first trusted finish half of them play perturbed copies of the fastest finish.
+- Insertion after the wave at move ends (copies: every 8 frames); not within 10 frames of the agent's death, not
+  untrusted. Guard: a state is trusted only if every special tile (bit 8) that changed by its frame and that its
+  agent touched (centre within 7 units of the cell) changed at that agent's own first touch + 29-30 frames (crumble);
+  any other change on its path (another agent's break, a block reached after it broke, a non-crumble special tile)
+  makes it untrusted. Tile words compared without bits 22-25 (open-neighbour flags). Levels without special tiles
+  skip the guard; the verifier runs on every level.
+- The wave ends 10 frames after the longest sequence ran out ("search done") or when all are done. Logs:
+  search.jsonl per wave, finish / death events and times.jsonl rows for every agent (source "search"), states of
+  every agent, the wave event's replay_route and all_agent_frames, shards with source "search", the level event's
+  model ("none (search)"; planner runs now record their model path there too). The benchmark report reads a search
+  run (finishes of source "search", game frames over every agent, a wave with a trusted finish recorded counts as a
+  replay wave).
+- Held-out levels: searched like any (no shards, no memory, the archive lives in memory for the run). The planner
+  is unchanged with the search off: tests/data/search_off_golden.json (replies, decisions, shard labels of three
+  configurations) was recorded at af19e82 before the change and is compared exactly.
+- **Unverified** in the game: everything above (tests drive agent.py with a fake 1-D game). Open (inferred from step 2's tile words, not checked): Level.apply_tiles
+  and plan.geometry.solid_now take any change of a special tile's word as "gone", so an intact crumble block whose
+  open-neighbour bits changed counts as broken for the planner's terrain (and the search's support probe); the
+  search's own break detection masks those bits. Crowd interference can drop a good node on crumble levels (the
+  verifier's "interference" label counts it); step 4 shows how often.
+
 ## 8. Results so far (measured)
 
 ### 8.1 Best finish per level
@@ -919,6 +953,12 @@ python smbrl/agent.py --agents 1 --wm-collect
 
 ```bash
 python smbrl/agent.py --agents 1 --explore 40 --wm-collect
+```
+
+The wave search (section 7.10; 50 agents: enter or restart the level after attaching so all 50 exist):
+
+```bash
+python smbrl/agent.py --search --wm-collect
 ```
 
 The benchmark (prints the full agent.py command, the five levels and the two held-out ones, and the report command):

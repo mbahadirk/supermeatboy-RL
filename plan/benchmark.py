@@ -32,11 +32,14 @@ Run folders are read only through plan/analyze_run.py: analyze(folder, level) pe
 The first K waves of each level (PLAN_GAME_SEARCH.md section 4; K = 20, --k): a level's completed waves in log
 order, the run folders in the order given; waves beyond K are ignored, fewer than K are shown as n/K. Per level:
 - first-try: did the level's first wave finish;
-- waves to first finish (none within K: "fail") and the game frames to it: every agent's frames (the wave
-  event's agent_frames) summed over the waves up to and including the first finishing one;
+- waves to first finish (none within K: "fail") and the game frames to it: every agent's alive frames (the wave
+  event's all_agent_frames; older logs: agent_frames, the planned agents' only) summed over the waves up to and
+  including the first finishing one;
 - fresh and replay completion apart: finished waves / waves over each kind. A wave is a REPLAY wave when any of
-  its decisions replayed the recorded best route (plans.jsonl best_route.used) or it replayed a recorded demo (a
-  "demo check" event); a fresh wave used no recorded route at all. Any, not a majority: the logs have waves that
+  its decisions replayed the recorded best route (plans.jsonl best_route.used), it replayed a recorded demo (a
+  "demo check" event) or, in a search run (agent.py --search), it started with a trusted finish recorded (its
+  verifier and copies replay it: the wave event's replay_route); a fresh wave used no recorded route at all.
+  A search run's finishes are its search agents' (times.jsonl source "search"); Any, not a majority: the logs have waves that
   replay the route from frame 0 for hundreds of frames, then plan the rest (bench_20261110-003407, 1-13 and 1-14:
   26-48% of the decisions), and such a finish is not a fresh one;
 - best and median finish seconds over the K waves;
@@ -219,8 +222,9 @@ def _ratio(n, d):
 
 
 def is_replay(w: dict) -> bool:
-    """A wave that replayed a recorded route: any decision with best_route.used, or a recorded demo."""
-    return bool(w.get("demo")) or (w.get("replayed") or 0) > 0
+    """A wave that replayed a recorded route: any decision with best_route.used, a recorded demo, or a search wave
+    that replayed a recorded finish (agent.py --search: the wave event's replay_route)."""
+    return bool(w.get("demo")) or bool(w.get("route_replay")) or (w.get("replayed") or 0) > 0
 
 
 def _place(x, y, f=None):
