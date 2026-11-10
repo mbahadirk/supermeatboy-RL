@@ -1,4 +1,4 @@
-# Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08)
+# Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10)
 
 This document describes the project as it is: what it is for, what each part does and why it was built that
 way, what has been measured, what does not work, and where the code and ideas got tangled. Read it first
@@ -497,7 +497,7 @@ the table's +4 entry ranged 4.4 to 12 units (median per run) over the last four 
 differ between identical waves, measured there: memories after a failure, death or unexplained death (by design);
 the hazard recording's length (decisions within 93 frames of its end are partly extrapolated until a longer wave
 extends it: 460 of 2,885 on 1-8); a field rebuild after wave 1 (1-13, 1-14); stage 2 cut by the wall-clock
-deadline (0.3-2.7% of decisions, not changed).
+deadline (0.3-2.7% of decisions; removed 2026-11-10, section 7.9).
 
 **Best route** (2026-11-10, plan/planner.py `BestRoute`): per level and run, the fastest finished wave's real
 states (x, y, vx, vy) and played actions are kept (agent.py's finish -> `Planner.finished`). A decision state within
@@ -506,19 +506,20 @@ actions from there as a final-stage candidate ("best route"), re-scored with eve
 check. It is chosen like an incumbent: unless vetoed, its soft risk exceeds the chosen plan's by more than
 RISK_SWITCH (0.2), or another plan touches the goal sooner. A death while playing it blocks injection wherever the
 route would reach that frame within the horizon, until a faster finish replaces it. Logged per decision as
-`best_route` {frame, dist, frames, finish, used, why}; the mode is `best-route` (gold path). Not saved across runs.
+`best_route` {frame, dist, frames, finish, used, why, judged, real}; the mode is `best-route` (gold path). Not saved
+across runs. Since 2026-11-10 judged on its recorded real path when the match is close (section 7.9).
 Offline replay of bench_20261109-161551 (live states, so open loop: it shows the choice at each real state, not
 where the route would lead): 1-11 (no finish) 0 matches. 1-13 waves 13-26: the route (wave 2, 338 frames) is taken
 from frame 0 through frame 114, past the live divergence at frame 94, and again at 131; then rejected for soft risk
 0.45. 1-8 waves 15-26: the route (wave 3, 174 frames) matches every early decision but is rejected for soft risk
 0.35-1.00 vs 0.00 (also at the divergence, frame 23), so it is taken only in the last ~35 frames where the slow
-route already rejoins it. **Open:** the world model's soft risk on a route the game has proven safe keeps 1-8 off
-it. **Unverified** in the game.
+route already rejoins it. (The open point here, the world model's soft risk on a proven route, is section 7.9's
+first change.) **Unverified** in the game.
 
 **Forgiveness** (2026-11-10): a finished wave clears every failure-memory charge of the (cell, first move) pairs the
-agent decided in it, and the point-of-no-return memory forgives one death of each (not on held-out levels); an
-event `forgiven` lists both. A route that worked is no longer kept off by earlier charges. **Unverified** in the
-game.
+agent decided in it; an event `forgiven` lists them. A route that worked is no longer kept off by earlier loop
+charges. Deaths are never forgiven (the point-of-no-return memory's death forgiveness of 65a8a0d was removed the
+same day, section 7.9). **Unverified** in the game.
 
 **Drawn in the game** (first planned agent, at most every `--replan` frames): the chosen plan's predicted path
 (green), its airborne completion (since step 4: fainter green, dashed, landing yellow), predicted landings (yellow
@@ -570,7 +571,8 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
 - **Airborne completion** (final stage): a plan not landing by a majority of members is continued with keep /
   neutral / reverse for up to 90 frames and scored at its best landing; all die: one death (DEATH_FRAMES).
 - **MoveMemory** (`--move-memory smbrl/move_memory.json`): each death charges the move taken at the latest
-  decision of the wave that had a safe alternative; `point of no return` events.
+  decision of the wave that had a safe alternative (a repeated identical death one decision earlier per repeat, since
+  2026-11-10: 7.9); `point of no return` events.
 - **Failure memory, the loop breaker** (`plan.planner.FailureMemory`, since 2026-11-09; replaces the first-move
   V check, which never judged a plan whose payoff was in its later moves): every decision records its start
   state's key (cell, supported, sign of vx and vy beyond 1 unit / frame), its first move, T there and the T its
@@ -681,6 +683,63 @@ Details, numbers and the offline checks: `PLAN_PLANNER_ROUND2.md` section 7. In 
 - **Unverified**: everything in the game; 1-11 dies in every closed loop (old and new).
 
 ---
+
+### 7.9 Real-path route, deterministic search, repeated deaths, held-out block (2026-11-10, offline only)
+
+Live evidence (bench_20261110-003407, ab505ab): 1-14 33/34 finished (median / best 7.5 / 6.3 s), 1-13 20/32 (13.1 /
+8.4 s), 1-8 15/67: waves 1 and 2 finished, then 50 waves died identically at frame 234 on the static saw h4. Offline
+checks replay the run's logged states through Planner.observe / plan / played / finished with the FutureWorld flow as
+agent.py (scratch harness rep.py; open loop: the states are the live ones, so it shows each decision, not where it
+would lead).
+
+- **Best route on its real path** (`e0d7833`, plan/planner.py `Planner._route_real`). Before, the route candidate was
+  judged by the world model's imagination: 1-8's route (wave 1) was refused at frame 0 of every later wave with
+  "soft risk 1.00 vs 0.00". With the time-step lock the game repeats the route from the same state, so when the
+  state is within REAL_RADIUS 1 unit and REAL_SPEED 0.5 u/f of the route's state and the hazard future of the judged
+  frames is the trusted recording (`plan(recorded=...)`, agent.py passes future_inputs' count), its veto, soft risk,
+  goal touch and estimate come from the recorded real path against the decision's deadly boxes (margin dist + dv x
+  frames: 0 for an exact match, contact only; never ERR90). Window: to the finish when it lies within the future
+  frames (estimate: finish frame - route frame + 1), else every recorded frame they cover (frames + T at the real
+  end). A route state at another wave frame falls back on levels with moving platforms or changed tiles. Else the old
+  judging; `best_route.judged` says which ("real" / "model: why"). A chosen real-judged route predicts its real path.
+  Offline: 1-8 waves 2-20 the route is taken at frame 0 of every wave (19/19, live 0/19 after wave 2); 1-13 (second
+  session) waves 2-18 1,093 route decisions (1,069 real-judged; live 887). Closed checks (the best wave's states
+  replayed as the next wave, a decision every 8 frames): 1-8 17/17 and 1-13 70/70 decisions take the route from
+  frame 0 to the finish. Real-judged uses whose recorded path touches the current wave's real hazards: 0 (108,000
+  frames checked); 9 model-judged uses (4-6 units off, the old rule) touch h2 64-96 frames ahead.
+- **Deterministic search** (`e0a8be9`). The frame-99 split of 1-8 waves 2 / 3 (same state, 'run-jump R hold 22' vs
+  'run wall-jump R hold 15') was the hazard recording's length, not the deadlines: replayed without deadlines both
+  waves' 17 decisions up to frame 99 are the live ones, and wave 3's state with wave 2's recording (35 of the 96
+  future frames recorded at frame 99, the rest extrapolated) chooses wave 2's move. From wave 3 on that input no
+  longer changes. The deadlines were nondeterministic as well (offline at 120 ms, the same decisions repeated: 196
+  of 408 identical); every stage now runs complete, capped by its candidate and step counts (budget_ms only
+  reports), and Terrain.on_padding probes only bodies near the map's bottom edge (same result). Same decisions,
+  same machine (shared with a world-model training, so slower than live): median ms/decision 220 -> 214, cuts per
+  decision stage 1 26 -> 0 and stage 2 686 -> 0 of 816, repeats identical 408/408.
+- **Repeated identical deaths** (`ac166af`, plan/planner.py `MoveMemory.died`). The 50 1-8 deaths were all charged to
+  the decision at frame 164, whose 17 candidates all touched the goal in the model (the charge, 6,500 frames by wave
+  20, only broke ties); no decision after 164 had a safe alternative, 156 and 143 did. Now a death within
+  REPEAT_FRAMES 2 wave frames and BODY units of an earlier one of the run is a repeat, and its r-th repeat charges
+  the (r + 1)-th latest distinct (cell, first move) pair with a safe alternative: each repeat one decision earlier
+  (events: `repeat`, `walked_back`). A finish forgives no death (65a8a0d's death forgiveness removed; the failure
+  memory's stays). Offline, the whole 1-8 sequence (open loop): before, every repeat charged 164 and nothing changed;
+  now the charge moves 164 -> 156 -> 143 and the first move at 143 changes after the 2nd repeat (the second series,
+  12 units away, also at its 2nd repeat). Finishing waves 1, 2, 13, 14, 15 decide as before; open loop the live death
+  keeps coming, so the charge walks back to frame 17 by wave 34 and the later finishing waves 48-64 differ from frame
+  16 on (450 of 559 finishing-wave decisions unchanged). In the game a changed choice changes the states: not
+  verified. A DeathMemory box at the death place would change nothing there (the alternatives' imagined paths never
+  come near it).
+- **Benchmark held-out block** (plan/benchmark.py, benchmark.json `held_out_levels`): 1-18 and 1-20 (World 1 like the
+  trained levels, which the world model knows; 1-18 five spinners, 696 units spawn to goal; 1-20 twenty saws and 21
+  crumble blocks, 541 units; not 1-19, 2,259 units, nor the World 2 levels the model never saw). They are played in
+  the same run after the five levels and reported in their own "held-out" block (never in the overall). Held-out
+  protection, checked: agent.py collects no world-model data, records no self-demo and charges no death or
+  point-of-no-return memory there (tests/test_agent.py), and plays them with the same command; realgame.py makes no
+  PPO update and collects no data there (eval_levels.json's "refuses without --eval" was wrong: there is no --eval,
+  it skips). In-run state (failure memory, best route, hazard recording) still adapts across the waves of a run
+  there; nothing is saved.
+- **Unverified** in the game: all of the above. Not measured: ms/decision on an idle machine (live was 133-186 median
+  per level at ab505ab).
 
 ## 8. Results so far (measured)
 
@@ -860,4 +919,10 @@ python smbrl/agent.py --agents 1 --wm-collect
 
 ```bash
 python smbrl/agent.py --agents 1 --explore 40 --wm-collect
+```
+
+The benchmark (prints the full agent.py command, the five levels and the two held-out ones, and the report command):
+
+```bash
+python smbrl/plan/benchmark.py cmd
 ```
