@@ -29,6 +29,16 @@ share (frames: T(end) >= T(start), the time-to-go did not shrink; older runs: pr
 their times (times.jsonl or finish events; for older runs without them, the wave length of a 'quota' wave a
 planned agent finished, labelled as an estimate). Still share (overall and per level): decisions whose chosen plan
 has no moves other than wait / pad (is_still), and the share of decisions that kept such a plan (from_prev).
+
+Per level also the decisions that replayed the recorded best route (plans.jsonl best_route.used, `replayed`) and
+`wave_list`: the level's completed waves in log order (a wave event ends a wave; the wave a level switch or a stop
+interrupted has none and is not listed, though its decisions count above), each with its end (why, finished,
+frames, agent_frames), its decisions and replayed decisions, whether a recorded demo was replayed (a "demo
+check" event), its planned finishes (frame, seconds), its deaths (x, y, frame) and, for a wave that ended without
+either, the planned agent's last logged position. Plans and states are matched to the wave events per level in
+order by wave number: a plan or state segment without a wave event (interrupted) is skipped. `models`: the world
+models the run logged (agent.py's level or start event "model", --learn's "learn model" path); empty when the run
+did not record one.
 """
 from __future__ import annotations
 
@@ -168,6 +178,7 @@ def slim(d: dict) -> dict:
             "timing": d.get("timing") or {}, "clipped": d.get("model_clipped"),
             "s2": c2["steps"] / c2["of_steps"] if c2.get("of_steps") else None,
             "mode": d.get("mode") or "normal", "still": is_still(chosen),
+            "replay": bool((d.get("best_route") or {}).get("used")),
             "mode_ran": {k: bool(v.get("ran")) for k, v in ((d.get("counts") or {}).get("modes") or {}).items()
                          if isinstance(v, dict)}}
 
@@ -205,7 +216,8 @@ def analyze(run: str, level: str | None = None) -> dict:
     n_clip_known = n_clip = 0                       # decisions with model_clipped (older runs: none)
     n_still = n_still_kept = 0                      # chosen plans that do nothing (is_still); of them kept from_prev
     lv = defaultdict(lambda: {"decisions": 0, "no_progress": 0, "dead_end": 0, "still": 0, "still_kept": 0,
-                              "families": Counter()})
+                              "replayed": 0, "families": Counter()})
+    seg_dec = defaultdict(lambda: [0, 0])          # segment -> [decisions, replayed]
     for (k, agent), ps in plans.items():
         ps.sort(key=lambda p: p["frame"])
         real = states.get((k, agent), {})
@@ -287,10 +299,19 @@ def analyze(run: str, level: str | None = None) -> dict:
             L["dead_end"] += int(p["dead_end"])
             L["still"] += int(p["still"])
             L["still_kept"] += int(p["still"] and p["from_prev"])
+            L["replayed"] += int(p["replay"])
+            seg_dec[k][0] += 1
+            seg_dec[k][1] += int(p["replay"])
             n_still += int(p["still"])
             n_still_kept += int(p["still"] and p["from_prev"])
             L["families"][p["family"]] += 1
             prev = p
+    segs = {}                                       # segment -> the lowest agent's last logged (frame, x, y), in log order
+    for (k, agent) in sorted(states, key=lambda ka: ka[1]):
+        if k not in segs and states[(k, agent)]:
+            f = max(states[(k, agent)])
+            segs[k] = (f, *states[(k, agent)][f][:2])
+    order = list(dict.fromkeys([k for k, _ in states] + [k for k, _ in plans]))
     del plans, states
 
     # events and times: deaths per cause, finishes
@@ -306,16 +327,26 @@ def analyze(run: str, level: str | None = None) -> dict:
     waves = defaultdict(lambda: {"waves": 0, "finished": 0, "why": Counter()})
     lock = None
     fin_in_wave = 0
+    models = []                                     # world models the run logged, in order
+    wave_list = defaultdict(list)                   # level -> its completed waves in log order
+    pending = defaultdict(lambda: {"finishes": [], "deaths": [], "demo": False})   # (level, wave) -> outcomes
     for e in stream(os.path.join(run, "events.jsonl"), bad):
         kd = e.get("kind")
         if kd == "lock":
             lock = bool(e.get("ok"))
+        m = e.get("model") if kd in ("level", "start") else e.get("path") if kd == "learn model" else None
+        if m and m not in models:
+            models.append(m)
         if level and e.get("level") != level:
             continue
         L = e.get("level")
         if kd == "death":
             deaths[L][e.get("cause") or "?"] += 1
+            pending[(L, e.get("wave"))]["deaths"].append([e.get("x"), e.get("y"), e.get("frame")])
+        elif kd == "demo check":
+            pending[(L, e.get("wave"))]["demo"] = True
         elif kd == "finish":
+            pending[(L, e.get("wave"))]["finishes"].append([e.get("frames", e.get("frame")), e.get("seconds")])
             fin_in_wave += 1
             if not have_times:
                 frames = e.get("frames", e.get("frame"))     # older events: the message frame = updates played
@@ -325,6 +356,13 @@ def analyze(run: str, level: str | None = None) -> dict:
                 finishes[L].append({"wave": e.get("wave"), "agent": e.get("agent"), "frames": frames,
                                     "seconds": secs, "lock": e.get("lock", lock), "from": "finish event"})
         elif kd == "wave":
+            got = pending.pop((L, e.get("wave")), None) or {"finishes": [], "deaths": [], "demo": False}
+            for pk in [pk for pk in pending if pk[0] == L]:          # an interrupted wave's outcomes: no wave event
+                del pending[pk]
+            wave_list[L].append({"wave": e.get("wave"), "why": e.get("why"), "finished": int(e.get("finished") or 0),
+                                 "frames": e.get("frames"), "agent_frames": e.get("agent_frames", e.get("frames")),
+                                 "decisions": 0, "replayed": 0, "demo": got["demo"], "finishes": got["finishes"],
+                                 "deaths": got["deaths"], "end": None})
             W = waves[L]
             W["waves"] += 1
             W["finished"] += int(e.get("finished") or 0)
@@ -337,6 +375,21 @@ def analyze(run: str, level: str | None = None) -> dict:
                                     "from": "estimate: wave length"})
             fin_in_wave = 0
 
+    # plans and states segments -> the wave events, per level in order by wave number (interrupted ones skipped)
+    by_level = defaultdict(list)
+    for k in order:
+        by_level[k[0]].append(k)
+    for name, ws in wave_list.items():
+        ks, i = by_level.get(name, []), 0
+        for w in ws:
+            j = next((j for j in range(i, len(ks)) if ks[j][1] == w["wave"]), None)
+            if j is None:
+                continue
+            i = j + 1
+            w["decisions"], w["replayed"] = seg_dec[ks[j]] if ks[j] in seg_dec else (0, 0)
+            if not w["finishes"] and not w["deaths"] and ks[j] in segs:
+                w["end"] = [segs[ks[j]][1], segs[ks[j]][2]]
+
     unit = "frames" if units["frames"] >= units["V"] and units["frames"] else "V"
     err = {}
     for hz in HORIZONS:
@@ -344,21 +397,21 @@ def analyze(run: str, level: str | None = None) -> dict:
     per_level = {}
     for name in sorted(set(lv) | set(deaths) | set(finishes) | set(waves), key=lambda s: str(s)):
         L = lv.get(name) or {"decisions": 0, "no_progress": 0, "dead_end": 0, "still": 0, "still_kept": 0,
-                             "families": Counter()}
+                             "replayed": 0, "families": Counter()}
         fs = finishes.get(name, [])
         secs = [x["seconds"] for x in fs if x["seconds"] is not None]
         per_level[str(name)] = {
             "decisions": L["decisions"], "no_progress": share(L["no_progress"], L["decisions"]),
             "dead_end": share(L["dead_end"], L["decisions"]),
             "still": share(L["still"], L["decisions"]), "still_kept": share(L["still_kept"], L["decisions"]),
-            "still_n": L["still"],
+            "still_n": L["still"], "replayed": L["replayed"], "wave_list": wave_list.get(name, []),
             "first_moves": [[f, share(c, L["decisions"])] for f, c in L["families"].most_common(TOP_FAMILIES)],
             "deaths": dict(deaths.get(name, Counter()).most_common()),
             "waves": waves[name]["waves"] if name in waves else 0,
             "wave_end": dict(waves[name]["why"]) if name in waves else {},
             "finishes": fs, "best_s": min(secs) if secs else None}
     return {
-        "run": run, "level": level, "skipped_lines": dict(bad),
+        "run": run, "level": level, "skipped_lines": dict(bad), "models": models,
         "decisions": n, "airborne": share(n_air, n),
         "replan_interval": q(T["interval"]),
         "timing_ms": {k[3:]: q(v) for k, v in T.items() if k.startswith("ms_")},
@@ -402,6 +455,7 @@ def report(r: dict) -> str:
     out = []
     w = out.append
     w(f"run {r['run']}" + (f" (level {r['level']})" if r["level"] else "")
+      + f"; model {', '.join(r['models']) if r['models'] else 'not recorded'}"
       + (f"; skipped malformed lines: {r['skipped_lines']}" if r["skipped_lines"] else ""))
     w(f"decisions {r['decisions']}, airborne (start not supported) {pct(r['airborne'])}; replan interval median / 90% "
       f"{num(r['replan_interval'][0], '.0f')} / {num(r['replan_interval'][1], '.0f')} frames")
@@ -455,8 +509,8 @@ def report(r: dict) -> str:
     for name, L in r["levels"].items():
         fam = ", ".join(f"{f} {pct(s)}" for f, s in L["first_moves"])
         w(f"  {name}: {L['decisions']} decisions, no progress {pct(L['no_progress'])}, dead-end ends "
-          f"{pct(L['dead_end'])}, still {pct(L['still'])} (kept {pct(L['still_kept'])}); {L['waves']} waves "
-          f"{L['wave_end']}")
+          f"{pct(L['dead_end'])}, still {pct(L['still'])} (kept {pct(L['still_kept'])}), replayed the best route "
+          f"{L['replayed']}; {L['waves']} waves {L['wave_end']}")
         if fam:
             w(f"    first moves: {fam}")
         if L["deaths"]:
