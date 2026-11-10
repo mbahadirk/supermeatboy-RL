@@ -1,11 +1,15 @@
 {
-  "about": "Fixed benchmark (python smbrl/plan/benchmark.py from the folder above smbrl/, or python -m plan.benchmark from smbrl/): levels disjoint from eval_levels.json held_out; config = agent.py defaults resolved by plan.benchmark.freeze(), passed as explicit flags; switches = on/off agent.py flags the benchmark always passes (not defaults).",
+  "about": "Fixed benchmark (python smbrl/plan/benchmark.py from the folder above smbrl/, or python -m plan.benchmark from smbrl/): levels disjoint from eval_levels.json held_out; held_out_levels: held-out levels (a subset of eval_levels.json held_out) played in the same run and reported in their own block, to measure generalization (agent.py collects no world-model data and charges no memory there); config = agent.py defaults resolved by plan.benchmark.freeze(), passed as explicit flags; switches = on/off agent.py flags the benchmark always passes (not defaults).",
   "levels": [
     "1-5",
     "1-8",
     "1-11",
     "1-13",
     "1-14"
+  ],
+  "held_out_levels": [
+    "1-18",
+    "1-20"
   ],
   "waves_per_level": 20,
   "config": {

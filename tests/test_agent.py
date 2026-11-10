@@ -111,6 +111,27 @@ def _drive_wave(r, exact: bool = True):
 
 
 @need_data
+def test_held_out_level_is_played_without_data_or_memories(tmp_path, monkeypatch):
+    """On a held-out level (eval_levels.json; here 1-13 made one) the runner plays as anywhere (the benchmark's
+    held-out block uses the same command), but writes no world-model shard and charges no death or
+    point-of-no-return memory."""
+    import wm.buffer
+    monkeypatch.setattr(wm.buffer, "eval_levels", lambda: {LEVEL})
+    r = _runner(tmp_path, None)
+    acts, dead_xy, died_frame, end_xy = _drive_wave(r)
+    r.close()
+    assert r.protected and len(acts) == N_FRAMES
+    run = tmp_path / "run"
+    events = [json.loads(l) for l in open(run / "events.jsonl", encoding="utf-8")]
+    assert [e["protected"] for e in events if e["kind"] == "level"] == [True]
+    deaths = [e for e in events if e["kind"] == "death"]
+    assert len(deaths) == 2 and not any(e["memory_added"] for e in deaths)       # agent 1's unexplained one too
+    assert not any(e.get("charged") for e in events if e["kind"] == "point of no return")
+    assert not (tmp_path / "deaths.json").exists() and not (tmp_path / "moves.json").exists()
+    assert not list((run / "wm_data").glob("wave_*.npz"))
+
+
+@need_data
 def test_runner_plays_a_recorded_wave(tmp_path):
     from plan import safety as S
     tel = _CaptureTel()

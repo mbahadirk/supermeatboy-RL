@@ -144,3 +144,30 @@ def test_levels_disjoint_from_held_out(tmp_path):
 
 def test_frozen_config_is_agent_defaults():
     assert SPEC["config"] == B.resolved_config()
+
+
+def test_held_out_levels_are_reported_apart(tmp_path, capsys):
+    """The spec's held-out levels (a subset of eval_levels.json's held_out) are played in the same run and reported
+    in their own block: never in the benchmark's levels or overall; a non-held-out level there is refused."""
+    held = json.load(open(B.EVAL))["held_out"]
+    assert SPEC["held_out_levels"] and set(SPEC["held_out_levels"]) <= set(held)
+    h1 = SPEC["held_out_levels"][0]
+    runs = tmp_path / "runs"
+    _run(str(runs / "bench_h"), [("1-5", 1, "finish", 4.0), (h1, 2, "finish", 9.0), (h1, 3, "death", "hazard saw")])
+    rec = B.report(["bench_h"], runs_dir=str(runs), out_dir=str(tmp_path / "bench"), spec=SPEC)
+    assert h1 not in rec["levels"] and rec["overall"]["waves"] == 1 and rec["overall"]["finishes"] == 1
+    H = rec["held_out"]
+    assert H["levels_spec"] == SPEC["held_out_levels"] and H["levels"][h1]["waves"] == 2
+    assert H["levels"][h1]["finishes"] == 1 and H["levels"][h1]["best_s"] == 9.0
+    assert H["overall"]["waves"] == 2 and H["overall"]["levels"] == len(SPEC["held_out_levels"])
+    out = capsys.readouterr().out
+    assert "held-out (generalization" in out and f"{h1}: 1 hazard saw" in out
+    text = B.command(SPEC, now=0)
+    for lv in SPEC["held_out_levels"]:
+        assert f"{lv}: {SPEC['waves_per_level']} waves (held out)" in text
+    d = B.deltas(rec, {"levels": {}, "overall": {}})                       # an older baseline without the block
+    assert d["held_out"][h1]["completion"] is None
+    bad = tmp_path / "spec.json"
+    bad.write_text(json.dumps({**SPEC, "held_out_levels": ["1-2"]}))
+    with pytest.raises(ValueError, match="not held out"):
+        B.load_spec(str(bad))

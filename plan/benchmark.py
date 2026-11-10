@@ -14,8 +14,16 @@ with S is fine. It also gives the run its own death and point-of-no-return memor
 memories (the failure memory and the best route are per run already) and runs stay comparable.
 
 The spec is smbrl/benchmark.json: levels (disjoint from eval_levels.json's held-out levels, checked at load),
-waves per level, the frozen agent.py config and "switches" (on/off agent.py flags the benchmark always passes,
-not agent.py defaults: --wm-collect). The config there is resolved from agent.py (DEFAULT_MODEL,
+held_out_levels (held-out levels played in the same run for generalization: a subset of eval_levels.json's
+held_out, checked at load; agent.py collects no world-model data, records no self-demo and charges no death or
+point-of-no-return memory there, so the same command plays them; the report shows them in their own "held-out"
+block and overall line, never in the benchmark's overall), waves per level, the frozen agent.py config and
+"switches" (on/off agent.py flags the benchmark always passes, not agent.py defaults: --wm-collect).
+Held-out levels chosen (2026-11-10): 1-18 and 1-20, World 1 like the trained levels (the world model knows only
+World 1) and not much harder than the set: 1-18 five spinners (1-13 has one), 54 x 50 tiles, 696 units spawn to
+goal; 1-20 twenty saws (1-8 has 17) and 21 crumble blocks (1-11 has 31), 541 units. Not 1-19 (160 x 30 tiles,
+2,259 units spawn to goal, about four times 1-8's) nor the World 2 levels 2-5 / 2-6 / 2-7 (hospital tiles, needles
+and wind the world model never saw). The config there is resolved from agent.py (DEFAULT_MODEL,
 REPLAN_DEFAULT, TUBE_DEFAULT, HYSTERESIS_FRAMES and build_parser()'s defaults) by freeze(), so a later default
 change shows as a diff of benchmark.json when it is frozen again; `cmd` notes any drift.
 
@@ -99,6 +107,11 @@ def load_spec(path: str = SPEC, eval_path: str = EVAL) -> dict:
     if overlap:
         raise ValueError(f"{path}: benchmark levels {overlap} are held out in {eval_path} (generalization only, "
                          "never benchmarked)")
+    spec.setdefault("held_out_levels", [])
+    not_held = sorted(set(spec["held_out_levels"]) - held)
+    if not_held:
+        raise ValueError(f"{path}: held_out_levels {not_held} are not held out in {eval_path} (the agent would "
+                         "collect data and charge memories there)")
     return spec
 
 
@@ -118,6 +131,10 @@ def command(spec: dict, now: float | None = None) -> str:
            "for offline replays):", "  " + cmd, "",
            f"in that one run, play each level for {spec['waves_per_level']} waves:"]
     out += [f"  {lv}: {spec['waves_per_level']} waves" for lv in spec["levels"]]
+    if spec.get("held_out_levels"):
+        out += ["then the held-out levels (generalization; agent.py collects no world-model data and charges no "
+                "memory there, its level line says so):"]
+        out += [f"  {lv}: {spec['waves_per_level']} waves (held out)" for lv in spec["held_out_levels"]]
     out += ["", "do not add --learn (it trains and swaps the model between waves: not the frozen config); changing "
             "the level with S is fine.", "", "then, from the same folder:",
             f"  python smbrl/plan/benchmark.py report {name}"]
@@ -175,10 +192,11 @@ def _ratio(n, d):
     return round(n / d, 4) if d else None
 
 
-def aggregate(results: list, spec: dict) -> tuple[dict, dict]:
-    """results: [(run folder, {level: analyze(folder, level)})] -> per level and overall."""
+def aggregate(results: list, spec: dict, which: str = "levels") -> tuple[dict, dict]:
+    """results: [(run folder, {level: analyze(folder, level)})] -> per level and overall, over spec[which]
+    ("levels": the benchmark's, "held_out_levels": the held-out block)."""
     levels = {}
-    for lv in spec["levels"]:
+    for lv in spec.get(which) or []:
         parts = []                                  # (run, analyze result, its level entry) that played lv
         for run, per in results:
             r = per[lv]
@@ -224,8 +242,10 @@ def aggregate(results: list, spec: dict) -> tuple[dict, dict]:
 
 def build_record(folders: list, spec: dict, label: str | None = None, runs_dir: str = RUNS) -> dict:
     runs = [resolve_run(f, runs_dir) for f in folders]
-    results = [(run, {lv: analyze(run, lv) for lv in spec["levels"]}) for run in runs]
+    every = list(spec["levels"]) + list(spec.get("held_out_levels") or [])
+    results = [(run, {lv: analyze(run, lv) for lv in every}) for run in runs]
     levels, overall = aggregate(results, spec)
+    h_levels, h_overall = aggregate(results, spec, "held_out_levels")
     return {"label": label or "+".join(os.path.basename(r) for r in runs),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "comparability": COMPARABILITY,
             "levels_spec": spec["levels"], "waves_per_level": spec["waves_per_level"],
@@ -233,19 +253,29 @@ def build_record(folders: list, spec: dict, label: str | None = None, runs_dir: 
             "runs": [{"run": r, "skipped_lines": {k: v for per in res.values() for k, v in per["skipped_lines"].items()}}
                      for r, res in results],
             "wave_counts": {lv: v["waves"] for lv, v in levels.items()},
-            "levels": levels, "overall": overall}
+            "levels": levels, "overall": overall,
+            "held_out": {"levels_spec": list(spec.get("held_out_levels") or []), "levels": h_levels,
+                         "overall": h_overall}}
 
 
 DELTA_KEYS = ("completion", "best_s", "median_s", "deaths_per_wave", "ms_per_decision", "still")
 
 
 def deltas(rec: dict, base: dict) -> dict:
+    """Per benchmark level and overall; the held-out block's under "held_out" (against a baseline without one:
+    None)."""
     def d(a, b, k):
         x, y = (a or {}).get(k), (b or {}).get(k)
         return None if x is None or y is None else round(x - y, 4)
-    out = {lv: {k: d(rec["levels"][lv], base.get("levels", {}).get(lv), k) for k in DELTA_KEYS}
-           for lv in rec["levels"]}
-    out["overall"] = {k: d(rec["overall"], base.get("overall"), k) for k in DELTA_KEYS}
+
+    def block(r, b):
+        out = {lv: {k: d(r["levels"][lv], (b or {}).get("levels", {}).get(lv), k) for k in DELTA_KEYS}
+               for lv in r["levels"]}
+        out["overall"] = {k: d(r["overall"], (b or {}).get("overall"), k) for k in DELTA_KEYS}
+        return out
+    out = block(rec, base)
+    if rec.get("held_out"):
+        out["held_out"] = block(rec["held_out"], base.get("held_out"))
     return out
 
 
@@ -289,27 +319,35 @@ def table(rec: dict, base: dict | None = None) -> str:
     if dl:
         hdr += f"  | {'d compl':>8}{'d best':>8}{'d med':>8}{'d d/w':>8}{'d ms':>8}{'d still':>8}"
     w(hdr)
-    rows = list(rec["levels"].items()) + [("overall", rec["overall"])]
-    for lv, v in rows:
-        s = (f"{lv:<8}{str(v['waves']) + '/' + str(v['waves_planned']):>8}{v['finishes']:>5}{_p(v['completion']):>7}"
-             f"{_f(v.get('best_s')):>8}{_f(v.get('median_s')):>8}{_f(v['deaths_per_wave']):>8}{v['decisions']:>7}"
-             f"{_f(v['ms_per_decision'], '.0f'):>8}{_f(v.get('replan_interval'), '.0f'):>7}{_p(v.get('still')):>7}")
-        if dl:
-            x = dl[lv]
-            s += (f"  | {_d(x['completion'], '', True):>8}{_d(x['best_s'], '.2f'):>8}{_d(x['median_s'], '.2f'):>8}"
-                  f"{_d(x['deaths_per_wave'], '.2f'):>8}{_d(x['ms_per_decision'], '.0f'):>8}"
-                  f"{_d(x['still'], '', True):>8}")
-        w(s)
-    approx = [lv for lv, v in rec["levels"].items() if v["approx_medians"]]
+
+    def rows_of(levels, overall, dlb):
+        for lv, v in list(levels.items()) + [("overall", overall)]:
+            s = (f"{lv:<8}{str(v['waves']) + '/' + str(v['waves_planned']):>8}{v['finishes']:>5}{_p(v['completion']):>7}"
+                 f"{_f(v.get('best_s')):>8}{_f(v.get('median_s')):>8}{_f(v['deaths_per_wave']):>8}{v['decisions']:>7}"
+                 f"{_f(v['ms_per_decision'], '.0f'):>8}{_f(v.get('replan_interval'), '.0f'):>7}{_p(v.get('still')):>7}")
+            if dlb:
+                x = dlb[lv]
+                s += (f"  | {_d(x['completion'], '', True):>8}{_d(x['best_s'], '.2f'):>8}{_d(x['median_s'], '.2f'):>8}"
+                      f"{_d(x['deaths_per_wave'], '.2f'):>8}{_d(x['ms_per_decision'], '.0f'):>8}"
+                      f"{_d(x['still'], '', True):>8}")
+            w(s)
+    rows_of(rec["levels"], rec["overall"], dl)
+    ho = rec.get("held_out") or {}
+    if ho.get("levels"):
+        w("held-out (generalization: never trained on, no world-model data, no memory charged; not in the overall "
+          "above):")
+        rows_of(ho["levels"], ho["overall"], (dl or {}).get("held_out"))
+    every = list(rec["levels"].items()) + list((ho.get("levels") or {}).items())
+    approx = [lv for lv, v in every if v["approx_medians"]]
     if approx:
         w(f"(medians of {', '.join(approx)}: weighted means of per-run medians, played in several runs)")
     w("still: decisions whose chosen plan has no moves other than wait / pad (plan.analyze_run.is_still)")
     w("deaths by cause:")
-    for lv, v in rec["levels"].items():
+    for lv, v in every:
         if v["deaths"]:
             w(f"  {lv}: " + ", ".join(f"{c} {k}" for k, c in v["deaths"].items()))
     w("position error p50 (n), followed | not followed:")
-    for lv, v in rec["levels"].items():
+    for lv, v in every:
         pe = v["position_error"]
         if pe:
             w(f"  {lv}: " + "  ".join(f"+{hz} {_f(e['followed'][0], '.1f')} ({e['followed'][2]}) | "
