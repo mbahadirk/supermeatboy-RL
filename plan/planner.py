@@ -189,6 +189,9 @@ COMPLETE_MAX = 45
 COMPLETE_CHUNK = 10                          # frames rolled out per completion batch (early stop between them)
 NO_PROGRESS = 0.0                            # frames: "no progress" when T(start) - T(end) is not above this
 SAFE_RISK = 0.5                              # soft risk (completion's deaths included) under which a landing alternative counts as safe
+# MoveMemory: a death within REPEAT_FRAMES wave frames and BODY units of an earlier death on the level (this run) is
+# the same death repeated: its point of no return walks back one more (cell, first move) pair per repeat
+REPEAT_FRAMES = 2
 # FailureMemory's state key: a velocity component (units / frame) is "moving" beyond this, else "still". In the
 # 1-5 loop of bench_20261109-023841 one cell held three states (vy +5.3, -0.8, -2.0; vx +3.5, 0.0, -1.9 u/f).
 KEY_SPEED = 1.0
@@ -701,9 +704,15 @@ class MoveMemory:
     previous one) counts a try of its first move from its start cell. On the agent's death (explained or not:
     Planner.observe(dead=True)) the point of no return is the latest decision of the wave with a safe
     alternative; its (cell, first move) gets a death, and a "point of no return" event says where (decision
-    frame, cell, move, death frame, cause); none found: the event says so and nothing is charged. A finish
-    forgives: every (cell, first move) the agent decided in the finishing wave loses one charged death
-    (finished()), so one accident does not ban a route that has worked; tries still count adoptions.
+    frame, cell, move, death frame, cause, repeat); none found: the event says so and nothing is charged.
+    The same death repeated (same level, death frame within REPEAT_FRAMES, place within BODY units of an earlier
+    death of this run: died(x=, y=)) escalates: its r-th repeat charges the (r + 1)-th latest distinct (cell,
+    first move) pair of the wave with a safe alternative (the earliest one when there are fewer), so each repeat
+    moves the charge one decision earlier. (bench_20261110-003407, 1-8: 50 identical deaths at frame 234 on the
+    saw h4, every one charged to the decision at frame 164, whose 17 candidates all touched the goal in the
+    model, so the charge only broke ties; no decision after 164 had a safe alternative, the earlier ones at 156
+    and 143 did.) A finish never forgives a death (finished() only drops the wave's decisions; until 2026-11-10
+    it forgave one death per pair, so the death kept coming back after each finish).
     Penalty, frames, for candidates whose first move matches from the start cell: deaths / (tries + 1) x
     max(T_support(spawn) - T(start), DEAD_END_FRAMES) (the progress the death throws away, at least a dead
     end's charge). Keyed by cell and move only, not by the wave frame (moving hazards' timing is not part of
@@ -717,6 +726,7 @@ class MoveMemory:
         self.levels: dict[str, dict[tuple, list]] = {}     # level -> {(c, r, move): [deaths, tries]}
         self.level: str | None = None
         self.wave: dict[int, list] = {}                     # agent -> [(frame, cell, move, safe alternatives)]
+        self.seen: dict[str, list] = {}                     # level -> [(death frame, x, y)] this run (not saved)
         self.dirty = False
         self.learn = True                                   # False (held-out levels): nothing charged or counted
 
@@ -785,27 +795,32 @@ class MoveMemory:
             self._ent(cell, move, make=True)[1] += 1
             self.dirty = True
 
-    def finished(self, agent: int) -> list:
-        """The agent finished the wave: one death less for each (cell, first move) it decided in it (learn
-        only). Returns [[cell, move, deaths left]]."""
-        decs = self.wave.pop(int(agent), [])
-        out = []
-        if not self.learn:
-            return out
-        for c, mv in sorted({(d[1], d[2]) for d in decs if d[2] != "pad"}):
-            e = self._ent(c, mv)
-            if e is not None and e[0] > 0:
-                e[0] -= 1
-                self.dirty = True
-                out.append([list(c), mv, e[0]])
-        return out
+    def finished(self, agent: int):
+        """The agent finished the wave: its decisions are dropped. A finish forgives no death."""
+        self.wave.pop(int(agent), None)
 
-    def died(self, agent: int, frame: int, cause=None) -> dict:
-        """The agent died at `frame`: charge its point of no return. Returns the event."""
+    def repeats(self, frame: int, x: float, y: float) -> int:
+        """Earlier deaths of this run on the level within REPEAT_FRAMES wave frames and BODY units."""
+        return sum(1 for f, a, b in self.seen.get(self.level, ())
+                   if abs(f - int(frame)) <= REPEAT_FRAMES and math.hypot(a - x, b - y) <= BODY)
+
+    def died(self, agent: int, frame: int, cause=None, x: float | None = None, y: float | None = None) -> dict:
+        """The agent died at `frame` (at x, y: None unknown, never a repeat): charge its point of no return, walked
+        back one (cell, first move) pair per earlier identical death. Returns the event."""
         decs = self.wave.pop(int(agent), [])
-        pnr = next((d for d in reversed(decs) if d[3] > 0 and d[2] != "pad"), None)
+        rep = 0
+        if x is not None and y is not None:
+            rep = self.repeats(frame, float(x), float(y))
+            self.seen.setdefault(self.level, []).append((int(frame), float(x), float(y)))
+        cands, pairs = [], set()                     # latest first, one per (cell, move)
+        for d in reversed(decs):
+            if d[3] > 0 and d[2] != "pad" and (d[1], d[2]) not in pairs:
+                pairs.add((d[1], d[2]))
+                cands.append(d)
+        back = min(rep, len(cands) - 1) if cands else 0
+        pnr = cands[back] if cands else None
         ev = {"kind": "point of no return", "agent": int(agent), "frame": int(frame), "death_frame": int(frame),
-              "cause": cause, "decisions": len(decs)}
+              "cause": cause, "decisions": len(decs), "repeat": rep, "walked_back": back}
         if pnr is None or not self.learn:
             ev.update(decision_frame=None if pnr is None else pnr[0], cell=None if pnr is None else list(pnr[1]),
                       move=None if pnr is None else pnr[2], charged=False,
@@ -818,6 +833,10 @@ class MoveMemory:
         self.dirty = True
         ev.update(decision_frame=f0, cell=list(cell), move=move, safe_alternatives=safe, charged=True,
                   deaths=e[0], tries=e[1])
+        if rep:
+            ev["reason"] = (f"the same death for the {rep + 1}. time (frame {int(frame)} +-{REPEAT_FRAMES}, within "
+                            f"{BODY:g} units): charged {back} decision(s) earlier than the latest one with a safe "
+                            "alternative")
         return ev
 
 
@@ -1157,7 +1176,7 @@ class Planner:
             ev = ev + self.memory.update(agent, frame, cell, float(t[0]),
                                          key=lambda: self.state_key(cell, bool(sup[0]), vxf, vyf))
         if dead and self.moves is not None:
-            ev.append(self.moves.died(agent, frame, cause))
+            ev.append(self.moves.died(agent, frame, cause, x=x, y=y))
         return ev
 
     @staticmethod
@@ -1176,10 +1195,11 @@ class Planner:
     def finished(self, agent: int, frame: int) -> dict:
         """The runner reports a planned agent's goal touch in wave frame `frame`: its wave becomes the level's
         best route when it is the fastest finish of this run (BestRoute); the route worked, so the failure
-        charges of its (cell, first move) pairs are cleared and the point-of-no-return memory forgives one death
-        on each. Returns {best_route, failures_cleared, deaths_forgiven}."""
-        return {"best_route": self.route.finished(agent, frame), "failures_cleared": self.memory.finished(agent),
-                "deaths_forgiven": [] if self.moves is None else self.moves.finished(agent)}
+        charges of its (cell, first move) pairs are cleared. Deaths are never forgiven (MoveMemory.finished drops
+        the wave's decisions only). Returns {best_route, failures_cleared}."""
+        if self.moves is not None:
+            self.moves.finished(agent)
+        return {"best_route": self.route.finished(agent, frame), "failures_cleared": self.memory.finished(agent)}
 
     # ---- airborne completion -----------------------------------------------------------------------------
     def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H):

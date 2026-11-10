@@ -631,9 +631,9 @@ def test_move_memory_charges_the_point_of_no_return(tmp_path):
     assert MoveMemory.load(str(tmp_path / "missing.json")).levels == {}
 
 
-def test_a_finish_forgives_the_pairs_it_decided(tmp_path):
-    """A finished wave clears every failure charge of the (cell, first move) pairs the agent decided in it and
-    forgives one death of each in the point-of-no-return memory; other pairs and other agents keep theirs."""
+def test_a_finish_forgives_failures_never_deaths(tmp_path):
+    """A finished wave clears every failure charge of the (cell, first move) pairs the agent decided in it (other
+    pairs and other agents keep theirs); the point-of-no-return memory forgives no death."""
     from plan.planner import MoveMemory
     m = FailureMemory()
     key = Planner.state_key((5, 2), False, 3.0, 4.0)
@@ -650,14 +650,46 @@ def test_a_finish_forgives_the_pairs_it_decided(tmp_path):
     mm.decided(0, 18, (3, 2), "run R 16f", 1, adopted=False)                 # the same pair twice: one death
     mm.decided(0, 26, (4, 2), "jump up hold 15", 1, adopted=False)           # no deaths: nothing to forgive
     mm.decided(0, 30, (4, 2), "pad", 0, adopted=False)
-    assert mm.finished(0) == [[[3, 2], "run R 16f", 1]]
-    assert mm.stats((3, 2), "run R 16f") == (1, 3) and mm.stats((9, 9), "wait 8f") == (1, 1) and mm.dirty
-    held = MoveMemory()
-    held.set_level("1-8")
-    held.levels["1-8"] = {(3, 2, "run R 16f"): [2, 3]}
-    held.learn = False                                                      # held-out level: nothing changes
-    held.decided(0, 10, (3, 2), "run R 16f", 1, adopted=False)
-    assert held.finished(0) == [] and held.stats((3, 2), "run R 16f") == (2, 3)
+    mm.finished(0)
+    assert mm.stats((3, 2), "run R 16f") == (2, 3) and mm.stats((9, 9), "wait 8f") == (1, 1) and not mm.dirty
+    assert 0 not in mm.wave                                                 # the wave's decisions are dropped
+
+
+def test_a_repeated_death_walks_the_point_of_no_return_back():
+    """The same death again (frame within REPEAT_FRAMES, place within BODY) charges one distinct (cell, first
+    move) pair with a safe alternative earlier per repeat (the earliest when there are fewer); another death, or one
+    without a position, charges the latest one."""
+    from plan.planner import MoveMemory, REPEAT_FRAMES
+    from realpath import BODY
+    m = MoveMemory()
+    m.set_level("1-8")
+
+    def wave():
+        m.decided(0, 143, (23, 20), "run-jump R hold 15", 16, adopted=True)
+        m.decided(0, 151, (24, 21), "run-jump R hold 15", 0, adopted=False)     # no safe alternative
+        m.decided(0, 156, (25, 20), "run-jump R hold 6", 2, adopted=True)
+        m.decided(0, 160, (25, 20), "run-jump R hold 6", 2, adopted=False)      # the same pair again
+        m.decided(0, 164, (28, 20), "run-jump R hold 6", 16, adopted=False)
+        m.decided(0, 171, (30, 19), "run-jump R hold 22", 0, adopted=True)
+    got = []
+    for k, (f, x) in enumerate([(234, 122.0), (234, 122.0 + BODY), (234 + REPEAT_FRAMES, 124.0), (235, 125.0)]):
+        wave()
+        ev = m.died(0, f, "hazard h4", x=x, y=-78.0)
+        assert ev["charged"] and ev["repeat"] == k
+        got.append((ev["decision_frame"], ev["walked_back"]))
+        assert (k == 0) == ("same death" not in ev.get("reason", ""))
+    assert got == [(164, 0), (160, 1), (143, 2), (143, 2)]       # 156 and 160: one pair; 143 the earliest
+    wave()
+    ev = m.died(0, 236 + REPEAT_FRAMES + 1, "hazard h4", x=122.0, y=-78.0)          # later than any: another death
+    assert ev["repeat"] == 0 and ev["decision_frame"] == 164
+    wave()
+    ev = m.died(0, 234, "hazard h4", x=128.0 + BODY + 0.5, y=-78.0)                  # further than BODY
+    assert ev["repeat"] == 0 and ev["decision_frame"] == 164
+    wave()
+    assert m.died(0, 234, "out of level")["repeat"] == 0                             # no position: never a repeat
+    m.set_level("1-13")
+    m.decided(0, 164, (28, 20), "run R 8f", 3, adopted=True)
+    assert m.died(0, 234, "hazard", x=122.0, y=-78.0)["repeat"] == 0                 # per level
 
 
 def test_best_route_keeps_the_fastest_finish_and_matches_states():
