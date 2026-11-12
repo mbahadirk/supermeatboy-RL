@@ -273,6 +273,21 @@ def followed_text(err: dict) -> str:
             + " (median/90%, n " + "/".join(str(err[h][2]) for h in hs) + ")")
 
 
+ASYNC_LEAD = 8          # frames: --async-plan starts the next timed decision this far ahead (whole model steps)
+# a plan made ahead is used only from a start this close to the real one: within the surprise tube's floor
+# (commit.MIN_TUBE units) and this speed (units / frame); farther, its path broke the surprise check within 2-4
+# frames in the simulated 1-15 runs (runs/experiments/async_plan_v1)
+ASYNC_DV = 0.5
+
+
+class AheadJob:
+    """A decision being planned ahead in the planner process (agent.py --async-plan): the call's id, the agent,
+    the frame it started at, the frame it is for (target) and the deadly boxes from the target on."""
+
+    def __init__(self, mid: int, agent: int, start: int, target: int, fboxes):
+        self.mid, self.agent, self.start, self.target, self.fboxes = int(mid), int(agent), int(start), int(target), fboxes
+
+
 class FrameCost:
     """Where each frame's wall time goes (perf_counter only). A frame runs from its message's arrival to the
     reply being posted; go(cat) charges the time since the last switch to the current category and switches
@@ -487,6 +502,24 @@ class Runner:
         self.live_mtime = os.path.getmtime(self.model_path) if self.model is not None else 0.0
         self.commit = Committer(self.replan, args.tube, args.triggers == "on",
                                 step=getattr(self.model, "step", 1) if self.model is not None else 1)
+        # --async-plan: the next timed decision is planned in a background thread while the game plays
+        # (AheadJob); only for one planned agent with nothing else driven by the planner
+        self.async_on = bool(getattr(args, "async_plan", False))
+        why_not = ("--eval-first" if first else "not one planned agent" if self.n_plan != 1 else
+                   "explore agents" if self.n_explore else "--search" if self.search is not None else
+                   "--demo" if self.demo is not None else "no world model" if self.model is None else None)
+        if self.async_on and why_not:
+            print(f"[async] --async-plan is off: {why_not}", flush=True)
+            self.async_on = False
+        self.async_lead = int(getattr(args, "async_lead", ASYNC_LEAD))
+        self.ajob = None                        # the plan being made ahead (AheadJob) or None
+        self.proc = None                        # plan.worker.PlannerProcess: the planner with its memories
+        self.proc_ready = False                 # the process has its Planner (build_field: init)
+        if self.async_on:
+            from plan.worker import PlannerProcess
+            self.proc = PlannerProcess(args.threads)
+            print(f"[async] planner process started (pid {self.proc.proc.pid}); decisions planned "
+                  f"{self.async_lead} frames ahead", flush=True)
         self.deaths_path = args.death_memory
         self.deaths = S.DeathMemory() if first else S.DeathMemory.load(self.deaths_path)
         mm = getattr(args, "move_memory", DEFAULT_MOVES)
@@ -599,6 +632,7 @@ class Runner:
                 self.wm.meta_extra["perturbations"] = self.demo.changes
 
     def on_info(self, info: dict, tiles: bytes):
+        self.pl_sync(drop="new level data")
         if info["W"] * info["H"] == 0 or len(tiles or b"") != info["W"] * info["H"] * 4:
             if self.evaluation is not None:
                 self.evaluation.invalidate("invalid level data")
@@ -720,6 +754,22 @@ class Runner:
                 self.planner.bounds = S.level_bounds(lv)
             if self.moves is not None:
                 self.moves.learn = not self.protected      # held-out levels: no charges, no tries
+            if self.proc is not None:               # the planner process: the same level, field and settings
+                from plan.worker import TubeFn
+                tube = TubeFn(self.commit.tube, self.commit.tube_factor, MIN_TUBE)
+                if not self.proc_ready:
+                    mm = getattr(self.args, "move_memory", DEFAULT_MOVES)
+                    opts = {"budget_ms": self.args.budget_ms, "hysteresis": self.args.hysteresis,
+                            "modes": self.args.modes == "on",
+                            "route_trial_gain": getattr(self.args, "route_trial_gain", TRIAL_GAIN)}
+                    self.proc.call("init", self.model_path, lv, field, opts,
+                                   None if self.moves is None else mm, tube)
+                    self.proc_ready = True
+                elif self.planner_level is not lv:
+                    self.proc.call("set_level", lv, field, tube)
+                else:
+                    self.proc.call("set_field", field, S.level_bounds(lv))
+                self.proc.call("moves_learn", not self.protected)
             self.planner_level = lv
         self.field_built, self.field_dirty = True, False
         dt = time.time() - t
@@ -778,6 +828,10 @@ class Runner:
                 print(f"[hazards] {lv.name}: pieces came or went, {before} -> {len(lv.hz_ids)} lethal (frame {frame})",
                       flush=True)
                 self.event("hazards", frame, before=before, after=len(lv.hz_ids))
+        if self.proc is not None and self.field_built:
+            upd = {k: m[k] for k in ("tc", "fx", "kb", "pf", "lt") if m.get(k)}
+            if upd:
+                self.proc.send("frame_level", upd)
         boxes, kept = hazard_boxes(m.get("hz", []), lv.hz_keep)
         ids = box_ids(kept, lv.hz_ids, prefix="")
         self.track_hazards(boxes, ids)
@@ -794,6 +848,8 @@ class Runner:
 
         # what happened since the last frame: deaths, finishes, surprises, failed moves
         C.go("observe")
+        if self.proc is not None:
+            self.proc_events()
         alive_before, held_before = list(self.alive), list(self.held)
         for i, s in enumerate(states):
             if not self.alive[i]:
@@ -840,6 +896,8 @@ class Runner:
                 s = states[i]
                 tr = self.commit.triggers(i, frame, float(s[0]), float(s[1]), int(s[7]) if len(s) > 7 else 0, tiles,
                                           pl, fboxes_now)
+                if self.ajob is not None and self.ajob.agent == i and (tr or frame >= self.ajob.target):
+                    tr = self.ahead_take(i, frame, s, tr)
                 if tr:
                     need[i] = tr
             self.st["agent_frames"] += len(live_plan)
@@ -853,8 +911,14 @@ class Runner:
                 s = states[i]
                 row = state_row(s[0], s[1], s[2], s[3], s[4], s[5], s[7] if len(s) > 7 else 0, held_before[i])
                 try:
-                    plan = pl.plan(row, frame, worlds, fboxes, dt, agent=i,
-                                   danger=any(kind_of(t) == "danger" for t in trig), recorded=self.fut_rec)
+                    danger = any(kind_of(t) == "danger" for t in trig)
+                    if self.proc is not None:
+                        plan, trial_ev = self.proc.call("plan_now", row, frame, worlds, fboxes, dt, agent=i,
+                                                        danger=danger, recorded=self.fut_rec)
+                        if trial_ev:
+                            plan.route_trial = trial_ev
+                    else:
+                        plan = pl.plan(row, frame, worlds, fboxes, dt, agent=i, danger=danger, recorded=self.fut_rec)
                 except Exception as e:                  # never leave the agent without an answer
                     self.st["errors"] += 1
                     if self.st["errors"] <= 3:
@@ -877,7 +941,9 @@ class Runner:
             k = frame - p.frame if p is not None else -1
             a = int(p.actions[k]) if p is not None and 0 <= k < len(p.actions) else 0
             acts[i], act_idx[i] = list(ACTIONS[a]), a
-            pl.played(i, frame, a)
+            self.pl_call("played", i, frame, a)
+        if self.async_on and self.ajob is None and live_plan:
+            self.ahead_start(live_plan[0], frame, states[live_plan[0]], held_before[live_plan[0]], dt)
         C.go("explore")
         self.st["all_agent_frames"] += sum(1 for i in range(n) if self.alive[i] and int(states[i][6]) == 0)
         if self.search is not None:
@@ -936,7 +1002,7 @@ class Runner:
             return {"a": acts, "leader": int(leader), "end": "search done"}
         return {"a": acts, "leader": int(leader)}
 
-    def on_plan(self, plan, s, trigger=()):
+    def on_plan(self, plan, s, trigger=(), ahead=None):
         st = self.st
         st["decisions"] += 1
         for t in trigger:
@@ -962,7 +1028,7 @@ class Runner:
         d = plan.to_dict()
         # future_rec: frames of the hazards' future taken from the recording (0: all extrapolated)
         d.update({"level": self.level.name, "wave": self.wave_no, "trigger": list(trigger),
-                  "future_rec": int(getattr(self, "fut_rec", 0)),
+                  "future_rec": int(getattr(self, "fut_rec", 0)), "ahead": ahead,
                   "real": {"x": s[0], "y": s[1], "vx": s[2], "vy": s[3], "flags": int(s[4]), "state": int(s[5]),
                            "status": int(s[6]), "keys": int(s[7]) if len(s) > 7 else 0}})
         self._write(self.f_plans, d)
@@ -972,8 +1038,16 @@ class Runner:
         self.cost.go(prev)
 
     def observe(self, i, frame, x, y, keys, dead, cause=None, vx=None, vy=None):
-        """Planner.observe: surprises, failed moves and (deaths) the point of no return, counted and logged."""
-        for ev in self.planner.observe(i, frame, x, y, keys, dead, cause=cause, vx=vx, vy=vy, dt_ms=self.dt_ms):
+        """Planner.observe: surprises, failed moves and (deaths) the point of no return, counted and logged
+        (held while the planner plans ahead in the background: pl_call)."""
+        if self.proc is not None:                   # in order behind a plan being made; events come back later
+            self.proc.send("observe", i, frame, x, y, keys, dead, cause=cause, vx=vx, vy=vy, dt_ms=self.dt_ms)
+            return
+        self.observe_events(self.planner.observe(i, frame, x, y, keys, dead, cause=cause, vx=vx, vy=vy,
+                                                 dt_ms=self.dt_ms), frame)
+
+    def observe_events(self, events, frame):
+        for ev in events:
             k = ev.get("kind")
             if k == "position":
                 self.st["surprise_pos"] += 1
@@ -985,10 +1059,110 @@ class Runner:
                 self.st["pnr" if ev.get("charged") else "pnr_none"] += 1
             self.event(k, ev.get("frame", frame), **{a: b for a, b in ev.items() if a not in ("kind", "frame")})
 
+    # ---- planning ahead (--async-plan) ----------------------------------------------------------------------
+    def pl_call(self, name: str, *a):
+        """played(): to the planner process when there is one (in order behind a plan being made), else here."""
+        if self.proc is not None:
+            self.proc.send(name, *a)
+        else:
+            getattr(self.planner, name)(*a)
+
+    def proc_events(self):
+        """The planner process's replies to the calls sent without waiting: their events logged, errors too."""
+        for name, ok, res in self.proc.take_events():
+            if not ok:
+                self.event("planner process error", None, call=name, error=str(res)[:2000])
+                print(f"[async] planner process, {name}: {str(res).splitlines()[0]}", flush=True)
+            elif name == "observe" and res:
+                self.observe_events(res, None)
+
+    def pl_sync(self, drop: str | None = None):
+        """Before the planner's state is used here (death, finish, wave end, level change, stop): the plan being
+        made ahead is called off (drop: the reason, logged), every sent call is done and its events logged."""
+        if self.proc is None:
+            return
+        j = self.ajob
+        if j is not None and drop is not None:
+            t = time.perf_counter()
+            self.proc.cancel(j.mid)
+            self.ajob = None
+            st = getattr(self, "st", None)
+            if st is not None:
+                st["ahead_wait_ms"] = st.get("ahead_wait_ms", 0.0) + 1000 * (time.perf_counter() - t)
+                st["ahead_dropped"] = st.get("ahead_dropped", 0) + 1
+            self.event("ahead dropped", j.target, agent=j.agent, reason=drop, started=j.start)
+        self.proc.call("ping")
+        self.proc_events()
+
+    def ahead_start(self, i: int, frame: int, s, held: int, dt: float):
+        """Start planning agent i's next timed decision (Committer.due) in the planner process when it is a whole
+        number of model steps away and at most --async-lead frames: from the state its committed plan's actions
+        are imagined to reach then (Planner.predict_start), with this frame's view of the future shifted."""
+        p, due, pl, lv = self.cur_plan.get(i), self.commit.due(i), self.planner, self.level
+        if p is None or due is None or pl is None or lv is None or self.proc is None:
+            return
+        d = due - frame
+        k0 = frame - p.frame
+        if d < pl.f or d > self.async_lead or d % pl.f or k0 < 0 or k0 + d > len(p.actions):
+            return
+        worlds, fboxes, rec = future_inputs(self.fw, frame, pl.future_frames + d, dt, lv.name, self.deaths)
+        row = state_row(s[0], s[1], s[2], s[3], s[4], s[5], s[7] if len(s) > 7 else 0, held)
+        prefix = np.asarray(p.actions[k0:k0 + d], np.int64)
+        mid = self.proc.send("plan_ahead", row, prefix, worlds, fboxes, d, due, dt, i, rec, keep=True)
+        self.ajob = AheadJob(mid, i, frame, due, fboxes[d:])
+
+    def ahead_take(self, i: int, frame: int, s, tr: list) -> list:
+        """At the job's frame: its plan becomes the committed one when it was made, no trigger other than a timed
+        one (interval, move end, short) fired, and the real state is within MIN_TUBE units and ASYNC_DV units /
+        frame of the predicted start (its path is then moved onto the real start); returns [] then. Otherwise (or a trigger before its frame) the job is dropped and
+        the triggers that need a decision now are returned."""
+        j = self.ajob
+        if frame != j.target:
+            self.pl_sync(drop=f"{tr[0] if tr else 'frame'} at {frame}, before its frame {j.target}")
+            return tr or ["start"]
+        t = time.perf_counter()
+        ok, res = self.proc.result(j.mid)
+        self.st["ahead_wait_ms"] = self.st.get("ahead_wait_ms", 0.0) + 1000 * (time.perf_counter() - t)
+        self.ajob = None
+        urgent = [t_ for t_ in tr if kind_of(t_) not in ("interval", "move end", "short")]
+        lead = j.target - j.start
+        off = None
+        if not ok:
+            reason = f"planning error: {str(res).splitlines()[0]}"
+        elif urgent:
+            reason = urgent[0]
+        else:
+            plan, px, py, spread, pvx, pvy = res
+            off = math.hypot(float(s[0]) - px, float(s[1]) - py)
+            dv = math.hypot(float(s[2]) - pvx, float(s[3]) - pvy) * self.dt_ms / 1000.0     # units / frame
+            reason = (f"start off by {off:.1f} > {MIN_TUBE:g} units" if off > MIN_TUBE else
+                      f"start speed off by {dv:.2f} > {ASYNC_DV:g} units/frame" if dv > ASYNC_DV else None)
+        if reason is not None:
+            if ok:
+                self.proc.send("discard", j.mid)
+            self.st["ahead_dropped"] = self.st.get("ahead_dropped", 0) + 1
+            self.event("ahead dropped", frame, agent=i, reason=reason, started=j.start)
+            return tr or [f"ahead dropped: {reason}"]
+        trial_ev = self.proc.call("commit", j.mid)
+        if trial_ev:
+            plan.route_trial = trial_ev
+        dx, dy = float(s[0]) - px, float(s[1]) - py   # its predictions from the real start (the surprise and danger
+        plan.path = [[x + dx, y + dy] for x, y in plan.path]           # checks here follow the real agent)
+        plan.predictions = {h: [v[0] + dx, v[1] + dy] for h, v in plan.predictions.items()}
+        self.st["ahead_used"] = self.st.get("ahead_used", 0) + 1
+        self.cur_plan[i] = plan
+        self.commit.decided(i, plan, frame, j.fboxes, self.planner)
+        self.on_plan(plan, s, tr or ["due"], ahead={"lead": lead, "start_off": round(off, 2),
+                                                    "speed_off": round(dv, 3), "spread": round(spread, 2)})
+        if trial_ev:
+            self.event(trial_ev["kind"], frame, **{a: b for a, b in trial_ev.items() if a not in ("kind", "frame")})
+        return []
+
     def on_death(self, i, frame, xy0, xy1, keys, rec, extra_boxes, estimated: bool):
         """A planned agent died at wave frame `frame` at xy1 (from xy0 the frame before): does the geometry
         explain it (the move against the death frame's hazards and shots, or leaving the level)? If not, the
         place goes into the death memory (not on held-out levels) and is saved."""
+        self.pl_sync(drop="the agent died")
         lv = self.level
         x1, y1 = xy1
         x0, y0 = xy0 if xy0 is not None else xy1
@@ -1046,7 +1220,9 @@ class Runner:
         self._write(self.f_times, rec)
         self.fin[source].append(seconds)
         if planned and self.planner is not None:
-            r = self.planner.finished(i, int(finish_frame))
+            self.pl_sync(drop="the agent finished")
+            r = (self.proc.call("finished", i, int(finish_frame)) if self.proc is not None
+                 else self.planner.finished(i, int(finish_frame)))
             if r["best_route"]:
                 self.event("best route", int(finish_frame), agent=int(i), frames=frames, seconds=seconds)
             if r["failures_cleared"]:
@@ -1171,6 +1347,7 @@ class Runner:
             self.send_level()
 
     def on_wave_end(self, m: dict):
+        self.pl_sync(drop="the wave ended")
         lv = self.level
         if self.wm and not self.protected:
             self.wm.wave_end(m["wave"], m, held=list(self.held))
@@ -1237,7 +1414,12 @@ class Runner:
                                         "wave": self.wave_no, **srec})
         ms = np.array(st["ms"]) if st["ms"] else None
         el = (time.time() - self.t0) / 60
-        err_f = self.planner.surprise.errors() if self.planner is not None else None
+        if self.planner is None:
+            surprise_err = err_f = None
+        elif self.proc is not None:
+            surprise_err, err_f = self.proc.call("surprise")
+        else:
+            surprise_err, err_f = self.planner.surprise.err, self.planner.surprise.errors()
         cost = self.cost.summary(frame, self.dt_ms)
         com = commit_summary(st, frame)
         fin_p = min(self.fin["planned"]) if self.fin["planned"] else None
@@ -1304,15 +1486,21 @@ class Runner:
             self.stopping = True
             self.flush()
             return                              # never promote this life's recording or start another plan
-        if self.moves is not None and self.moves.dirty:
+        if self.proc is not None:                   # the process holds the move memory: it saves it
+            try:
+                self.proc.call("moves_save")
+            except RuntimeError as e:
+                print(f"[moves] could not save: {e}", flush=True)
+        elif self.moves is not None and self.moves.dirty:
             try:
                 self.moves.save()
             except OSError as e:
                 print(f"[moves] could not save {self.moves.path}: {e}", flush=True)
         if self.planner is not None:
             if self.commit.on:
-                self.commit.tube.add(self.planner.surprise.err)     # the run's followed errors, for the tube
-            for ev in self.planner.new_wave():      # also clears the surprise check's predictions and errors
+                self.commit.tube.add(surprise_err)  # the run's followed errors, for the tube
+            new_wave_ev = self.proc.call("new_wave") if self.proc is not None else self.planner.new_wave()
+            for ev in new_wave_ev:                  # also clears the surprise check's predictions and errors
                 self.event(ev["kind"], ev.get("end_frame", ev.get("frame")),
                            **{a: b for a, b in ev.items() if a not in ("kind", "frame")})
         if lv is not None and self.field_dirty and self.rebuilds < FIELD_REBUILDS:
@@ -1352,6 +1540,7 @@ class Runner:
                 print(f"[game] level {p['name']}", flush=True)
                 if self.wm is not None:
                     self.wm.cut("level change")     # the wave in progress is kept as a partial shard
+                self.pl_sync(drop="level change")
                 self.level = None
                 self.cur_plan = {}
                 self.commit.reset()
@@ -1456,6 +1645,7 @@ class Runner:
 
     def load_live(self):
         """Between waves: the learner's published model when it is newer than the one in use."""
+        self.pl_sync(drop="model swap")
         p = os.path.join(self.args.live_dir, "wm_model.pt")
         try:
             if not os.path.exists(p) or os.path.getmtime(p) <= self.live_mtime:
@@ -1529,6 +1719,12 @@ class Runner:
         self.learner = None
 
     def close(self):
+        if self.proc is not None:
+            try:
+                self.pl_sync(drop="run stopped")
+            except (RuntimeError, OSError, EOFError):
+                pass
+            self.proc.close()
         self.stop_learner()
         if self.evaluation is not None:
             self.evaluation.interrupt("run stopped before the first life completed")
@@ -1640,6 +1836,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="keep the committed plan unless another's estimated frames to the goal are lower by more "
                          "than this (frames; successes: 3 frames earlier at the goal); 0 = always the best score "
                          f"(default {HYSTERESIS_FRAMES:g})")
+    ap.add_argument("--async-plan", action="store_true",
+                    help="plan the next timed decision (interval, move end, short) in a background thread while the "
+                         "game plays, from the state the committed plan is imagined to reach; adopted when the real "
+                         "state is within the surprise tube of it and no other trigger fired, else decided as before "
+                         "(one planned agent, no explore agents, not with --eval-first / --search / --demo)")
+    ap.add_argument("--async-lead", type=int, default=ASYNC_LEAD,
+                    help=f"--async-plan: frames ahead a decision starts (whole model steps; default {ASYNC_LEAD})")
     ap.add_argument("--route-trial-gain", type=float, default=TRIAL_GAIN,
                     help="where the run's best route would be played, an unvetoed plan whose estimate is better by "
                          "more than this many frames is played once with its exact actions (one agent per wave, "

@@ -228,6 +228,25 @@ class Committer:
                 c.base_risk = risk
         self.cur[int(agent)] = c
 
+    def due(self, agent: int) -> int | None:
+        """The wave frame at which this agent's committed plan gets its next decision from a time rule alone
+        (interval, move end, short; never inside a route trial's frames), or None without a committed plan.
+        The other triggers (surprise, support, danger, missed, tiles) are not foreseen. agent.py --async-plan
+        plans ahead for this frame."""
+        c = self.cur.get(int(agent))
+        if c is None:
+            return None
+        p = c.plan
+        n = len(p.actions)
+        if not self.on:
+            k = min(self.replan, n)
+        else:
+            k = min(self.replan, max(n - SHORT_FRAMES + 1, 0), n)
+            if c.move_end > 0:
+                k = min(k, c.move_end)
+            k = max(k, int(getattr(p, "trial_frames", 0) or 0), 1)
+        return int(p.frame) + k
+
     def triggers(self, agent: int, frame: int, x: float, y: float, keys: int = 0, tiles: bool = False,
                  planner=None, fboxes_fn=None) -> list[str]:
         """Why this agent needs a decision now ([] = keep playing the committed plan). fboxes_fn(): this

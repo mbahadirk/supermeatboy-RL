@@ -177,6 +177,13 @@ from wm.rollout import World, advance, step_actions, _stacked
 from game.level import key_pickup_policy
 
 H_DEFAULT, B1_DEFAULT, BRANCH_DEFAULT, S_DEFAULT, BUDGET_MS = 48, 8, 16, 16, 120.0
+
+
+class PlanCancelled(Exception):
+    """A plan made ahead (agent.py --async-plan) was called off: imagine() stops at its next model step."""
+
+
+CANCEL = None          # a threading.Event set by the plan-ahead thread for its plan (None: nothing to call off)
 # penalties in frames, from the former V-unit weights by FX_GROUND frames per tile (on open ground 1 V unit ~ 1 tile)
 DEAD_END = 100.0                             # the former weight (V units)
 DEAD_END_FRAMES = DEAD_END * FX_GROUND       # an end with T = +inf: T(start) + this
@@ -303,6 +310,8 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     last = len(worlds) - 1
     pp = model_prior(model)
     for k in range(K):
+        if CANCEL is not None and CANCEL.is_set():
+            raise PlanCancelled()
         wk = [worlds[min(o + k * f, last)] for o, _ in groups]     # each group's world this step (f = 1: o + k)
         if f > 1:
             features_into(Xf, groups, s, a_all[:, k, 0], dt_step, geom, wk)
@@ -1586,14 +1595,16 @@ class Planner:
 
     # ---- one decision ------------------------------------------------------------------------------------
     def plan(self, row, frame: int, worlds: list, frames: list, dt_ms: float = 16.667, agent: int = 0,
-             danger: bool = False, recorded: int | None = None) -> Plan:
+             danger: bool = False, recorded: int | None = None, defer: bool = False) -> Plan:
         """row: the agent's state (wm.buffer.ROW, one row; state_row builds one). worlds: at least H World
         (model inputs, index k = frame + k); frames: H + 1 plan.safety.FrameBoxes (index k = frame + k; index 0
         unused); for the airborne completion they should cover H + complete_max (Planner.future_frames: the
         last given ones are repeated beyond them). Returns the chosen Plan (also kept as this agent's previous
         plan). danger: the commit "danger" trigger fired (REFLEX runs; modes only). recorded: how many of the
         future frames 1.. come from the trusted hazard recording (future_inputs' third value; None unknown: the
-        best route is then judged by the model like every candidate)."""
+        best route is then judged by the model like every candidate). defer: the decision's effects on the planner
+        (previous plan, best-route use, route trial, surprise / move / failure memories) wait for
+        plan.commit_fn() (agent.py --async-plan: a plan made ahead counts only if it is adopted)."""
         t0 = time.perf_counter()
         f = self.f                                   # frames per model step; arrays are per step (column)
         H = -(-self.H // f) * f                      # frames, whole steps
@@ -1959,11 +1970,12 @@ class Planner:
         mode = getattr(prev, "mode", "normal") if best == prev_idx else modes3[best]
         if trial is not None:
             mode = "route-trial"
+        route_using = None                           # applied with the decision's other effects (apply below)
         if mode == "best-route" and route is not None and route["used"]:
             if not (best == prev_idx and agent in self.route.using):
-                self.route.using[agent] = (int(frame), route["frame"])
+                route_using = (int(frame), route["frame"])
         elif mode != "best-route":
-            self.route.using.pop(agent, None)
+            route_using = "drop"
         if ri is not None:
             er = early_risk(saf.sweep)
             if real is not None:
@@ -2077,19 +2089,45 @@ class Planner:
         plan.trial_frames = 0
         if trial is not None and mode == "route-trial":          # not overridden by the reflex
             plan.trial_frames = int(sum(b - a for nm, a, b in segs if nm != "pad"))
-            info = {k: v for k, v in trial.items() if k != "key"}
-            plan.route_trial = self.trials.start(agent, frame, trial["key"], plan.path, plan.trial_frames, info)
-        self.prev[agent] = plan
-        if not plan.from_prev:                       # a kept plan keeps the predictions of its adoption
-            self.surprise.add(plan)
-        if self.moves is not None:
-            self.moves.decided(agent, frame, cell0, plan.chosen[0] if plan.chosen else "pad", safe_alts,
-                               adopted=not plan.from_prev)
-        if T0_ok:                                    # judged by its own prediction when the agent comes back
-            key0 = self.state_key(cell0, bool(sup0[0]), float(row["vx"][0]) * dt_ms / 1000.0, float(vy0[0]))
-            self.memory.decided(agent, frame, key0, first_name[best], plan.chosen, T0, float(t_end3[best]),
-                                int(frames_used[best]))
+
+        def apply():                                 # the decision's effects on the planner's memories
+            if route_using == "drop":
+                self.route.using.pop(agent, None)
+            elif route_using is not None:
+                self.route.using[agent] = route_using
+            if plan.trial_frames:
+                info = {k: v for k, v in trial.items() if k != "key"}
+                plan.route_trial = self.trials.start(agent, frame, trial["key"], plan.path, plan.trial_frames, info)
+            self.prev[agent] = plan
+            if not plan.from_prev:                   # a kept plan keeps the predictions of its adoption
+                self.surprise.add(plan)
+            if self.moves is not None:
+                self.moves.decided(agent, frame, cell0, plan.chosen[0] if plan.chosen else "pad", safe_alts,
+                                   adopted=not plan.from_prev)
+            if T0_ok:                                # judged by its own prediction when the agent comes back
+                key0 = self.state_key(cell0, bool(sup0[0]), float(row["vx"][0]) * dt_ms / 1000.0, float(vy0[0]))
+                self.memory.decided(agent, frame, key0, first_name[best], plan.chosen, T0, float(t_end3[best]),
+                                    int(frames_used[best]))
+        if defer:
+            plan.commit_fn = apply
+        else:
+            apply()
         return plan
+
+    def predict_start(self, row, actions, worlds: list, dt_ms: float = 16.667):
+        """The agent's state after it plays `actions` (frames, a whole number of model steps) from `row`, as the
+        ensemble imagines it with the collision guard: the member row nearest the members' mean position, and
+        the members' largest distance from that mean (units). agent.py --async-plan plans from it while those
+        frames play. worlds: at least len(actions) World (index k = row's frame + k)."""
+        row = np.asarray(row, ROW).reshape(1)
+        acts = np.asarray(actions, np.int64).reshape(1, -1)
+        if acts.shape[1] % self.f:
+            raise ValueError(f"a prediction ahead needs whole model steps of {self.f} frames")
+        out = imagine(self.model, slice(None), self.geom, row, acts, dt_ms, worlds,
+                      **self.imagine_options(int(row["keys"][0])))
+        last = out["last"][:, 0]
+        d = np.hypot(last["x"] - last["x"].mean(), last["y"] - last["y"].mean())
+        return last[int(np.argmin(d))].reshape(1).copy(), float(d.max())
 
     # ---- planning modes -----------------------------------------------------------------------------------
     def _judge(self, out, frames, upto, leg, keys):

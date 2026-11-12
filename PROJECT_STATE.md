@@ -1,5 +1,42 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Planning in parallel: agent.py --async-plan (2026-11-12; simulated, not run live)
+
+**Why.** A decision costs about 100 ms, the game waits for it, and one comes about every 7 frames. The user's 1-14 / 1-15 run played at 0.56x real time.
+- Fewer candidates barely helps. On 30 recorded 1-15 decisions, the median was 101.5 ms at 8/16/16 (stage-1 keep / branch / final) and 79 ms at 4/8/6. The cost is in about 40 model steps per decision, each spent mostly in per-step Python and numpy work.
+- One pure win was committed (adacac5): the key-pickup path returns at once on a level without keys. Decisions stay identical and the median fell from 114.7 to 101.5 ms.
+- A GPU would not help: the model is small, and the time goes to Python.
+
+**Design** (`plan/worker.py`, `agent.py`):
+- **The planner process.** With `--async-plan` the planner, with its memories, runs in a child process (`PlannerProcess`, spawn).
+  - A background thread was tried first and dropped. The GIL made its plans twice as slow (186 vs 92 ms), and the waits made the game slower than synchronous play.
+  - Every planner call goes through one ordered pipe: observe, played, the frame's level changes, finished, new_wave and plans. Observations sent while a plan is being made therefore wait for it.
+  - The game loop keeps its own Planner for geometry only (support, bounds, terrain).
+- **Planning ahead.**
+  - When the committed plan's next timed decision (`Committer.due`: interval, move end, short) is a whole number of model steps away and at most `--async-lead` frames (default 8), the child starts it.
+  - It plans from the state the committed actions are imagined to reach (`Planner.predict_start`: the ensemble member nearest the mean) with this frame's future shifted, and with `plan(defer=True)`: previous plan, route use, route trial, surprise / move / failure memories wait for `Plan.commit_fn`.
+- **At the target frame.** The plan is used only if:
+  - no trigger other than a timed one fired;
+  - the real start is within `MIN_TUBE` (3 units) and `ASYNC_DV` (0.5 units/frame) of the predicted one.
+  
+  Its path and predictions are then moved onto the real start. Otherwise it is discarded and the decision is made synchronously as before.
+- **Calling a plan off.** An earlier trigger, a death, a finish, a wave end or a level change calls it off: `plan.planner.CANCEL` makes `imagine()` stop at its next model step.
+- **Limits.** Not with `--eval-first`, explore agents, `--search`, `--demo`, or more than one planned agent. `--learn` model swaps are not forwarded to the child.
+
+**Simulated** (`runs/experiments/async_plan_v1/simulate.py`): the Runner is driven with a recorded wave's hazards; `runs/wm_locked` stands in for the game's physics; the game's frame is slept as 12 ms.
+
+| Level, setting | Speed | Runner time per frame, p90 | Decisions planned ahead / total |
+|---|---|---|---|
+| 1-14, synchronous | 0.51x | 81 ms | – |
+| 1-14, async, replan 8 | 0.70x | 11 ms | 36/42 |
+| 1-14, async, replan 12 + lead 12 | 0.78-0.80x | 6-7 ms | 21-24/29 |
+| 1-15, async | about 0.46-0.48x | – | 7-15 |
+
+- On 1-14 the agent ends at the same place with the same trigger mix in both modes.
+- On 1-15 the stand-in model disagrees with the planner's on jumps, so many 12-frame predictions are off by more than 3 units and those decisions stay synchronous. The real 1-15 followed errors are a median of 1.8 units at +8 and 3.4 at +16.
+- Tests: `tests/test_async_plan.py` covers due, deferred effects, ordering in the child, commit and cancel. Full suite: 376 passed, excluding the known `test_cling_rule_fast_falls_are_not_support` failure.
+- Not run against the game.
+
 ## Shots not yet fired, recorded shots, and the A+ target (2026-11-12; offline, uncommitted)
 
 **Diagnosis on 1-15** (`runs/capture_2-14_route_check01`, the user's run with the `wm_step4` model):
