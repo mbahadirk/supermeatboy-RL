@@ -34,6 +34,7 @@
 
 - On 1-14 the agent ends at the same place with the same trigger mix in both modes.
 - On 1-15 the stand-in model disagrees with the planner's on jumps, so many 12-frame predictions are off by more than 3 units and those decisions stay synchronous. The real 1-15 followed errors are a median of 1.8 units at +8 and 3.4 at +16.
+- **Also (2eaec20):** the per-frame danger check builds only the deadly boxes (`future_inputs(deadly_only=True)`), with boxes identical to before. Simulated 1-14 async went from 0.70x to 0.72x, with a runner p90 of 9 ms. This applies to synchronous play too.
 - Tests: `tests/test_async_plan.py` covers due, deferred effects, ordering in the child, commit and cancel. Full suite: 376 passed, excluding the known `test_cling_rule_fast_falls_are_not_support` failure.
 - Not run against the game.
 
