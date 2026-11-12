@@ -1,5 +1,25 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Planning without making the game wait: --async-wait danger (2026-11-13; simulated, not run live)
+
+**Why.** In shots_1-15_check01 a decision took a median 86-119 ms and came every 6 frames: 16-21 ms of planning per frame against the game's own 12.6 ms, so 0.41-0.50x. --async-plan alone did not help on 1-17 (0.41x): any trigger other than a timed one dropped the plan made ahead and waited for a new one (2298 dropped, 489 used).
+
+**Rule** (`agent.py`, default with `--async-plan`; `--async-wait all` is the old behaviour):
+- The game waits for a decision only on a **danger** trigger and when the agent has no plan (`WAIT_KINDS`).
+- Any other trigger (surprise, support, missed, interval, move end) starts a background plan for `--async-lead` frames later, from the state the committed plan's next actions are imagined to reach. The committed plan plays on meanwhile. Triggers that fire while it is being made are absorbed (`ahead_absorbed` in the wave event).
+- At its frame the plan is adopted when the real start is within the surprise tube at that lead (the error the surprise rule itself allows a prediction of that age; 3 units before) and `ASYNC_DV`. Otherwise another background plan starts; after `ASYNC_MISSES` = 2 misses in a row the next decision waits, from the real state.
+- Cost: the reaction to a surprise comes `--async-lead` frames (8 = 133 ms) later.
+
+**Simulation** (`runs/experiments/async_plan_v1/simulate.py`, env `MODES=sync,all,danger`, `LEAD`, `DATA`, `LEVEL_NAME`; game frame simulated as 12 ms; the stand-in physics is runs/wm_locked, so outcomes are not comparable, only speed):
+
+| Level | sync | wait all | wait danger | wait danger, lead 12 |
+|---|---|---|---|---|
+| 1-14 (400 f) | 0.53x | 0.74x | 0.76x | 0.81x |
+| 1-15 | 0.42x | 0.42x | 0.67x | 0.76x |
+| 1-17 | 0.31x | 0.32x | 0.66x | 0.75x |
+
+Python per frame fell to a median 3.4 ms (1-14); what is left is waiting for a plan that is not ready at its frame (a plan takes about 100 ms, 8 frames of game are about 125 ms) and the decisions that still wait. In the 1-17 simulation 39 of 49 background plans missed their start (the stand-in model's wall moves differ from the planner's); in the real 1-17 run the followed error at +8 was a median 3.2 units against a tube of about 7.5.
+
 ## The progress line in the viewer, and the 1-17 stall (2026-11-13)
 
 **Progress line (viz/viewer.py, P key).** The agent's progress is the time field T (plan/progress.py): frames to the goal from every cell, by Dijkstra on realpath's move graph. It is a field, not a line. The line it implies is drawn:

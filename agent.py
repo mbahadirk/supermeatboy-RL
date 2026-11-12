@@ -278,14 +278,22 @@ ASYNC_LEAD = 8          # frames: --async-plan starts the next timed decision th
 # (commit.MIN_TUBE units) and this speed (units / frame); farther, its path broke the surprise check within 2-4
 # frames in the simulated 1-15 runs (runs/experiments/async_plan_v1)
 ASYNC_DV = 0.5
+# --async-wait danger (the default): the game waits for a decision only on a danger trigger and when the agent
+# has no plan; every other trigger's decision is made in the background for ASYNC_LEAD frames later while the
+# committed plan plays on, and is used from a start within the surprise tube at that many frames (the error the
+# surprise rule itself allows a prediction of that age). After ASYNC_MISSES such plans in a row started too far
+# off, the next decision is made at once (waiting), from the real state.
+ASYNC_MISSES = 2
+WAIT_KINDS = ("danger", "start")
 
 
 class AheadJob:
     """A decision being planned ahead in the planner process (agent.py --async-plan): the call's id, the agent,
     the frame it started at, the frame it is for (target) and the deadly boxes from the target on."""
 
-    def __init__(self, mid: int, agent: int, start: int, target: int, fboxes):
+    def __init__(self, mid: int, agent: int, start: int, target: int, fboxes, why=()):
         self.mid, self.agent, self.start, self.target, self.fboxes = int(mid), int(agent), int(start), int(target), fboxes
+        self.why = list(why)                    # the triggers it answers ([]: the next timed decision)
 
 
 class FrameCost:
@@ -512,6 +520,8 @@ class Runner:
             print(f"[async] --async-plan is off: {why_not}", flush=True)
             self.async_on = False
         self.async_lead = int(getattr(args, "async_lead", ASYNC_LEAD))
+        self.nowait = self.async_on and getattr(args, "async_wait", "danger") == "danger"
+        self.ahead_miss = 0                     # plans made ahead in a row that started too far off
         self.ajob = None                        # the plan being made ahead (AheadJob) or None
         self.proc = None                        # plan.worker.PlannerProcess: the planner with its memories
         self.proc_ready = False                 # the process has its Planner (build_field: init)
@@ -519,7 +529,8 @@ class Runner:
             from plan.worker import PlannerProcess
             self.proc = PlannerProcess(args.threads)
             print(f"[async] planner process started (pid {self.proc.proc.pid}); decisions planned "
-                  f"{self.async_lead} frames ahead", flush=True)
+                  f"{self.async_lead} frames ahead; the game waits "
+                  + ("only for danger decisions" if self.nowait else "for every decision not planned ahead"), flush=True)
         self.deaths_path = args.death_memory
         self.deaths = S.DeathMemory() if first else S.DeathMemory.load(self.deaths_path)
         mm = getattr(args, "move_memory", DEFAULT_MOVES)
@@ -913,8 +924,18 @@ class Runner:
                 s = states[i]
                 tr = self.commit.triggers(i, frame, float(s[0]), float(s[1]), int(s[7]) if len(s) > 7 else 0, tiles,
                                           pl, fboxes_now)
-                if self.ajob is not None and self.ajob.agent == i and (tr or frame >= self.ajob.target):
-                    tr = self.ahead_take(i, frame, s, tr)
+                j = self.ajob
+                wait = (not self.nowait or self.cur_plan.get(i) is None or self.ahead_miss >= ASYNC_MISSES
+                        or any(kind_of(t) in WAIT_KINDS for t in tr))
+                if j is not None and j.agent == i:
+                    if frame >= j.target or (tr and wait):
+                        tr = self.ahead_take(i, frame, s, tr)
+                    elif tr:                            # the plan being made answers it: the committed one plays on
+                        self.st["ahead_absorbed"] = self.st.get("ahead_absorbed", 0) + 1
+                        tr = []
+                if tr and not wait and self.ajob is None and self.ahead_miss < ASYNC_MISSES and \
+                        self.ahead_start(i, frame, s, held_before[i], dt, frame + self.async_lead, tr):
+                    tr = []                             # decided in the background, for async_lead frames on
                 if tr:
                     need[i] = tr
             self.st["agent_frames"] += len(live_plan)
@@ -948,6 +969,7 @@ class Runner:
                         return {"a": [NOOP] * n, "leader": 0, "stop": True}
                     continue
                 self.cur_plan[i] = plan
+                self.ahead_miss = 0
                 self.commit.decided(i, plan, frame, fboxes, pl)
                 self.on_plan(plan, s, trig)
                 ev = getattr(plan, "route_trial", None)
@@ -1111,22 +1133,26 @@ class Runner:
         self.proc.call("ping")
         self.proc_events()
 
-    def ahead_start(self, i: int, frame: int, s, held: int, dt: float):
-        """Start planning agent i's next timed decision (Committer.due) in the planner process when it is a whole
-        number of model steps away and at most --async-lead frames: from the state its committed plan's actions
-        are imagined to reach then (Planner.predict_start), with this frame's view of the future shifted."""
-        p, due, pl, lv = self.cur_plan.get(i), self.commit.due(i), self.planner, self.level
+    def ahead_start(self, i: int, frame: int, s, held: int, dt: float, target: int | None = None, why=()) -> bool:
+        """Start planning a decision of agent i in the planner process: its next timed one (Committer.due), or
+        the one for frame `target` that answers the triggers `why` (--async-wait danger). Only a whole number of
+        model steps away, at most --async-lead frames, within the committed plan's actions: from the state those
+        actions are imagined to reach then (Planner.predict_start), with this frame's view of the future shifted.
+        True when it started."""
+        p, pl, lv = self.cur_plan.get(i), self.planner, self.level
+        due = self.commit.due(i) if target is None else target
         if p is None or due is None or pl is None or lv is None or self.proc is None:
-            return
+            return False
         d = due - frame
         k0 = frame - p.frame
         if d < pl.f or d > self.async_lead or d % pl.f or k0 < 0 or k0 + d > len(p.actions):
-            return
+            return False
         worlds, fboxes, rec = future_inputs(self.fw, frame, pl.future_frames + d, dt, lv.name, self.deaths)
         row = state_row(s[0], s[1], s[2], s[3], s[4], s[5], s[7] if len(s) > 7 else 0, held)
         prefix = np.asarray(p.actions[k0:k0 + d], np.int64)
         mid = self.proc.send("plan_ahead", row, prefix, worlds, fboxes, d, due, dt, i, rec, keep=True)
-        self.ajob = AheadJob(mid, i, frame, due, fboxes[d:])
+        self.ajob = AheadJob(mid, i, frame, due, fboxes[d:], why)
+        return True
 
     def ahead_take(self, i: int, frame: int, s, tr: list) -> list:
         """At the job's frame: its plan becomes the committed one when it was made, no trigger other than a timed
@@ -1141,8 +1167,12 @@ class Runner:
         ok, res = self.proc.result(j.mid)
         self.st["ahead_wait_ms"] = self.st.get("ahead_wait_ms", 0.0) + 1000 * (time.perf_counter() - t)
         self.ajob = None
-        urgent = [t_ for t_ in tr if kind_of(t_) not in ("interval", "move end", "short")]
+        # --async-wait danger: the plan was made as the answer to every trigger but danger; its start may be as
+        # far off as the surprise rule lets a prediction of that age be
+        urgent = [t_ for t_ in tr if (kind_of(t_) in WAIT_KINDS if self.nowait else
+                                      kind_of(t_) not in ("interval", "move end", "short"))]
         lead = j.target - j.start
+        tube = max(self.commit.tube_factor * self.commit.tube.at(lead), MIN_TUBE) if self.nowait else MIN_TUBE
         off = None
         if not ok:
             reason = f"planning error: {str(res).splitlines()[0]}"
@@ -1152,14 +1182,16 @@ class Runner:
             plan, px, py, spread, pvx, pvy = res
             off = math.hypot(float(s[0]) - px, float(s[1]) - py)
             dv = math.hypot(float(s[2]) - pvx, float(s[3]) - pvy) * self.dt_ms / 1000.0     # units / frame
-            reason = (f"start off by {off:.1f} > {MIN_TUBE:g} units" if off > MIN_TUBE else
+            reason = (f"start off by {off:.1f} > {tube:.1f} units" if off > tube else
                       f"start speed off by {dv:.2f} > {ASYNC_DV:g} units/frame" if dv > ASYNC_DV else None)
         if reason is not None:
             if ok:
                 self.proc.send("discard", j.mid)
             self.st["ahead_dropped"] = self.st.get("ahead_dropped", 0) + 1
+            if not urgent:
+                self.ahead_miss += 1
             self.event("ahead dropped", frame, agent=i, reason=reason, started=j.start)
-            return tr or [f"ahead dropped: {reason}"]
+            return tr or j.why or [f"ahead dropped: {reason}"]
         trial_ev = self.proc.call("commit", j.mid)
         if trial_ev:
             plan.route_trial = trial_ev
@@ -1167,9 +1199,10 @@ class Runner:
         plan.path = [[x + dx, y + dy] for x, y in plan.path]           # checks here follow the real agent)
         plan.predictions = {h: [v[0] + dx, v[1] + dy] for h, v in plan.predictions.items()}
         self.st["ahead_used"] = self.st.get("ahead_used", 0) + 1
+        self.ahead_miss = 0
         self.cur_plan[i] = plan
         self.commit.decided(i, plan, frame, j.fboxes, self.planner)
-        self.on_plan(plan, s, tr or ["due"], ahead={"lead": lead, "start_off": round(off, 2),
+        self.on_plan(plan, s, j.why or tr or ["due"], ahead={"lead": lead, "start_off": round(off, 2),
                                                     "speed_off": round(dv, 3), "spread": round(spread, 2)})
         if trial_ev:
             self.event(trial_ev["kind"], frame, **{a: b for a, b in trial_ev.items() if a not in ("kind", "frame")})
@@ -1858,6 +1891,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "game plays, from the state the committed plan is imagined to reach; adopted when the real "
                          "state is within the surprise tube of it and no other trigger fired, else decided as before "
                          "(one planned agent, no explore agents, not with --eval-first / --search / --demo)")
+    ap.add_argument("--async-wait", choices=("danger", "all"), default="danger",
+                    help="--async-plan: danger (default) = the game waits only for a danger decision (and the first "
+                         "one); any other trigger's decision is made in the background for --async-lead frames later "
+                         "while the committed plan plays on. all = every decision not planned ahead is waited for")
     ap.add_argument("--async-lead", type=int, default=ASYNC_LEAD,
                     help=f"--async-plan: frames ahead a decision starts (whole model steps; default {ASYNC_LEAD})")
     ap.add_argument("--route-trial-gain", type=float, default=TRIAL_GAIN,
