@@ -186,6 +186,11 @@ class LockContext:
         prefix = xs.shape[:-1]
         mask = np.broadcast_to(np.asarray(initial, np.uint32), prefix).copy()
         count = (xs.shape[-1] - 1) * int(step)
+        if not self.keys:                     # nothing to pick up: every mask stays the initial one
+            for owned in np.unique(mask):
+                self.opened_cells(owned)
+            return (np.repeat(mask[..., None], count + 1, axis=-1),
+                    np.full(prefix + (0,), -1, np.int64))
         limit = np.broadcast_to(count if upto is None else upto, prefix)
         masks = np.empty(prefix + (count + 1,), np.uint32)
         first = np.full(prefix + (len(self.keys),), -1, np.int64)
