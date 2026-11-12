@@ -548,3 +548,67 @@ def _reach(n, src, dst, seeds) -> np.ndarray:
         seen[nxt] = True
         front = nxt
     return seen
+
+
+# ---- display (viz/viewer.py: the P key) -------------------------------------------------------------------------
+def best_times(field: ProgressField) -> np.ndarray:
+    """(n_legs, H, W) float32: per cell the smallest of T_support, T_rise and T_fall, the frames to the goal from
+    the cell's best state (+inf in walls and where the goal cannot be reached). What the viewer draws."""
+    return np.minimum(field.T_support, np.minimum(field.T_rise, field.T_fall)).astype(np.float32)
+
+
+def leg_of_keys(key_order, keys_mask: int) -> int:
+    """ProgressField.leg_of for one agent, from the key order alone (the viewer has no field object)."""
+    leg = 0
+    for ks in key_order:
+        if not any((int(keys_mask) >> int(k)) & 1 for k in ks):
+            break
+        leg += 1
+    return leg
+
+
+def descent_path(tbest, ox: float, oy: float, x: float, y: float, leg: int = 0, max_steps: int = 2000) -> list:
+    """The line the field leads along from a point: from its cell, step by step to the neighbour (8 around, not
+    diagonally between two walls) with the smallest best_times value, while that is smaller; at a leg's key
+    cell the next leg's table goes on to the goal. Every cell's best state has a move to a neighbour state whose
+    value is lower by the move's frames, so each step lowers the value and the line ends at the goal (or a key
+    the last leg cannot leave). [(x, y, frames to go)] at cell centres, game units; [] where the point is
+    outside the map or in a cell with no way to the goal."""
+    tb = np.asarray(tbest)
+    n_legs, H, W = tb.shape
+    leg = int(np.clip(leg, 0, n_legs - 1))
+    c = int(math.floor((x - ox) / TILE))
+    r = int(math.floor((y - oy) / TILE))
+    if not (0 <= c < W and 0 <= r < H):
+        return []
+    t = tb[leg]
+    if not np.isfinite(t[r, c]):                     # in a wall or a dead end: the best neighbour to start
+        best = None
+        for dc, dr in DIRS:
+            nc, nr = c + dc, r + dr
+            if 0 <= nc < W and 0 <= nr < H and np.isfinite(t[nr, nc]) and (best is None or t[nr, nc] < t[best[1], best[0]]):
+                best = (nc, nr)
+        if best is None:
+            return []
+        c, r = best
+    out = [(ox + (c + 0.5) * TILE, oy + (r + 0.5) * TILE, float(t[r, c]))]
+    for _ in range(max_steps):
+        cur = t[r, c]
+        best, bv = None, cur
+        for dc, dr in DIRS:
+            nc, nr = c + dc, r + dr
+            if not (0 <= nc < W and 0 <= nr < H):
+                continue
+            if dc and dr and not (np.isfinite(t[r, nc]) or np.isfinite(t[nr, c])):
+                continue
+            if t[nr, nc] < bv:
+                best, bv = (nc, nr), t[nr, nc]
+        if best is None:                             # a key cell (or the goal): the next leg, if any
+            if leg + 1 < n_legs and np.isfinite(tb[leg + 1][r, c]):
+                leg += 1
+                t = tb[leg]
+                continue
+            break
+        c, r = best
+        out.append((ox + (c + 0.5) * TILE, oy + (r + 0.5) * TILE, float(bv)))
+    return out

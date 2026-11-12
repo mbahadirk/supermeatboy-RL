@@ -1,5 +1,27 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## The progress line in the viewer, and the 1-17 stall (2026-11-13)
+
+**Progress line (viz/viewer.py, P key).** The agent's progress is the time field T (plan/progress.py): frames to the goal from every cell, by Dijkstra on realpath's move graph. It is a field, not a line. The line it implies is drawn:
+- `plan.progress.best_times(field)` is the per-cell minimum of T_support / T_rise / T_fall. `descent_path` walks from the agent's cell to the neighbour with the lowest value until the goal, leg by leg through the keys. Each step strictly lowers the value, because every state has a move to a state lower by the move's frames.
+- agent.py sends it in the level message's `"progress"` (float16, dropped after `"words"` when too big) and saves `runs/<name>/fields/<level>.npz` for replays.
+- P cycles through three views: the line (cyan, ticks every 60 frames to go) plus the field's route from the spawn (orange); then also a heat map; then off. The panel shows the frames to the goal from the agent.
+- For older runs, `runs/experiments/progress_view_v1/build_fields.py RUN LEVEL...` builds approximate offline fields. They have no kill-box outside cells or sealed pockets.
+
+**What shots_1-15_check01 actually shows** (sync, 416 waves):
+- **1-15:** 52 finishes in 123 waves, the first at wave 14. 47 were under A+ (10.0 s); the best was 8.32 s. All 70 deaths were shots.
+- **1-16:** 25 finishes in 29 waves, all under A+ (9.0 s); the best was 5.10 s.
+- **1-17:** 264 waves and 0 finishes. 259 waves timed out after 1200 frames, and from wave 6 on every wave is the same frame for frame: the field reaches T = 149 and stops at (72, -434).
+- The async run `async_1-15_check01` played only 1-17: 19 waves, 0 finishes, speed 0.41x against 0.50x synchronous. 489 ahead plans were used and 2298 dropped, mostly to surprise and support triggers near walls.
+
+**1-17 causes (found, not fixed).**
+- **h5 is a saw circling a block:** centre about (30, -350), radius about 60, period 100 frames.
+- **First life:** `_BoxRun` needs two periods (200 frames) to verify a period. Until then the saw is extrapolated linearly, which is wrong for an orbit (86° of turn in 24 frames). Its predicted clearance jumped between decisions (103 -> 16 -> 101 -> 41 units). All 5 deaths came in reflex mode with every candidate vetoed 4-12 frames ahead: the agent had been cornered.
+- **The stall** (trusted recording, so the saw is known): the chosen plans' T at the end (median 186) is above T at the start (176). 432 rejected alternatives were "no progress", and the progress-making ones "hit h5 at frame 8-16".
+  - The hard veto is contact by ANY of the 5 members within 16 frames, so tight passes near the saw are vetoed.
+  - Wall moves in the right shaft surprise often ("support: on a wall", +1 error 1-3 units), and the agent dithers: 82 switches against 116 kept.
+  - Waves are deterministic and a timeout charges nothing, so the same 1200 frames repeat forever.
+
 ## Planning in parallel: agent.py --async-plan (2026-11-12; simulated, not run live)
 
 **Why.** A decision costs about 100 ms, the game waits for it, and one comes about every 7 frames. The user's 1-14 / 1-15 run played at 0.56x real time.

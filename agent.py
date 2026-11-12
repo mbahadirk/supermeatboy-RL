@@ -565,6 +565,8 @@ class Runner:
         self.planner_level = None
         self.field = None                       # the level's progress field (the search's T)
         self.field_summary = None
+        self.field_builds = 0
+        self.progress_msg = None                # telemetry "progress" (viz/telemetry.py) of the current field
         self.fw = FutureWorld()
         self.protected = False
         self.script = None
@@ -660,6 +662,7 @@ class Runner:
         self.commit.tube.refresh()                 # the surprise threshold, fixed for this level
         self.hz_start, self.moving, self.sweep = None, set(), set()
         self.field_built, self.field_dirty, self.rebuilds = False, False, 0
+        self.progress_msg = None
         self.lt_changes = 0
         self.wave_no = 0
         kb = lv.kill_box
@@ -739,6 +742,19 @@ class Runner:
                               outside=lv.outside_cells if lv.kill_box is not None else None)
         self.field_summary = field.summary()
         self.field = field
+        self.field_builds += 1
+        self.progress_msg = None
+        try:                                    # the viewer's progress line (P): sent with the level, kept for replay
+            from plan.progress import best_times
+            tb = best_times(field)
+            self.progress_msg = T.progress_payload(tb, field.route_cells, field.key_order, self.field_builds)
+            fdir = os.path.join(self.run_dir, "fields")
+            os.makedirs(fdir, exist_ok=True)
+            np.savez_compressed(os.path.join(fdir, f"{lv.name}.npz"), T=tb.astype(np.float16),
+                                route=np.asarray(field.route_cells, np.int64).reshape(-1, 2),
+                                key_order=json.dumps(field.key_order), ox=lv.ox, oy=lv.oy)
+        except Exception as e:                  # display only: never stops the agent
+            print(f"[field] progress display not saved: {type(e).__name__}: {e}", flush=True)
         if self.model is not None:
             if self.planner is None:
                 self.planner = Planner(self.model, lv, field, budget_ms=self.args.budget_ms,
@@ -782,7 +798,8 @@ class Runner:
         if self.tel is None or self.level is None:
             return
         self.level_sent = time.time()
-        self.tel.send(T.level_message(self.level, self.wave_no, self.n_plan, self.n_explore, self.field_summary))
+        self.tel.send(T.level_message(self.level, self.wave_no, self.n_plan, self.n_explore, self.field_summary,
+                                    progress=self.progress_msg))
 
     # ---- one frame ---------------------------------------------------------------------------------------------
     def on_frame(self, m: dict, data=None) -> dict:

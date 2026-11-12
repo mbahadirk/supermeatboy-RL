@@ -33,7 +33,12 @@ what triggered it and whether the committed plan was kept or switched, with the 
 and "switch"; older runs without them show "-"). The replay's timeline marks every decision of the planned
 agents (short ticks at its bottom: orange where the plan was switched, grey otherwise).
 
-Keys: Tab next planned agent, H help, A alternatives, F future hazards, Z zoom on the selected agent (mouse wheel or
+P (progress field, plan/progress.py: frames to the goal per cell): first press the line the field leads along from
+the selected agent to the goal (cyan, ticks every 60 frames to go; through its remaining keys) and the field's route
+from the spawn (orange), second press also the heat map of frames to go (bright near the goal), third off. Live
+from the level message's "progress"; replay from runs/<name>/fields/<level>.npz (runs from now on).
+
+Keys: Tab next planned agent, H help, A alternatives, F future hazards, P progress field, Z zoom on the selected agent (mouse wheel or
 [ / ] zoom in / out), S screenshot (replay: into the run folder; live: the current folder), Esc / Q quit. Replay: Space play / pause, Left / Right one step, + / - speed,
 N next event, D next surprise or unexplained death, Home / End, click the timeline to seek.
 """
@@ -107,6 +112,11 @@ KILLBOX = (220, 90, 90)
 ALIVEBOX = (90, 92, 110)
 PLAN = (40, 225, 70)
 PLAN_DONE = (30, 120, 45)
+PROGRESS_LINE = (70, 230, 255)    # P: the progress field's line from the selected agent
+PROGRESS_ROUTE = (255, 150, 40)   # the field's route from the spawn
+PROGRESS_NEAR, PROGRESS_FAR = (255, 230, 90), (40, 60, 150)    # heat map: few / many frames to go
+PROGRESS_ALPHA = 110
+PROGRESS_TICK = 60                # frames to go between the line's ticks
 # the chosen path in its planning mode's colour (plan/planner.py MODES; agent.py MODE_COL in the game)
 MODE_COLORS = {"long-safe": (64, 128, 255), "normal": PLAN, "reflex": (255, 48, 48), "explore": (176, 64, 240),
                "best-route": (255, 192, 32)}
@@ -132,7 +142,7 @@ def unpack(s, dtype, shape):
         return None
     try:
         a = np.frombuffer(zlib.decompress(base64.b64decode(s)), dtype)
-        return a.reshape(shape) if a.size == shape[0] * shape[1] else None
+        return a.reshape(shape) if a.size == int(np.prod(shape)) else None
     except (ValueError, zlib.error, TypeError):
         return None
 
@@ -192,6 +202,35 @@ def matured_predictions(plans: list, real_at, now: int, max_age: int = MATURED_M
     return out
 
 
+def decode_progress(p, H: int, W: int) -> dict | None:
+    """A level message's "progress" (viz/telemetry.py) -> {"id", "T": (legs, H, W) float32, "route": [(c, r)],
+    "key_order"}, or None (absent or unreadable)."""
+    if not p:
+        return None
+    try:
+        n = int(p["legs"])
+        tb = unpack(p["T"], "<f2", (n, H, W))
+        if tb is None:
+            return None
+        return {"id": p.get("id"), "T": tb.astype(np.float32), "route": [tuple(x) for x in p.get("route") or []],
+                "key_order": [list(k) for k in p.get("key_order") or []]}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def load_progress(path: str, H: int, W: int) -> dict | None:
+    """agent.py's runs/<name>/fields/<level>.npz (the level's last progress field) as decode_progress gives it."""
+    try:
+        z = np.load(path)
+        tb = np.asarray(z["T"], np.float32)
+        if tb.ndim != 3 or tb.shape[1:] != (H, W):
+            return None
+        return {"id": os.path.getmtime(path), "T": tb, "route": [tuple(int(v) for v in x) for x in z["route"]],
+                "key_order": json.loads(str(z["key_order"]))}
+    except Exception:
+        return None
+
+
 def resolve_run(arg: str, runs_dir: str = RUNS) -> str:
     """--replay argument -> run folder: 'latest' = the newest runs/plan_* folder (by name: plan_<date>-<time>);
     else a path as given, or a folder name under runs/."""
@@ -247,6 +286,7 @@ class LevelView:
     goal_boxes: list = field(default_factory=list)    # [x, y, hw, hh, angle]: touched within BODY (planner)
     key_boxes: list = field(default_factory=list)
     _shape_cells: list | None = field(default=None, repr=False, compare=False)
+    progress: dict | None = field(default=None, repr=False, compare=False)   # decode_progress()
 
     def shape_cells(self) -> list:
         """Half blocks and slopes [(r, c, kind, ox, oy)] (realpath.tile_shape): drawn as their solid part only.
@@ -292,7 +332,8 @@ class LevelView:
                        [tuple(b) for b in m.get("bandages") or []], m.get("portals") or [],
                        int(ag.get("planned", 0)), int(ag.get("explore", 0)), m.get("field"),
                        (m.get("name"), W, H, ox, oy, hash(m.get("solid")), m.get("words") is not None),
-                       [list(b) for b in m.get("goal_boxes") or []], [list(b) for b in m.get("key_boxes") or []])
+                       [list(b) for b in m.get("goal_boxes") or []], [list(b) for b in m.get("key_boxes") or []],
+                       progress=decode_progress(m.get("progress"), H, W))
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -595,7 +636,7 @@ class LiveSource:
         if t == "level":
             if self.level_msg is None or msg.get("solid") != self.level_msg.get("solid") or \
                     msg.get("name") != self.level_msg.get("name") or msg.get("kill_box") != self.level_msg.get("kill_box") \
-                    or (msg.get("words") and not self.level_msg.get("words")):
+                    or (msg.get("words") and not self.level_msg.get("words"))                     or (msg.get("progress") or {}).get("id") != (self.level_msg.get("progress") or {}).get("id"):
                 lv = LevelView.from_message(msg)
                 if lv is not None:
                     self.level = lv
@@ -779,7 +820,11 @@ class ReplaySource:
             m = T.level_message(lv, 0, len(self.planned), 0)
             m["kill_box"] = list(kb) if kb else None
             m["alive_box"] = list(alive_box(lv.ox, lv.oy, lv.W, lv.H, kb))
-            cache[key] = LevelView.from_message(T.decode(T.encode(m)))
+            v = LevelView.from_message(T.decode(T.encode(m)))
+            fp = os.path.join(self.run_dir, "fields", f"{name}.npz")
+            if v is not None and os.path.exists(fp):
+                v.progress = load_progress(fp, v.H, v.W)
+            cache[key] = v
         return cache[key]
 
     def _load_world(self) -> dict:
@@ -932,6 +977,11 @@ class Renderer:
         self.show_alts = True
         self.show_future = True
         self.show_help = False
+        self.show_progress = 0                  # P: 0 off, 1 the progress line, 2 the line and the field's heat map
+        self._heat = None                       # (key, small heat surface) / (key, scaled visible part)
+        self._heat_scaled = None
+        self._descent = None                    # (key, line) of the last drawn agent
+        self.progress_note = None               # the panel's progress line (draw_progress)
         self.sel = None
         self.mouse = None
         self.zoom = 1.0                         # 1 = the whole level
@@ -991,6 +1041,8 @@ class Renderer:
             clip = surf.get_clip()
             surf.set_clip(pg.Rect(rect))
             self.draw_map(surf, scene, m, rect)
+            if self.show_progress:
+                self.draw_progress(surf, scene, m, rect, sel)
             plan = scene.plans.get(sel) if sel is not None else None
             if plan is not None and plan.get("path"):
                 self.draw_plan(surf, scene, m, plan, sel)
@@ -1024,21 +1076,9 @@ class Renderer:
         if self._small is None or self._small[0] != lv.key:
             self._small = (lv.key, pg.surfarray.make_surface(lv.colours()))
             self._tiles = None
-        wx0, wy1 = m.world(rect[0], rect[1])
-        wx1, wy0 = m.world(rect[0] + rect[2], rect[1] + rect[3])
-        c0, c1 = max(0, math.floor((wx0 - lv.ox) / TILE)), min(lv.W, math.ceil((wx1 - lv.ox) / TILE))
-        r0, r1 = max(0, math.floor((wy0 - lv.oy) / TILE)), min(lv.H, math.ceil((wy1 - lv.oy) / TILE))
-        if c0 >= c1 or r0 >= r1:
-            return
-        ax, ay = m.pt(lv.ox + c0 * TILE, lv.oy + r1 * TILE)
-        bx, by = m.pt(lv.ox + c1 * TILE, lv.oy + r0 * TILE)
-        ax, ay, bx, by = (int(round(v)) for v in (ax, ay, bx, by))
-        key = (lv.key, c0, c1, r0, r1, bx - ax, by - ay)
-        if self._tiles is None or self._tiles[0] != key:
-            sub = self._small[1].subsurface((c0, lv.H - r1, c1 - c0, r1 - r0))
-            self._tiles = (key, pg.transform.scale(sub, (max(1, bx - ax), max(1, by - ay))))
-        surf.blit(self._tiles[1], (ax, ay))
+        self._tiles = self.blit_grid(surf, lv, m, rect, self._small, self._tiles)
         from realpath import solid_polygon
+        c0, c1, r0, r1 = self.visible_cells(lv, m, rect)
         for r, c, kind, ox, oy in lv.shape_cells():    # half blocks and slopes: only their solid part
             if not (c0 <= c < c1 and r0 <= r < r1):
                 continue
@@ -1047,6 +1087,95 @@ class Renderer:
                 continue
             x0, y0 = lv.ox + c * TILE, lv.oy + r * TILE
             pg.draw.polygon(surf, col, [m.pt(x0 + u * TILE, y0 + v * TILE) for u, v in solid_polygon(kind, ox, oy)])
+
+    def visible_cells(self, lv: LevelView, m: Mapper, rect):
+        wx0, wy1 = m.world(rect[0], rect[1])
+        wx1, wy0 = m.world(rect[0] + rect[2], rect[1] + rect[3])
+        c0, c1 = max(0, math.floor((wx0 - lv.ox) / TILE)), min(lv.W, math.ceil((wx1 - lv.ox) / TILE))
+        r0, r1 = max(0, math.floor((wy0 - lv.oy) / TILE)), min(lv.H, math.ceil((wy1 - lv.oy) / TILE))
+        return c0, c1, r0, r1
+
+    def blit_grid(self, surf, lv: LevelView, m: Mapper, rect, small, cached, colorkey=None, alpha=None):
+        """Blit the visible part of a 1-pixel-per-tile surface small = (key, surface), scaled to the view; returns
+        the (key, scaled) cache for the next call (reused while the view stays the same)."""
+        pg = self.pg
+        c0, c1, r0, r1 = self.visible_cells(lv, m, rect)
+        if c0 >= c1 or r0 >= r1:
+            return cached
+        ax, ay = m.pt(lv.ox + c0 * TILE, lv.oy + r1 * TILE)
+        bx, by = m.pt(lv.ox + c1 * TILE, lv.oy + r0 * TILE)
+        ax, ay, bx, by = (int(round(v)) for v in (ax, ay, bx, by))
+        key = (small[0], c0, c1, r0, r1, bx - ax, by - ay)
+        if cached is None or cached[0] != key:
+            sub = small[1].subsurface((c0, lv.H - r1, c1 - c0, r1 - r0))
+            cached = (key, pg.transform.scale(sub, (max(1, bx - ax), max(1, by - ay))))
+            if colorkey is not None:
+                cached[1].set_colorkey(colorkey)
+            if alpha is not None:
+                cached[1].set_alpha(alpha)
+        surf.blit(cached[1], (ax, ay))
+        return cached
+
+    def draw_progress(self, surf, scene: Scene, m: Mapper, rect, sel):
+        """P: the progress field (plan.progress.best_times, sent with the level or saved in runs/<name>/fields):
+        1 = the line it leads along from the selected agent to the goal (plan.progress.descent_path: through the
+        keys of the agent's leg on; ticks every PROGRESS_TICK frames to go) and the field's route from the spawn
+        (thin, orange); 2 = also the heat map of frames to go on the agent's leg (bright near the goal, none in
+        walls and dead ends)."""
+        from plan.progress import descent_path, leg_of_keys
+        pg = self.pg
+        lv = scene.level
+        pr = lv.progress if lv is not None else None
+        self.progress_note = None
+        if pr is None:
+            self.progress_note = "progress field: not in this run (agent.py sends / saves it from now on)"
+            return
+        tb = pr["T"]
+        ag = next((a for a in scene.agents if a["i"] == sel), None)
+        plan = scene.plans.get(sel) if sel is not None else None
+        if ag is not None and "keys" in ag:
+            leg = leg_of_keys(pr["key_order"], int(ag.get("keys") or 0))
+        else:
+            leg = int((plan or {}).get("leg") or 0)
+        leg = max(0, min(tb.shape[0] - 1, leg))
+        if self.show_progress >= 2:
+            hk = (lv.key, pr.get("id"), leg)
+            if self._heat is None or self._heat[0] != hk:
+                t = tb[leg]
+                ok = np.isfinite(t)
+                rgb = np.zeros(t.shape + (3,), np.uint8)
+                if ok.any():
+                    v = np.clip(t / max(1.0, float(np.percentile(t[ok], 98))), 0.0, 1.0)[..., None]
+                    near, far = np.array(PROGRESS_NEAR, np.float64), np.array(PROGRESS_FAR, np.float64)
+                    rgb[ok] = (near * (1 - v) + far * v)[ok].astype(np.uint8)
+                small = pg.surfarray.make_surface(np.ascontiguousarray(rgb[::-1].transpose(1, 0, 2)))
+                self._heat, self._heat_scaled = (hk, small), None
+            self._heat_scaled = self.blit_grid(surf, lv, m, rect, self._heat, self._heat_scaled, colorkey=(0, 0, 0),
+                                               alpha=PROGRESS_ALPHA)
+        route = [m.pt(lv.ox + (c + 0.5) * TILE, lv.oy + (r + 0.5) * TILE) for c, r in pr["route"]]
+        if len(route) > 1:
+            pg.draw.lines(surf, PROGRESS_ROUTE, False, route, 1)
+        if ag is None:
+            return
+        cell = (int(math.floor((ag["x"] - lv.ox) / TILE)), int(math.floor((ag["y"] - lv.oy) / TILE)))
+        dk = (lv.key, pr.get("id"), leg, cell)
+        if self._descent is None or self._descent[0] != dk:
+            self._descent = (dk, descent_path(tb, lv.ox, lv.oy, ag["x"], ag["y"], leg))
+        line = self._descent[1]
+        if not line:
+            self.progress_note = f"progress: no way to the goal from here (leg {leg})"
+            return
+        pts = [m.pt(ag["x"], ag["y"])] + [m.pt(x, y) for x, y, _ in line]
+        pg.draw.lines(surf, PROGRESS_LINE, False, pts, 2)
+        next_tick = line[0][2] - PROGRESS_TICK
+        for x, y, t in line[1:]:
+            if t <= next_tick:
+                px, py = m.pt(x, y)
+                pg.draw.circle(surf, PROGRESS_LINE, (px, py), 3)
+                self.text(surf, f"{t:.0f}", px + 4, py - 14, PROGRESS_LINE, self.small)
+                next_tick = t - PROGRESS_TICK
+        self.progress_note = (f"progress: {line[0][2]:.0f} frames to the goal from here (field T, leg {leg + 1} of "
+                              f"{tb.shape[0]}); cyan line = the way the field leads")
 
     def poly(self, surf, m, b, col, width=0, alpha=None):
         pts = [m.pt(x, y) for x, y in box_corners(b)]
@@ -1323,6 +1452,8 @@ class Renderer:
             if s:
                 small(s, DIM)
         line(f"{scene.level_name or '?'}  wave {scene.wave}  frame {scene.frame}", TEXT, self.big, 22)
+        if self.show_progress and self.progress_note:
+            small(self.progress_note, PROGRESS_LINE)
         plan = scene.plans.get(sel) if sel is not None else None
         line(f"agent {sel if sel is not None else '-'}" + (f"  ({scene.planned.index(sel) + 1} of {len(scene.planned)} "
                                                            f"planned, Tab)" if sel in scene.planned else ""), SELECT)
@@ -1404,7 +1535,8 @@ class Renderer:
 
     def draw_help(self, surf, scene: Scene):
         lines = ["Keys", "Tab   next planned agent", "H     this help", "A     alternatives on / off",
-                 "F     future hazards (+8 / +16) on / off", "Z     zoom on the selected agent on / off",
+                 "F     future hazards (+8 / +16) on / off",
+                 "P     progress field: line / line + heat map / off", "Z     zoom on the selected agent on / off",
                  "wheel or [ ]  zoom in / out", "S     screenshot (PNG)", "Esc Q quit"]
         if scene.mode == "replay":
             lines += ["Space play / pause", "Left / Right  one step back / forward", "+ / -  speed",
@@ -1530,6 +1662,8 @@ class App:
             self.r.show_alts = not self.r.show_alts
         elif k == pg.K_f:
             self.r.show_future = not self.r.show_future
+        elif k == pg.K_p:
+            self.r.show_progress = (self.r.show_progress + 1) % 3
         elif k == pg.K_s:
             self.screenshot(surf)
         elif k == pg.K_z:

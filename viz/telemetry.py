@@ -48,7 +48,12 @@ Message types
  planner counts as touching the goal / a key (game.level.Level.goal_boxes / key_boxes, contact_reach.json):
  the agent's centre within BODY of the box, as for hazards; [] when unknown,
  "agents": {"planned": n, "explore": k} (agent indices 0..n-1 are planned, n..n+k-1 explore),
- "field": str (the progress field's summary line) or null}
+ "field": str (the progress field's summary line) or null,
+ "progress": null or {"id": int (changes when the field is rebuilt), "legs": n,
+   "T": base64(zlib(n x H x W float16 little-endian, row 0 = bottom)): plan.progress.best_times, the frames to
+   the goal from each cell (+inf in walls and dead ends), per key leg,
+   "route": [[c, r], ...] (the field's route cells from the spawn), "key_order": [[key index, ...], ...] per key
+   leg (plan.progress.leg_of_keys)}. Dropped (after "words") when the message would be too big.}
  Sent when a level's data is ready and then every 2 seconds (a viewer started late still gets it).
 
 {"t": "frame", "time", "level", "wave", "frame": int,
@@ -170,8 +175,15 @@ def box_rows(boxes, kind) -> list:
 
 
 # ---- message builders (the schema above) --------------------------------------------------------------
+def progress_payload(tbest, route_cells, key_order, build_id: int) -> dict:
+    """The level message's "progress" entry (schema above) from plan.progress.best_times and the field's route."""
+    tb = np.asarray(tbest, np.float32)
+    return {"id": int(build_id), "legs": int(tb.shape[0]), "T": _pack(tb.astype("<f2")),
+            "route": [[int(c), int(r)] for c, r in route_cells], "key_order": [[int(k) for k in ks] for ks in key_order]}
+
+
 def level_message(lv, wave: int, planned: int, explore: int, field_summary: str | None = None,
-                  with_words: bool = True) -> dict:
+                  with_words: bool = True, progress: dict | None = None) -> dict:
     return {"t": "level", "time": time.time(), "level": lv.name, "wave": int(wave), "name": lv.name,
             "W": int(lv.W), "H": int(lv.H), "ox": float(lv.ox), "oy": float(lv.oy), "tile": 20.0,
             "kill_box": list(lv.kill_box) if lv.kill_box is not None else None,
@@ -182,7 +194,8 @@ def level_message(lv, wave: int, planned: int, explore: int, field_summary: str 
             "bandages": [list(b) for b in lv.bandages], "portals": [[list(a), list(b)] for a, b in lv.portals],
             "goal_boxes": [[float(v) for v in b] for b in (lv.goal_boxes() if hasattr(lv, "goal_boxes") else [])],
             "key_boxes": [[float(v) for v in b] for b in (lv.key_boxes() if hasattr(lv, "key_boxes") else [])],
-            "agents": {"planned": int(planned), "explore": int(explore)}, "field": field_summary}
+            "agents": {"planned": int(planned), "explore": int(explore)}, "field": field_summary,
+            "progress": progress}
 
 
 def frame_message(level: str, wave: int, frame: int, agents: list, hazards: list, future: dict,
@@ -205,8 +218,11 @@ def event_message(level: str | None, wave: int, ev: dict) -> dict:
 def _shrink(msg: dict):
     """Smaller versions of a message, in order (the schema's shrink rules)."""
     t = msg.get("t")
-    if t == "level" and msg.get("words") is not None:
-        yield {**msg, "words": None}
+    if t == "level":
+        if msg.get("words") is not None:
+            yield {**msg, "words": None}
+        if msg.get("progress") is not None:
+            yield {**msg, "words": None, "progress": None}
     elif t == "frame":
         m = {**msg, "future": {}}
         yield m
