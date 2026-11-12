@@ -223,21 +223,22 @@ class FutureWorld:
                 break
         return np.array(out[::-1], np.float64).reshape(-1, 2)
 
-    def worlds(self, frame: int, H: int, dt_ms: float):
+    def worlds(self, frame: int, H: int, dt_ms: float, deadly_only: bool = False):
         """World (model inputs) for steps 0..H-1 (frames frame..frame+H-1), the boxes that kill at steps 1..H
         as (boxes (M, 5), extra radius (M,), ids (M,): game.level.box_ids, then "shot<id>" of the shots still
-        flying then: shot_future), and how many steps came from the recording."""
+        flying then: shot_future), and how many steps came from the recording. deadly_only: the boxes that kill
+        only (worlds None; the same boxes): the per-frame danger check needs no model inputs."""
         if self.last is None or self.last[0] != frame:
             raise RuntimeError("observe() this frame before planning")
         _, hz0, pf0, sh0, _ = self.last
-        boxes0 = hazard_boxes(hz0, self.keep)
+        boxes0 = np.zeros((0, 5)) if deadly_only else hazard_boxes(hz0, self.keep)
         _, kill0, kept0, ids0 = self.kill_now
         vel = np.zeros((len(boxes0), 2))
         kvel = np.zeros((len(kill0), 2))
         pf_vel = np.zeros((len(pf0), 2))
         if self.prev is not None and self.prev[0] == frame - 1:
             dt_s = max(1e-3, self.prev[4] / 1000.0)
-            b1 = hazard_boxes(self.prev[1], self.keep)
+            b1 = boxes0 if deadly_only else hazard_boxes(self.prev[1], self.keep)
             if len(b1) == len(boxes0):
                 vel = (boxes0[:, :2] - b1[:, :2]) / dt_s
             k1, kept1 = _kill(self.prev[1], self.keep)
@@ -268,15 +269,14 @@ class FutureWorld:
                 b, p = boxes0, pf0
                 kb = (kill0, np.zeros(len(kill0)), ids0)
             elif rec is not None:
-                b, p = hazard_boxes(rec[0], self.keep), rec[1]
+                b, p = (None, None) if deadly_only else (hazard_boxes(rec[0], self.keep), rec[1])
                 kr, kept_r = _kill(rec[0], self.keep)
                 kb = (kr, np.full(len(kr), REC_RADIUS), box_ids(kept_r))
                 recorded += 1
             else:
                 use_rec = False               # once off the recording, stay off it for this plan
                 t = k * dt_s
-                b = boxes0.copy()
-                b[:, :2] += vel * t
+                b = boxes0 + np.c_[vel * t, np.zeros((len(boxes0), 3))] if not deadly_only else None
                 kr = kill0.copy()
                 kr[:, :2] += kvel * t
                 rad = np.where(kspeed > STILL, 2.0 + GROW * kspeed * t, 0.0)
@@ -284,9 +284,11 @@ class FutureWorld:
                     kr[per_j] = per_boxes[k - 1]
                     rad[per_j] = REC_RADIUS
                 kb = (kr, rad, ids0)
-                p = [list(q) for q in pf0]
-                for j, q in enumerate(p):
-                    q[0], q[1] = q[0] + pf_vel[j, 0] * t, q[1] + pf_vel[j, 1] * t
+                p = None
+                if not deadly_only:
+                    p = [list(q) for q in pf0]
+                    for j, q in enumerate(p):
+                        q[0], q[1] = q[0] + pf_vel[j, 0] * t, q[1] + pf_vel[j, 1] * t
             hz_k.append(b)
             pf_k.append(p)
             kill_k.append(kb)
@@ -295,8 +297,9 @@ class FutureWorld:
         # launcher will fire (launcher_shots: none before a launcher's period has been seen)
         shots = [(sh[0], sh[3], *shot_future(self.shot_track(frame, sh[0]), H, self.terrain)) for sh in sh0]
         launch = self.launcher_shots(frame, H)
-        worlds = [World(hz_k[k], pf_k[k] or None, (pf_k[k - 1] if k else (self.prev[2] if self.prev else None)) or None,
-                        dt_s, list(self.fans)) for k in range(H)]
+        worlds = None if deadly_only else [
+            World(hz_k[k], pf_k[k] or None, (pf_k[k - 1] if k else (self.prev[2] if self.prev else None)) or None,
+                  dt_s, list(self.fans)) for k in range(H)]
         check = []
         for k in range(1, H + 1):
             b, r, ids = kill_k[k]

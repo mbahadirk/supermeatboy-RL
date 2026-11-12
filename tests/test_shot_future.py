@@ -177,3 +177,29 @@ def test_trusted_recording_gives_the_recorded_shots_and_aimed_shots_are_not_trus
     for f in range(0, 5):                              # an aimed shot: not where the recording has it
         fw.observe(f, [], [], [[7, 3.0 * f + 5.0, 0.0, 4.0]] if f < 10 else [], None, None, 16.667)
     assert not fw.shots_trusted
+
+
+def test_deadly_only_gives_the_same_boxes_on_a_recorded_wave():
+    """The per-frame danger check's boxes (future_inputs deadly_only) equal the decision's, frame by frame."""
+    import glob
+    import gzip
+    import json
+    from plan.planner import future_inputs
+    d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs",
+                     "capture_2-14_route_check01", "wm_data")
+    paths = sorted(glob.glob(os.path.join(d, "wave_*_world.json.gz")))
+    if not paths:
+        pytest.skip("no recorded wave here")
+    world = json.load(gzip.open(paths[-1], "rt", encoding="utf-8"))[:120]
+    fw = FutureWorld()
+    keep = None
+    for w in world:
+        keep = w.get("keep", keep)
+        fw.observe(w["f"], w.get("hz") or [], w.get("pf"), w.get("sh") or [], keep, None, 16.667)
+        if w["f"] % 7:
+            continue
+        wa, fa, ra = future_inputs(fw, w["f"], 48, 16.667)
+        wb, fb, rb = future_inputs(fw, w["f"], 48, 16.667, deadly_only=True)
+        assert wb is None and len(wa) == 48 and ra == rb
+        for x, y in zip(fa[1:], fb[1:]):
+            assert np.array_equal(x.boxes, y.boxes) and list(x.ids) == list(y.ids)

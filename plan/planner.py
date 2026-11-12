@@ -477,12 +477,14 @@ def _model_boxes(boxes: np.ndarray, x, y) -> np.ndarray:
 
 
 # ---- hazards per future frame ---------------------------------------------------------------------------
-def future_inputs(future, frame: int, H: int, dt_ms: float, level_name: str | None = None, deaths=None):
+def future_inputs(future, frame: int, H: int, dt_ms: float, level_name: str | None = None, deaths=None,
+                  deadly_only: bool = False):
     """From an mpc.future.FutureWorld that observed this frame: the model inputs per step (H World, index k =
     frame + k) and the deadly boxes per frame (H + 1 plan.safety.FrameBoxes, index 0 unused): the game's kill
     shapes with the future's uncertainty radius, flying shots, and remembered deaths (a
-    plan.safety.DeathMemory) at their wave frames. Also how many steps came from the recording."""
-    worlds, check, recorded = future.worlds(frame, H, dt_ms)
+    plan.safety.DeathMemory) at their wave frames. Also how many steps came from the recording. deadly_only: no
+    model inputs (worlds None), the same deadly boxes (the per-frame danger check)."""
+    worlds, check, recorded = future.worlds(frame, H, dt_ms, deadly_only=deadly_only)
     frames = [None]
     for k, (b, r, ids) in enumerate(check, start=1):
         b = np.asarray(b, np.float64).reshape(-1, 5).copy()

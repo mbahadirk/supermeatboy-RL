@@ -885,9 +885,9 @@ class Runner:
         need = {}
         fut = {}
 
-        def fboxes_now():                           # this frame's model inputs and deadly boxes, once
+        def fboxes_now():                           # this frame's deadly boxes (the danger check), once
             if "fb" not in fut:
-                fut["w"], fut["fb"], _ = future_inputs(self.fw, frame, pl.H, dt, lv.name, self.deaths)
+                _, fut["fb"], _ = future_inputs(self.fw, frame, pl.H, dt, lv.name, self.deaths, deadly_only=True)
             return fut["fb"]
         if live_plan:
             t_chk = time.perf_counter()
