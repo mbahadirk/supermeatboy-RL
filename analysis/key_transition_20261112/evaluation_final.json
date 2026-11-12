@@ -1,0 +1,3729 @@
+{
+  "protocol": "paired-imagined-key-eval-v1",
+  "manifest_sha256": "1ef6e5ec30453b11d4f295c3daf5dcda57c8884031115d2482c0060b88290dbe",
+  "checkpoint": {
+    "path": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\experiments\\tile_shapes_epochs_v1\\epoch_12\\model\\wm_model.pt",
+    "sha256": "d979f1dd1b42bd36488139496a3a0f4a7c269de595388d318a686ca2c41b2673"
+  },
+  "cases_sha256": "6f6cdfa95d471e806c9a1c38fa5bbd6c2aa1ceb39049c7951961e235630a0f7b",
+  "gate_cases_sha256": "9050fdeaf58b61f6b2d636019e45040c3f51c3abc612f50abd5ea485f86216ce",
+  "source_hashes": {
+    "game/level.py": "964c32f9d50d302b44b0ae75b7f20e22fb5c641009017ae63714a63c5c567e0f",
+    "wm/rollout.py": "27561332e0606bde6b090ef145c3c40493b0cb9d6965deb2a730ea6970b64e68",
+    "plan/planner.py": "c121619bd990a88a27d02aba85674923b62f4e672b624554058058aeddc07582",
+    "plan/geometry.py": "01ee2d1db99f197e1295af2ee48c555799ee14dee02bb8b5d5f35905f1b75608",
+    "wm/features.py": "795a0130aeaf74babad33fea3a31705d5f577285717f77426aa994dbf05d008f"
+  },
+  "panels": {
+    "raw_fixed": {
+      "positive_cases": 8,
+      "negative_cases": 8,
+      "detected": 0,
+      "false_positive": 0,
+      "coarse_frame_error_detected": {
+        "n": 0,
+        "median": null,
+        "p90": null
+      },
+      "pickup_windows_position": {
+        "8": {
+          "n": 16,
+          "median": 1.0173638761043549,
+          "p90": 6.067525148391724
+        },
+        "16": {
+          "n": 16,
+          "median": 2.6070022583007812,
+          "p90": 12.016868114471436
+        },
+        "32": {
+          "n": 16,
+          "median": 14.68479585647583,
+          "p90": 47.25735092163086
+        },
+        "48": {
+          "n": 16,
+          "median": 14.079197883605957,
+          "p90": 103.57301330566406
+        }
+      }
+    },
+    "raw_pickup": {
+      "positive_cases": 8,
+      "negative_cases": 8,
+      "detected": 8,
+      "false_positive": 1,
+      "coarse_frame_error_detected": {
+        "n": 8,
+        "median": 0.0,
+        "p90": 4.0
+      },
+      "pickup_windows_position": {
+        "8": {
+          "n": 16,
+          "median": 1.0173638761043549,
+          "p90": 6.067525148391724
+        },
+        "16": {
+          "n": 16,
+          "median": 2.6070022583007812,
+          "p90": 12.016868114471436
+        },
+        "32": {
+          "n": 16,
+          "median": 14.82862138748169,
+          "p90": 47.25735092163086
+        },
+        "48": {
+          "n": 16,
+          "median": 14.079197883605957,
+          "p90": 103.57301330566406
+        }
+      }
+    },
+    "guarded_fixed": {
+      "positive_cases": 8,
+      "negative_cases": 8,
+      "detected": 0,
+      "false_positive": 0,
+      "coarse_frame_error_detected": {
+        "n": 0,
+        "median": null,
+        "p90": null
+      },
+      "pickup_windows_position": {
+        "8": {
+          "n": 16,
+          "median": 1.017365133097358,
+          "p90": 6.067525946938201
+        },
+        "16": {
+          "n": 16,
+          "median": 2.639021784746867,
+          "p90": 12.284995978383773
+        },
+        "32": {
+          "n": 16,
+          "median": 14.718958315500519,
+          "p90": 49.19799889393363
+        },
+        "48": {
+          "n": 16,
+          "median": 14.65849231051211,
+          "p90": 107.55506337684594
+        }
+      }
+    },
+    "guarded_pickup": {
+      "positive_cases": 8,
+      "negative_cases": 8,
+      "detected": 8,
+      "false_positive": 1,
+      "coarse_frame_error_detected": {
+        "n": 8,
+        "median": 0.0,
+        "p90": 4.0
+      },
+      "pickup_windows_position": {
+        "8": {
+          "n": 16,
+          "median": 1.017365133097358,
+          "p90": 6.067525946938201
+        },
+        "16": {
+          "n": 16,
+          "median": 2.639021784746867,
+          "p90": 12.284995978383773
+        },
+        "32": {
+          "n": 16,
+          "median": 14.862786492823867,
+          "p90": 49.19799889393363
+        },
+        "48": {
+          "n": 16,
+          "median": 14.65849231051211,
+          "p90": 107.55506337684594
+        }
+      }
+    }
+  },
+  "native_endpoint_replay": {
+    "transitions": 38032,
+    "pickups": 45,
+    "mask_mismatches": 0
+  },
+  "observed_path_carry": [
+    {
+      "agent": 13,
+      "entry": 70,
+      "frames": 277,
+      "observed_pickup": 208,
+      "observed_gate": 468,
+      "key_mask_mismatches": 0
+    },
+    {
+      "agent": 41,
+      "entry": 70,
+      "frames": 288,
+      "observed_pickup": 204,
+      "observed_gate": 475,
+      "key_mask_mismatches": 0
+    },
+    {
+      "agent": 40,
+      "entry": 70,
+      "frames": 317,
+      "observed_pickup": 204,
+      "observed_gate": 504,
+      "key_mask_mismatches": 0
+    },
+    {
+      "agent": 23,
+      "entry": 68,
+      "frames": 1566,
+      "observed_pickup": 206,
+      "observed_gate": 1755,
+      "key_mask_mismatches": 0
+    },
+    {
+      "agent": 11,
+      "entry": 70,
+      "frames": 344,
+      "observed_pickup": 199,
+      "observed_gate": 526,
+      "key_mask_mismatches": 0
+    },
+    {
+      "agent": 9,
+      "entry": 70,
+      "frames": 297,
+      "observed_pickup": 190,
+      "observed_gate": 470,
+      "key_mask_mismatches": 0
+    },
+    {
+      "agent": 48,
+      "entry": 70,
+      "frames": 376,
+      "observed_pickup": 210,
+      "observed_gate": 569,
+      "key_mask_mismatches": 0
+    },
+    {
+      "agent": 46,
+      "entry": 70,
+      "frames": 300,
+      "observed_pickup": 199,
+      "observed_gate": 482,
+      "key_mask_mismatches": 0
+    }
+  ],
+  "guard_counterfactuals": [
+    {
+      "agent": 13,
+      "entry": 70,
+      "frame": 468,
+      "comparison": {
+        "0": {
+          "clipped": true,
+          "resulting_xy": [
+            -6.010000228881836,
+            120.4183349609375
+          ]
+        },
+        "1": {
+          "clipped": false,
+          "resulting_xy": [
+            -6.010000228881836,
+            119.3183364868164
+          ]
+        }
+      }
+    },
+    {
+      "agent": 41,
+      "entry": 70,
+      "frame": 475,
+      "comparison": {
+        "0": {
+          "clipped": true,
+          "resulting_xy": [
+            -4.710028171539307,
+            122.94872283935547
+          ]
+        },
+        "1": {
+          "clipped": false,
+          "resulting_xy": [
+            -6.010000228881836,
+            118.21263122558594
+          ]
+        }
+      }
+    },
+    {
+      "agent": 40,
+      "entry": 70,
+      "frame": 504,
+      "comparison": {
+        "0": {
+          "clipped": true,
+          "resulting_xy": [
+            -7.47667121887207,
+            121.57913970947266
+          ]
+        },
+        "1": {
+          "clipped": false,
+          "resulting_xy": [
+            -6.010000228881836,
+            118.67636108398438
+          ]
+        }
+      }
+    },
+    {
+      "agent": 23,
+      "entry": 68,
+      "frame": 1755,
+      "comparison": {
+        "0": {
+          "clipped": true,
+          "resulting_xy": [
+            -6.010000228881836,
+            121.84331512451172
+          ]
+        },
+        "1": {
+          "clipped": false,
+          "resulting_xy": [
+            -6.010000228881836,
+            118.69609069824219
+          ]
+        }
+      }
+    },
+    {
+      "agent": 11,
+      "entry": 70,
+      "frame": 526,
+      "comparison": {
+        "0": {
+          "clipped": true,
+          "resulting_xy": [
+            -6.010000228881836,
+            120.4183349609375
+          ]
+        },
+        "1": {
+          "clipped": false,
+          "resulting_xy": [
+            -6.010000228881836,
+            119.3183364868164
+          ]
+        }
+      }
+    },
+    {
+      "agent": 9,
+      "entry": 70,
+      "frame": 470,
+      "comparison": {
+        "0": {
+          "clipped": true,
+          "resulting_xy": [
+            -6.010000228881836,
+            120.4183349609375
+          ]
+        },
+        "1": {
+          "clipped": false,
+          "resulting_xy": [
+            -6.010000228881836,
+            119.3183364868164
+          ]
+        }
+      }
+    },
+    {
+      "agent": 48,
+      "entry": 70,
+      "frame": 569,
+      "comparison": {
+        "0": {
+          "clipped": true,
+          "resulting_xy": [
+            -6.010000228881836,
+            120.4183349609375
+          ]
+        },
+        "1": {
+          "clipped": false,
+          "resulting_xy": [
+            -6.010000228881836,
+            119.3183364868164
+          ]
+        }
+      }
+    },
+    {
+      "agent": 46,
+      "entry": 70,
+      "frame": 482,
+      "comparison": {
+        "0": {
+          "clipped": true,
+          "resulting_xy": [
+            -6.010000228881836,
+            120.4183349609375
+          ]
+        },
+        "1": {
+          "clipped": false,
+          "resulting_xy": [
+            -6.010000228881836,
+            119.3183364868164
+          ]
+        }
+      }
+    }
+  ],
+  "records": [
+    {
+      "case": {
+        "entry": 66,
+        "agent": 29,
+        "group": "8ea937393323407460503a1c5041c75b51dc9242d23ccebb9013c7cc075217d7",
+        "shard": "wave_00402.npz",
+        "shard_sha256": "75b0a91439b7616bcb0cea8c4ce548e5f00ff732d7571f927836344f6e43da93",
+        "world_sha256": "0b1e9868bec0a06e94b352fed438250483532176c1d91f272fb9b32fe9e73e38",
+        "frame": 180,
+        "horizon": 48,
+        "observed_pickup_frame": 196,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "pickup_other"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.7121803164482117,
+            "16": 2.2437245845794678,
+            "32": 1.193304181098938,
+            "48": 13.92715072631836
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            200,
+            200,
+            200,
+            200,
+            200
+          ],
+          "first_new_key_coarse_frame_majority": 200,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.7121803164482117,
+            "16": 2.2437245845794678,
+            "32": 1.193304181098938,
+            "48": 13.92715072631836
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.7121795713078407,
+            "16": 2.243723371618956,
+            "32": 0.6785105717585033,
+            "48": 15.085734601231911
+          },
+          "guard_clipped_steps": 5,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            200,
+            200,
+            200,
+            200,
+            200
+          ],
+          "first_new_key_coarse_frame_majority": 200,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.7121795713078407,
+            "16": 2.243723371618956,
+            "32": 0.6785105717585033,
+            "48": 15.085734601231911
+          },
+          "guard_clipped_steps": 5,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 67,
+        "agent": 23,
+        "group": "dad6b2f3f0773f650ca934484f62c319ae5a1fad3548e6f9d67b384d8b559241",
+        "shard": "wave_00412.npz",
+        "shard_sha256": "8672c607de47d1cb9ff8717d26fd19d61d9bc95165050b67f8a894913970a437",
+        "world_sha256": "2f3705eb9ea3b838010866a647dc0094519cdf89e92d981b5312bd7cd9a14a22",
+        "frame": 180,
+        "horizon": 48,
+        "observed_pickup_frame": 196,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "pickup_other"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 6.72506856918335,
+            "16": 13.175921440124512,
+            "32": 13.536198616027832,
+            "48": 4.276778221130371
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "first_new_key_coarse_frame_majority": 196,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 6.72506856918335,
+            "16": 13.175921440124512,
+            "32": 13.536198616027832,
+            "48": 4.276778221130371
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 6.725066874739944,
+            "16": 13.175924397350043,
+            "32": 13.604522293198158,
+            "48": 4.339852554560904
+          },
+          "guard_clipped_steps": 1,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "first_new_key_coarse_frame_majority": 196,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 6.725066874739944,
+            "16": 13.175924397350043,
+            "32": 13.604522293198158,
+            "48": 4.339852554560904
+          },
+          "guard_clipped_steps": 1,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 68,
+        "agent": 7,
+        "group": "523efe00f789fd30461caf6a9beef4c2d118b6b66b3b064cf467ff925b527ab8",
+        "shard": "wave_00422.npz",
+        "shard_sha256": "c2d8cd9c3d2ef8210606300e105726cb93d49e5419e48dae9fd5654f0ffaccc4",
+        "world_sha256": "a28ddab2e2352c59c53a90d7aa3f4d87d2091ef68e3aede80e8aa0c971ea11ae",
+        "frame": 184,
+        "horizon": 48,
+        "observed_pickup_frame": 200,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "pickup_other"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.8184985518455505,
+            "16": 2.376457452774048,
+            "32": 4.413397312164307,
+            "48": 10.867376327514648
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            200,
+            200,
+            200,
+            200,
+            200
+          ],
+          "first_new_key_coarse_frame_majority": 200,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.8184985518455505,
+            "16": 2.376457452774048,
+            "32": 4.413397312164307,
+            "48": 10.867376327514648
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.8185030266635437,
+            "16": 2.3764584602453773,
+            "32": 4.14698920357159,
+            "48": 12.393930254732046
+          },
+          "guard_clipped_steps": 3,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            200,
+            200,
+            200,
+            200,
+            200
+          ],
+          "first_new_key_coarse_frame_majority": 200,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.8185030266635437,
+            "16": 2.3764584602453773,
+            "32": 4.14698920357159,
+            "48": 12.393930254732046
+          },
+          "guard_clipped_steps": 3,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 69,
+        "agent": 17,
+        "group": "935ea10976ecf14c48cbfcab26be578a2d62b410933b46083b917c3a731a57eb",
+        "shard": "wave_00431.npz",
+        "shard_sha256": "363d6829a7dee39dd80f5da8563f0d99c10c131827bbd48e38623965d4d5aece",
+        "world_sha256": "423c2a39658dcf1e5e9d47bf01b2856fda109e1cd4f878628b3a0436f1ee2af8",
+        "frame": 178,
+        "horizon": 48,
+        "observed_pickup_frame": 194,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "pickup_other"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.5962779521942139,
+            "16": 2.3736519813537598,
+            "32": 5.192384243011475,
+            "48": 1.8359594345092773
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            198,
+            194,
+            194,
+            194,
+            198
+          ],
+          "first_new_key_coarse_frame_majority": 194,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.5962779521942139,
+            "16": 2.3736519813537598,
+            "32": 5.192384243011475,
+            "48": 1.8359594345092773
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.596276084350093,
+            "16": 2.373647452807348,
+            "32": 5.09265212854731,
+            "48": 1.3891082826769285
+          },
+          "guard_clipped_steps": 3,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            198,
+            194,
+            194,
+            194,
+            198
+          ],
+          "first_new_key_coarse_frame_majority": 194,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.596276084350093,
+            "16": 2.373647452807348,
+            "32": 5.09265212854731,
+            "48": 1.3891082826769285
+          },
+          "guard_clipped_steps": 3,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 70,
+        "agent": 11,
+        "group": "c1dc051e37156c057958d1cbc89453ae002c7bd10868daa13d34c0917d5094f2",
+        "shard": "wave_00441.npz",
+        "shard_sha256": "7e4f0b813bad95f7ff92629947b16a3f0617055fdcd1e2fd5a1cf510c49a5a38",
+        "world_sha256": "9a0581b2660816c6ca1d0065cba733ec17affbc5f5fee8aabc308b26a7eb7a38",
+        "frame": 183,
+        "horizon": 48,
+        "observed_pickup_frame": 199,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "pickup_other"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.6089405417442322,
+            "16": 2.489837169647217,
+            "32": 6.079074859619141,
+            "48": 1.9186155796051025
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            203,
+            203,
+            203,
+            203,
+            203
+          ],
+          "first_new_key_coarse_frame_majority": 203,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.6089405417442322,
+            "16": 2.489837169647217,
+            "32": 6.079074859619141,
+            "48": 1.9186155796051025
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.6089322715080407,
+            "16": 2.489843083559392,
+            "32": 6.095592230347021,
+            "48": 2.065602393972776
+          },
+          "guard_clipped_steps": 2,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            203,
+            203,
+            203,
+            203,
+            203
+          ],
+          "first_new_key_coarse_frame_majority": 203,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.6089322715080407,
+            "16": 2.489843083559392,
+            "32": 6.095592230347021,
+            "48": 2.065602393972776
+          },
+          "guard_clipped_steps": 2,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 66,
+        "agent": 12,
+        "group": "eb03e6726942ed9a2078ce5b3eb6644edac1f827b7b497eaf7c7b541009e23e0",
+        "shard": "wave_00402.npz",
+        "shard_sha256": "75b0a91439b7616bcb0cea8c4ce548e5f00ff732d7571f927836344f6e43da93",
+        "world_sha256": "0b1e9868bec0a06e94b352fed438250483532176c1d91f272fb9b32fe9e73e38",
+        "frame": 184,
+        "horizon": 48,
+        "observed_pickup_frame": 200,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "pickup_other"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.8775163888931274,
+            "16": 2.5999090671539307,
+            "32": 7.6792120933532715,
+            "48": 11.343782424926758
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            204,
+            204,
+            200,
+            200,
+            200
+          ],
+          "first_new_key_coarse_frame_majority": 200,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.8775163888931274,
+            "16": 2.5999090671539307,
+            "32": 7.6792120933532715,
+            "48": 11.343782424926758
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.8775335026186867,
+            "16": 2.5999122920696798,
+            "32": 7.3428383485939195,
+            "48": 6.932701978039512
+          },
+          "guard_clipped_steps": 5,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            204,
+            204,
+            200,
+            200,
+            200
+          ],
+          "first_new_key_coarse_frame_majority": 200,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.8775335026186867,
+            "16": 2.5999122920696798,
+            "32": 7.3428383485939195,
+            "48": 6.932701978039512
+          },
+          "guard_clipped_steps": 5,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 67,
+        "agent": 48,
+        "group": "48dabb469476d4cc0e6b5ce1eb76c524e0f128b7dd58402ef1c809bbb0c439b8",
+        "shard": "wave_00412.npz",
+        "shard_sha256": "8672c607de47d1cb9ff8717d26fd19d61d9bc95165050b67f8a894913970a437",
+        "world_sha256": "2f3705eb9ea3b838010866a647dc0094519cdf89e92d981b5312bd7cd9a14a22",
+        "frame": 183,
+        "horizon": 48,
+        "observed_pickup_frame": 199,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "pickup_other"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 5.409981727600098,
+            "16": 10.798803329467773,
+            "32": 15.833393096923828,
+            "48": 11.414172172546387
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            199,
+            199,
+            199,
+            199,
+            199
+          ],
+          "first_new_key_coarse_frame_majority": 199,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 5.409981727600098,
+            "16": 10.798803329467773,
+            "32": 16.121044158935547,
+            "48": 12.37034797668457
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 5.409985019136457,
+            "16": 10.79880349582386,
+            "32": 15.83339433780288,
+            "48": 11.752797618325825
+          },
+          "guard_clipped_steps": 1,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            199,
+            199,
+            199,
+            199,
+            199
+          ],
+          "first_new_key_coarse_frame_majority": 199,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 5.409985019136457,
+            "16": 10.79880349582386,
+            "32": 16.121050692449575,
+            "48": 12.804049943071938
+          },
+          "guard_clipped_steps": 1,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 68,
+        "agent": 40,
+        "group": "384bcbb36b7c4be3ccd5be20804172f8e5402854f5fb7c7ef63e76879c68e101",
+        "shard": "wave_00422.npz",
+        "shard_sha256": "c2d8cd9c3d2ef8210606300e105726cb93d49e5419e48dae9fd5654f0ffaccc4",
+        "world_sha256": "a28ddab2e2352c59c53a90d7aa3f4d87d2091ef68e3aede80e8aa0c971ea11ae",
+        "frame": 188,
+        "horizon": 48,
+        "observed_pickup_frame": 204,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "pickup_other"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.687412679195404,
+            "16": 2.8183271884918213,
+            "32": 7.875871181488037,
+            "48": 22.502483367919922
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            204,
+            204,
+            204,
+            208,
+            208
+          ],
+          "first_new_key_coarse_frame_majority": 204,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.687412679195404,
+            "16": 2.8183271884918213,
+            "32": 7.875871181488037,
+            "48": 22.502483367919922
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.6874100156929137,
+            "16": 2.8183299474590915,
+            "32": 7.879325209630944,
+            "48": 23.401540390174294
+          },
+          "guard_clipped_steps": 3,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            204,
+            204,
+            204,
+            208,
+            208
+          ],
+          "first_new_key_coarse_frame_majority": 204,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.6874100156929137,
+            "16": 2.8183299474590915,
+            "32": 7.879325209630944,
+            "48": 23.401540390174294
+          },
+          "guard_clipped_steps": 3,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 65,
+        "agent": 22,
+        "group": "7d9ba69bf901003c4d6f9a94730878f3c727c8ad40b599549a05c332b6199e60",
+        "shard": "wave_00392.npz",
+        "shard_sha256": "47dcf951ba51637d2f4b7409f80ff1fb28dcea6aeae48b06ed1eb3ff25a3024f",
+        "world_sha256": "7a2dc710e43b628271daf8f9da948142308f60697a5c6d3529b063735012bfea",
+        "frame": 198,
+        "horizon": 48,
+        "observed_pickup_frame": null,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "near_key_no_pickup"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 4.602695941925049,
+            "16": 10.85781478881836,
+            "32": 41.085052490234375,
+            "48": 109.82731628417969
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 4.602695941925049,
+            "16": 10.85781478881836,
+            "32": 41.085052490234375,
+            "48": 109.82731628417969
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 4.602689953595278,
+            "16": 11.394067559417502,
+            "32": 44.589897064456174,
+            "48": 117.79141678310711
+          },
+          "guard_clipped_steps": 2,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 4.602689953595278,
+            "16": 11.394067559417502,
+            "32": 44.589897064456174,
+            "48": 117.79141678310711
+          },
+          "guard_clipped_steps": 2,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 66,
+        "agent": 9,
+        "group": "c7e4d03d47ab612b5c58074870bd34fba9831b0c6f321908a85a5fa2756688e2",
+        "shard": "wave_00402.npz",
+        "shard_sha256": "75b0a91439b7616bcb0cea8c4ce548e5f00ff732d7571f927836344f6e43da93",
+        "world_sha256": "0b1e9868bec0a06e94b352fed438250483532176c1d91f272fb9b32fe9e73e38",
+        "frame": 199,
+        "horizon": 48,
+        "observed_pickup_frame": null,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "near_key_no_pickup"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 5.092058181762695,
+            "16": 2.55045223236084,
+            "32": 20.626365661621094,
+            "48": 14.231245040893555
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 5.092058181762695,
+            "16": 2.55045223236084,
+            "32": 20.626365661621094,
+            "48": 14.231245040893555
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 5.092056159234181,
+            "16": 2.550445668368961,
+            "32": 20.62636501204612,
+            "48": 14.231250019792308
+          },
+          "guard_clipped_steps": 0,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 5.092056159234181,
+            "16": 2.550445668368961,
+            "32": 20.62636501204612,
+            "48": 14.231250019792308
+          },
+          "guard_clipped_steps": 0,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 67,
+        "agent": 17,
+        "group": "768c4b2f109cfc9ac4e8efa45709a42ddd801ee484a2ca093995a5c45b5e8a54",
+        "shard": "wave_00412.npz",
+        "shard_sha256": "8672c607de47d1cb9ff8717d26fd19d61d9bc95165050b67f8a894913970a437",
+        "world_sha256": "2f3705eb9ea3b838010866a647dc0094519cdf89e92d981b5312bd7cd9a14a22",
+        "frame": 208,
+        "horizon": 48,
+        "observed_pickup_frame": null,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "near_key_no_pickup"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 10.03510570526123,
+            "16": 17.722942352294922,
+            "32": 35.97623825073242,
+            "48": 55.2874755859375
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            220,
+            220,
+            220,
+            224,
+            220
+          ],
+          "first_new_key_coarse_frame_majority": 220,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 10.03510570526123,
+            "16": 17.722942352294922,
+            "32": 35.97623825073242,
+            "48": 55.351600646972656
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 8.596102763706329,
+            "16": 16.984452616043143,
+            "32": 29.404334021331238,
+            "48": 31.387460535088742
+          },
+          "guard_clipped_steps": 9,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            220,
+            220,
+            216,
+            220,
+            220
+          ],
+          "first_new_key_coarse_frame_majority": 220,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 8.596102763706329,
+            "16": 16.984452616043143,
+            "32": 29.404334021331238,
+            "48": 31.387460535088742
+          },
+          "guard_clipped_steps": 9,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 65,
+        "agent": 40,
+        "group": "380fb76e7dde5f5cee560c5a62d597af9c0d565bb004337330e602009fc15cb2",
+        "shard": "wave_00392.npz",
+        "shard_sha256": "47dcf951ba51637d2f4b7409f80ff1fb28dcea6aeae48b06ed1eb3ff25a3024f",
+        "world_sha256": "7a2dc710e43b628271daf8f9da948142308f60697a5c6d3529b063735012bfea",
+        "frame": 252,
+        "horizon": 48,
+        "observed_pickup_frame": null,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "near_key_no_pickup"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.9852697253227234,
+            "16": 1.3396333456039429,
+            "32": 3.9386606216430664,
+            "48": 1.6802525520324707
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.9852697253227234,
+            "16": 1.3396333456039429,
+            "32": 3.9386606216430664,
+            "48": 1.6802525520324707
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.9852749764420984,
+            "16": 1.3396255342303232,
+            "32": 3.938659914957033,
+            "48": 1.6802555441665796
+          },
+          "guard_clipped_steps": 0,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.9852749764420984,
+            "16": 1.3396255342303232,
+            "32": 3.938659914957033,
+            "48": 1.6802555441665796
+          },
+          "guard_clipped_steps": 0,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 66,
+        "agent": 44,
+        "group": "9c197242de6230b358d0a3b4798a689afdbce1c4482700b6dc0df79ec8d9a2cc",
+        "shard": "wave_00402.npz",
+        "shard_sha256": "75b0a91439b7616bcb0cea8c4ce548e5f00ff732d7571f927836344f6e43da93",
+        "world_sha256": "0b1e9868bec0a06e94b352fed438250483532176c1d91f272fb9b32fe9e73e38",
+        "frame": 183,
+        "horizon": 48,
+        "observed_pickup_frame": null,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "near_key_no_pickup"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.32989466190338135,
+            "16": 2.614095449447632,
+            "32": 53.429649353027344,
+            "48": 69.57486724853516
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.32989466190338135,
+            "16": 2.614095449447632,
+            "32": 53.429649353027344,
+            "48": 69.57486724853516
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.3298906532902138,
+            "16": 2.6140932653780555,
+            "32": 53.42966087342675,
+            "48": 69.57487010446013
+          },
+          "guard_clipped_steps": 0,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.3298906532902138,
+            "16": 2.6140932653780555,
+            "32": 53.42966087342675,
+            "48": 69.57487010446013
+          },
+          "guard_clipped_steps": 0,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 67,
+        "agent": 18,
+        "group": "56ae6252c95623fba513b083ed670935fcca5e0e5aa6950f276f376fb83e9f97",
+        "shard": "wave_00412.npz",
+        "shard_sha256": "8672c607de47d1cb9ff8717d26fd19d61d9bc95165050b67f8a894913970a437",
+        "world_sha256": "2f3705eb9ea3b838010866a647dc0094519cdf89e92d981b5312bd7cd9a14a22",
+        "frame": 179,
+        "horizon": 48,
+        "observed_pickup_frame": null,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "near_key_no_pickup"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.2307798862457275,
+            "16": 1.1655875444412231,
+            "32": 30.939607620239258,
+            "48": 42.82579803466797
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.2307798862457275,
+            "16": 1.1655875444412231,
+            "32": 30.939607620239258,
+            "48": 42.82579803466797
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.2307721948098305,
+            "16": 2.663950304115679,
+            "32": 44.96633691444052,
+            "48": 72.7805735615221
+          },
+          "guard_clipped_steps": 3,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.2307721948098305,
+            "16": 2.663950304115679,
+            "32": 44.96633691444052,
+            "48": 72.7805735615221
+          },
+          "guard_clipped_steps": 3,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 65,
+        "agent": 19,
+        "group": "2fed19d3a0c28e67ca468844043f2a7251ed8a00c087bb1ed2edc0f816e14509",
+        "shard": "wave_00392.npz",
+        "shard_sha256": "47dcf951ba51637d2f4b7409f80ff1fb28dcea6aeae48b06ed1eb3ff25a3024f",
+        "world_sha256": "7a2dc710e43b628271daf8f9da948142308f60697a5c6d3529b063735012bfea",
+        "frame": 192,
+        "horizon": 48,
+        "observed_pickup_frame": null,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "near_key_no_pickup"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.2520502209663391,
+            "16": 4.1343889236450195,
+            "32": 72.50653076171875,
+            "48": 137.2060546875
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.2520502209663391,
+            "16": 4.1343889236450195,
+            "32": 72.50653076171875,
+            "48": 137.2060546875
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.25203392116245477,
+            "16": 4.134388682910902,
+            "32": 72.50654043172534,
+            "48": 137.20604812788915
+          },
+          "guard_clipped_steps": 0,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 0.25203392116245477,
+            "16": 4.134388682910902,
+            "32": 72.50654043172534,
+            "48": 137.20604812788915
+          },
+          "guard_clipped_steps": 0,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 65,
+        "agent": 3,
+        "group": "faa202e04c3b250ab2a5d55bcf3c5ad61905043537e49579436d5ff2252a1482",
+        "shard": "wave_00392.npz",
+        "shard_sha256": "47dcf951ba51637d2f4b7409f80ff1fb28dcea6aeae48b06ed1eb3ff25a3024f",
+        "world_sha256": "7a2dc710e43b628271daf8f9da948142308f60697a5c6d3529b063735012bfea",
+        "frame": 190,
+        "horizon": 48,
+        "observed_pickup_frame": null,
+        "observed_lock_frame": null,
+        "initial_keys": 0,
+        "category": "near_key_no_pickup"
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.0494580268859863,
+            "16": 8.82617473602295,
+            "32": 28.742557525634766,
+            "48": 97.31871032714844
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.0494580268859863,
+            "16": 8.82617473602295,
+            "32": 28.742557525634766,
+            "48": 97.31871032714844
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.0494552897526177,
+            "16": 8.826176505262351,
+            "32": 28.74255665217025,
+            "48": 97.31870997058475
+          },
+          "guard_clipped_steps": 0,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_errors": {
+            "8": 1.0494552897526177,
+            "16": 8.826176505262351,
+            "32": 28.74255665217025,
+            "48": 97.31870997058475
+          },
+          "guard_clipped_steps": 0,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 70,
+        "shard": "wave_00441.npz",
+        "agent": 13,
+        "group": "5cefa74d5ed0aeb31677f7ce1d66661fb658f8139358936e0035811bb16628cd",
+        "frame": 452,
+        "horizon": 48,
+        "observed_pickup_frame": 208,
+        "observed_lock_frame": 468,
+        "frames_pickup_to_lock": 260,
+        "carried_mask_start": 192,
+        "initial_keys": 1
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.8822131156921387,
+            "16": 9.708695411682129,
+            "32": 28.877655029296875,
+            "48": 80.70771026611328
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.8822131156921387,
+            "16": 9.708695411682129,
+            "32": 28.877655029296875,
+            "48": 80.70771026611328
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.8822131794624515,
+            "16": 9.886733111130917,
+            "32": 33.7992390191109,
+            "48": 98.14232659000632
+          },
+          "guard_clipped_steps": 10,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.8822131794624515,
+            "16": 9.886733111130917,
+            "32": 33.7992390191109,
+            "48": 98.14232659000632
+          },
+          "guard_clipped_steps": 10,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 70,
+        "shard": "wave_00441.npz",
+        "agent": 41,
+        "group": "a2dc43f92bcd44c3c356d61180775f1257022b9ebd31ad5e3c2fcd0907be547a",
+        "frame": 459,
+        "horizon": 48,
+        "observed_pickup_frame": 204,
+        "observed_lock_frame": 475,
+        "frames_pickup_to_lock": 271,
+        "carried_mask_start": 188,
+        "initial_keys": 1
+      },
+      "horizon": 40,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.996276617050171,
+            "16": 9.121430397033691,
+            "32": 91.110107421875
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.996276617050171,
+            "16": 9.121430397033691,
+            "32": 91.110107421875
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.9962743418026019,
+            "16": 9.121434197571972,
+            "32": 105.67778325284347
+          },
+          "guard_clipped_steps": 7,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.9962743418026019,
+            "16": 9.121434197571972,
+            "32": 105.67778325284347
+          },
+          "guard_clipped_steps": 7,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 70,
+        "shard": "wave_00441.npz",
+        "agent": 40,
+        "group": "f2dfe8116fb50f11977208296a3143e0c868914f941153dddff8e973173a5519",
+        "frame": 488,
+        "horizon": 48,
+        "observed_pickup_frame": 204,
+        "observed_lock_frame": 504,
+        "frames_pickup_to_lock": 300,
+        "carried_mask_start": 188,
+        "initial_keys": 1
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.5039973258972168,
+            "16": 3.013894557952881,
+            "32": 35.84164810180664,
+            "48": 58.46239471435547
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.5039973258972168,
+            "16": 3.013894557952881,
+            "32": 35.84164810180664,
+            "48": 58.46239471435547
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.5039969685637835,
+            "16": 6.37025619834694,
+            "32": 62.67125948915747,
+            "48": 138.89982040667888
+          },
+          "guard_clipped_steps": 16,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 1.5039969685637835,
+            "16": 6.37025619834694,
+            "32": 62.67125948915747,
+            "48": 138.89982040667888
+          },
+          "guard_clipped_steps": 16,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 68,
+        "shard": "wave_00422.npz",
+        "agent": 23,
+        "group": "f302af856a9bc9454375e77a4fe1fdf2ae68ab1e56f21219e1de1f5c2072b7e7",
+        "frame": 1739,
+        "horizon": 48,
+        "observed_pickup_frame": 206,
+        "observed_lock_frame": 1755,
+        "frames_pickup_to_lock": 1549,
+        "carried_mask_start": 190,
+        "initial_keys": 1
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.20098252594470978,
+            "16": 2.474975347518921,
+            "32": 17.723434448242188,
+            "48": 14.663273811340332
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.20098252594470978,
+            "16": 2.474975347518921,
+            "32": 17.723434448242188,
+            "48": 14.663273811340332
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.2009809661946171,
+            "16": 6.654360103535333,
+            "32": 7.633643115872001,
+            "48": 7.150384780562214
+          },
+          "guard_clipped_steps": 5,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.2009809661946171,
+            "16": 6.654360103535333,
+            "32": 7.633643115872001,
+            "48": 7.150384780562214
+          },
+          "guard_clipped_steps": 5,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 70,
+        "shard": "wave_00441.npz",
+        "agent": 11,
+        "group": "c1dc051e37156c057958d1cbc89453ae002c7bd10868daa13d34c0917d5094f2",
+        "frame": 510,
+        "horizon": 48,
+        "observed_pickup_frame": 199,
+        "observed_lock_frame": 526,
+        "frames_pickup_to_lock": 327,
+        "carried_mask_start": 183,
+        "initial_keys": 1
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 2.654707670211792,
+            "16": 10.677085876464844,
+            "32": 31.964004516601562,
+            "48": 101.56462097167969
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 2.654707670211792,
+            "16": 10.677085876464844,
+            "32": 31.964004516601562,
+            "48": 101.56462097167969
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 2.654705539084922,
+            "16": 10.864972431790086,
+            "32": 34.54135548884636,
+            "48": 104.14663197039606
+          },
+          "guard_clipped_steps": 4,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 2.654705539084922,
+            "16": 10.864972431790086,
+            "32": 34.54135548884636,
+            "48": 104.14663197039606
+          },
+          "guard_clipped_steps": 4,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 70,
+        "shard": "wave_00441.npz",
+        "agent": 9,
+        "group": "79b86637d3274c3b556651b4b240075e1f6ba387189ffb49510c3a1bdd8813eb",
+        "frame": 454,
+        "horizon": 48,
+        "observed_pickup_frame": 190,
+        "observed_lock_frame": 470,
+        "frames_pickup_to_lock": 280,
+        "carried_mask_start": 174,
+        "initial_keys": 1
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 7.506026268005371,
+            "16": 24.860219955444336,
+            "32": 42.45289993286133,
+            "48": 145.58810424804688
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 7.506026268005371,
+            "16": 24.860219955444336,
+            "32": 42.45289993286133,
+            "48": 145.58810424804688
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 7.5060286547858945,
+            "16": 24.63737670581161,
+            "32": 42.82027148882468,
+            "48": 145.69967484969652
+          },
+          "guard_clipped_steps": 4,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 7.5060286547858945,
+            "16": 24.63737670581161,
+            "32": 42.82027148882468,
+            "48": 145.69967484969652
+          },
+          "guard_clipped_steps": 4,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 70,
+        "shard": "wave_00441.npz",
+        "agent": 48,
+        "group": "c117cf4edd86aee6b173fe491e05b13a7c192365d1e390c4be16fde33f947b6d",
+        "frame": 553,
+        "horizon": 48,
+        "observed_pickup_frame": 210,
+        "observed_lock_frame": 569,
+        "frames_pickup_to_lock": 359,
+        "carried_mask_start": 194,
+        "initial_keys": 1
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.7642571330070496,
+            "16": 4.440771579742432,
+            "32": 7.825922966003418,
+            "48": 14.580865859985352
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.7642571330070496,
+            "16": 4.440771579742432,
+            "32": 7.825922966003418,
+            "48": 14.580865859985352
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.7642557319321808,
+            "16": 7.268119135041125,
+            "32": 18.89247107363127,
+            "48": 46.161097989905414
+          },
+          "guard_clipped_steps": 12,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 0.7642557319321808,
+            "16": 7.268119135041125,
+            "32": 18.89247107363127,
+            "48": 46.161097989905414
+          },
+          "guard_clipped_steps": 12,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "entry": 70,
+        "shard": "wave_00441.npz",
+        "agent": 46,
+        "group": "c733af060c50f8aad0fa5e4b5b6a815e4bed0a26520300c5b9bae17cf64b3475",
+        "frame": 466,
+        "horizon": 48,
+        "observed_pickup_frame": 199,
+        "observed_lock_frame": 482,
+        "frames_pickup_to_lock": 283,
+        "carried_mask_start": 183,
+        "initial_keys": 1
+      },
+      "horizon": 48,
+      "modes": {
+        "raw_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 4.174628257751465,
+            "16": 12.716018676757812,
+            "32": 31.97286605834961,
+            "48": 110.88727569580078
+          },
+          "guard_clipped_steps": null,
+          "policy": null
+        },
+        "raw_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 4.174628257751465,
+            "16": 12.716018676757812,
+            "32": 31.97286605834961,
+            "48": 110.88727569580078
+          },
+          "guard_clipped_steps": null,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        },
+        "guarded_fixed": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 4.174629400793872,
+            "16": 12.976344618895324,
+            "32": 34.9866871652776,
+            "48": 111.70798567189196
+          },
+          "guard_clipped_steps": 4,
+          "policy": null
+        },
+        "guarded_pickup": {
+          "first_new_key_coarse_frame_by_member": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "first_new_key_coarse_frame_majority": null,
+          "end_key_masks": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "position_errors": {
+            "8": 4.174629400793872,
+            "16": 12.976344618895324,
+            "32": 34.9866871652776,
+            "48": 111.70798567189196
+          },
+          "guard_clipped_steps": 4,
+          "policy": {
+            "rule": "strict-native-endpoint-circle-v1",
+            "radius": 22.0,
+            "frames_per_model_step": 4,
+            "interpolated_integer_endpoints": true,
+            "guard_mask": "before_incoming_model_step",
+            "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": 3,
+            "delay_reference": "own_interpolated_pickup_not_observed_game",
+            "approximation": "linear_integer_samples_no_midstep_physics"
+          }
+        }
+      }
+    }
+  ],
+  "seconds": 6.876490000000558,
+  "game_connected": false,
+  "training": false,
+  "limits": [
+    "Recorded future hazards/platforms oracle; no game-completion evidence.",
+    "Lock region uses stored x/y anchor, not a controlled collision experiment.",
+    "Step4 interpolation and delayed opening are approximations; step1 endpoint rule can be checked exactly.",
+    "All available lock examples here may share a source wave; not independent trials.",
+    "Full pickup-to-lock observed carry is teacher-forced geometric rule replay, not 260+ frame world-model prediction.",
+    "Later48-frame model windows start with keys1; they test guard/feature consistency, not imagined pickup."
+  ]
+}

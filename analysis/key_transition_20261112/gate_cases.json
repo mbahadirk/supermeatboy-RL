@@ -1,0 +1,120 @@
+{
+  "protocol": "recorded-later-gate-windows-v1",
+  "manifest_sha256": "1ef6e5ec30453b11d4f295c3daf5dcda57c8884031115d2482c0060b88290dbe",
+  "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+  "available": 12,
+  "cases": [
+    {
+      "entry": 70,
+      "shard": "wave_00441.npz",
+      "agent": 13,
+      "group": "5cefa74d5ed0aeb31677f7ce1d66661fb658f8139358936e0035811bb16628cd",
+      "frame": 452,
+      "horizon": 48,
+      "observed_pickup_frame": 208,
+      "observed_lock_frame": 468,
+      "frames_pickup_to_lock": 260,
+      "carried_mask_start": 192,
+      "initial_keys": 1
+    },
+    {
+      "entry": 70,
+      "shard": "wave_00441.npz",
+      "agent": 41,
+      "group": "a2dc43f92bcd44c3c356d61180775f1257022b9ebd31ad5e3c2fcd0907be547a",
+      "frame": 459,
+      "horizon": 48,
+      "observed_pickup_frame": 204,
+      "observed_lock_frame": 475,
+      "frames_pickup_to_lock": 271,
+      "carried_mask_start": 188,
+      "initial_keys": 1
+    },
+    {
+      "entry": 70,
+      "shard": "wave_00441.npz",
+      "agent": 40,
+      "group": "f2dfe8116fb50f11977208296a3143e0c868914f941153dddff8e973173a5519",
+      "frame": 488,
+      "horizon": 48,
+      "observed_pickup_frame": 204,
+      "observed_lock_frame": 504,
+      "frames_pickup_to_lock": 300,
+      "carried_mask_start": 188,
+      "initial_keys": 1
+    },
+    {
+      "entry": 68,
+      "shard": "wave_00422.npz",
+      "agent": 23,
+      "group": "f302af856a9bc9454375e77a4fe1fdf2ae68ab1e56f21219e1de1f5c2072b7e7",
+      "frame": 1739,
+      "horizon": 48,
+      "observed_pickup_frame": 206,
+      "observed_lock_frame": 1755,
+      "frames_pickup_to_lock": 1549,
+      "carried_mask_start": 190,
+      "initial_keys": 1
+    },
+    {
+      "entry": 70,
+      "shard": "wave_00441.npz",
+      "agent": 11,
+      "group": "c1dc051e37156c057958d1cbc89453ae002c7bd10868daa13d34c0917d5094f2",
+      "frame": 510,
+      "horizon": 48,
+      "observed_pickup_frame": 199,
+      "observed_lock_frame": 526,
+      "frames_pickup_to_lock": 327,
+      "carried_mask_start": 183,
+      "initial_keys": 1
+    },
+    {
+      "entry": 70,
+      "shard": "wave_00441.npz",
+      "agent": 9,
+      "group": "79b86637d3274c3b556651b4b240075e1f6ba387189ffb49510c3a1bdd8813eb",
+      "frame": 454,
+      "horizon": 48,
+      "observed_pickup_frame": 190,
+      "observed_lock_frame": 470,
+      "frames_pickup_to_lock": 280,
+      "carried_mask_start": 174,
+      "initial_keys": 1
+    },
+    {
+      "entry": 70,
+      "shard": "wave_00441.npz",
+      "agent": 48,
+      "group": "c117cf4edd86aee6b173fe491e05b13a7c192365d1e390c4be16fde33f947b6d",
+      "frame": 553,
+      "horizon": 48,
+      "observed_pickup_frame": 210,
+      "observed_lock_frame": 569,
+      "frames_pickup_to_lock": 359,
+      "carried_mask_start": 194,
+      "initial_keys": 1
+    },
+    {
+      "entry": 70,
+      "shard": "wave_00441.npz",
+      "agent": 46,
+      "group": "c733af060c50f8aad0fa5e4b5b6a815e4bed0a26520300c5b9bae17cf64b3475",
+      "frame": 466,
+      "horizon": 48,
+      "observed_pickup_frame": 199,
+      "observed_lock_frame": 482,
+      "frames_pickup_to_lock": 283,
+      "carried_mask_start": 183,
+      "initial_keys": 1
+    }
+  ],
+  "minimum_recorded_delay": 260,
+  "selection": "Validation-only agents, recorded key then lock-region; seeded full-group order, first8",
+  "limits": [
+    "All available lock examples here may share a source wave; not independent trials.",
+    "Full pickup-to-lock observed carry is teacher-forced geometric rule replay, not 260+ frame world-model prediction.",
+    "Later48-frame model windows start with keys1; they test guard/feature consistency, not imagined pickup."
+  ],
+  "sha256": "9050fdeaf58b61f6b2d636019e45040c3f51c3abc612f50abd5ea485f86216ce"
+}

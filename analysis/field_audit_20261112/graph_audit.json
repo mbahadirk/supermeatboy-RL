@@ -1,0 +1,1784 @@
+{
+  "runtime_reconstruction": {
+    "summary": "clear, 2 leg(s); route cost 87.4, T at the spawn 412 f; 84240 states, 244991 edges per leg; build 0.22 s (route search 0.02 s, field 0.20 s)",
+    "static_hazards": 26,
+    "world_record_frame": 0,
+    "platforms": 0,
+    "lift_cells": 136,
+    "sealed_hazard": 0,
+    "sealed_wall": 0,
+    "mode": [
+      "clear",
+      "closed",
+      "closed",
+      false
+    ],
+    "jumps": [
+      5,
+      12
+    ],
+    "leg_locks": [
+      "closed",
+      "open"
+    ],
+    "route_cells": [
+      [
+        18,
+        21
+      ],
+      [
+        17,
+        21
+      ],
+      [
+        16,
+        21
+      ],
+      [
+        16,
+        20
+      ],
+      [
+        16,
+        19
+      ],
+      [
+        16,
+        18
+      ],
+      [
+        16,
+        17
+      ],
+      [
+        16,
+        16
+      ],
+      [
+        16,
+        15
+      ],
+      [
+        15,
+        14
+      ],
+      [
+        14,
+        13
+      ],
+      [
+        15,
+        13
+      ],
+      [
+        16,
+        13
+      ],
+      [
+        17,
+        13
+      ],
+      [
+        18,
+        13
+      ],
+      [
+        19,
+        13
+      ],
+      [
+        20,
+        13
+      ],
+      [
+        21,
+        13
+      ],
+      [
+        22,
+        13
+      ],
+      [
+        23,
+        13
+      ],
+      [
+        24,
+        13
+      ],
+      [
+        25,
+        13
+      ],
+      [
+        25,
+        14
+      ],
+      [
+        25,
+        15
+      ],
+      [
+        25,
+        16
+      ],
+      [
+        25,
+        17
+      ],
+      [
+        25,
+        18
+      ],
+      [
+        25,
+        19
+      ],
+      [
+        25,
+        20
+      ],
+      [
+        25,
+        21
+      ],
+      [
+        24,
+        21
+      ],
+      [
+        23,
+        21
+      ],
+      [
+        24,
+        21
+      ],
+      [
+        25,
+        21
+      ],
+      [
+        25,
+        20
+      ],
+      [
+        25,
+        19
+      ],
+      [
+        25,
+        18
+      ],
+      [
+        25,
+        17
+      ],
+      [
+        25,
+        16
+      ],
+      [
+        25,
+        15
+      ],
+      [
+        26,
+        14
+      ],
+      [
+        27,
+        13
+      ],
+      [
+        26,
+        13
+      ],
+      [
+        25,
+        13
+      ],
+      [
+        24,
+        13
+      ],
+      [
+        23,
+        13
+      ],
+      [
+        22,
+        13
+      ],
+      [
+        21,
+        13
+      ],
+      [
+        20,
+        13
+      ],
+      [
+        19,
+        13
+      ],
+      [
+        18,
+        13
+      ],
+      [
+        17,
+        13
+      ],
+      [
+        16,
+        13
+      ],
+      [
+        16,
+        14
+      ],
+      [
+        16,
+        15
+      ],
+      [
+        16,
+        16
+      ],
+      [
+        16,
+        17
+      ],
+      [
+        16,
+        18
+      ],
+      [
+        16,
+        19
+      ],
+      [
+        16,
+        20
+      ],
+      [
+        16,
+        21
+      ],
+      [
+        17,
+        21
+      ],
+      [
+        18,
+        21
+      ],
+      [
+        19,
+        21
+      ],
+      [
+        19,
+        20
+      ],
+      [
+        19,
+        19
+      ],
+      [
+        18,
+        18
+      ],
+      [
+        18,
+        17
+      ],
+      [
+        18,
+        16
+      ],
+      [
+        19,
+        15
+      ],
+      [
+        20,
+        15
+      ]
+    ],
+    "keys": [
+      [
+        69.76046752929688,
+        130.00999450683594
+      ]
+    ],
+    "fans": [
+      [
+        -139.6475067138672,
+        -162.34469604492188,
+        0,
+        1,
+        41.57500076293945,
+        350,
+        370
+      ],
+      [
+        181.3172149658203,
+        -163.35992431640625,
+        0,
+        1,
+        41.57500076293945,
+        350,
+        370
+      ]
+    ]
+  },
+  "traces": [
+    {
+      "query": [
+        30,
+        -154
+      ],
+      "T_support": 317.38000000000005,
+      "path": [
+        {
+          "node": 6084,
+          "cell": [
+            21,
+            7
+          ],
+          "xy": [
+            30.0,
+            -150.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 85.73999999999997,
+          "edge_frames": 5.41,
+          "to": [
+            22,
+            8
+          ]
+        },
+        {
+          "node": 10636,
+          "cell": [
+            22,
+            8
+          ],
+          "xy": [
+            50.0,
+            -130.0
+          ],
+          "up": 1,
+          "side": 1,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 80.32999999999997,
+          "edge_frames": 5.41,
+          "to": [
+            23,
+            9
+          ]
+        },
+        {
+          "node": 15188,
+          "cell": [
+            23,
+            9
+          ],
+          "xy": [
+            70.0,
+            -110.0
+          ],
+          "up": 2,
+          "side": 2,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 74.91999999999997,
+          "edge_frames": 5.41,
+          "to": [
+            24,
+            10
+          ]
+        },
+        {
+          "node": 19740,
+          "cell": [
+            24,
+            10
+          ],
+          "xy": [
+            90.0,
+            -90.0
+          ],
+          "up": 3,
+          "side": 3,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 69.50999999999998,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            11
+          ]
+        },
+        {
+          "node": 24604,
+          "cell": [
+            25,
+            11
+          ],
+          "xy": [
+            110.0,
+            -70.0
+          ],
+          "up": 4,
+          "side": 4,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 64.09999999999998,
+          "edge_frames": 5.41,
+          "to": [
+            26,
+            12
+          ]
+        },
+        {
+          "node": 29780,
+          "cell": [
+            26,
+            12
+          ],
+          "xy": [
+            130.0,
+            -50.0
+          ],
+          "up": 5,
+          "side": 5,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 58.68999999999998,
+          "edge_frames": 5.41,
+          "to": [
+            27,
+            13
+          ]
+        },
+        {
+          "node": 34788,
+          "cell": [
+            27,
+            13
+          ],
+          "xy": [
+            150.0,
+            -30.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": true,
+          "time_without_later_leg": 53.27999999999999,
+          "edge_frames": 5.41,
+          "to": [
+            26,
+            14
+          ]
+        },
+        {
+          "node": 38404,
+          "cell": [
+            26,
+            14
+          ],
+          "xy": [
+            130.0,
+            -10.0
+          ],
+          "up": 1,
+          "side": 1,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 47.86999999999999,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            15
+          ]
+        },
+        {
+          "node": 42900,
+          "cell": [
+            25,
+            15
+          ],
+          "xy": [
+            110.0,
+            10.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 42.459999999999994,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            16
+          ]
+        },
+        {
+          "node": 47580,
+          "cell": [
+            25,
+            16
+          ],
+          "xy": [
+            110.0,
+            30.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 37.05,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            17
+          ]
+        },
+        {
+          "node": 52260,
+          "cell": [
+            25,
+            17
+          ],
+          "xy": [
+            110.0,
+            50.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 31.64,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            18
+          ]
+        },
+        {
+          "node": 56940,
+          "cell": [
+            25,
+            18
+          ],
+          "xy": [
+            110.0,
+            70.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 26.23,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            19
+          ]
+        },
+        {
+          "node": 61620,
+          "cell": [
+            25,
+            19
+          ],
+          "xy": [
+            110.0,
+            90.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 20.82,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            20
+          ]
+        },
+        {
+          "node": 65520,
+          "cell": [
+            25,
+            20
+          ],
+          "xy": [
+            110.0,
+            110.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 15.41,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            21
+          ]
+        },
+        {
+          "node": 70226,
+          "cell": [
+            25,
+            21
+          ],
+          "xy": [
+            110.0,
+            130.0
+          ],
+          "up": 1,
+          "side": 0,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 10.0,
+          "edge_frames": 5.0,
+          "to": [
+            24,
+            21
+          ]
+        },
+        {
+          "node": 70044,
+          "cell": [
+            24,
+            21
+          ],
+          "xy": [
+            90.0,
+            130.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 5.0,
+          "edge_frames": 5.0,
+          "to": [
+            23,
+            21
+          ]
+        },
+        {
+          "node": 69888,
+          "cell": [
+            23,
+            21
+          ],
+          "xy": [
+            70.0,
+            130.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 0.0
+        }
+      ]
+    },
+    {
+      "query": [
+        110,
+        -154
+      ],
+      "unsupported": true
+    },
+    {
+      "query": [
+        190,
+        -154
+      ],
+      "T_support": 317.38000000000005,
+      "path": [
+        {
+          "node": 7332,
+          "cell": [
+            29,
+            7
+          ],
+          "xy": [
+            190.0,
+            -150.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": true,
+          "time_without_later_leg": 85.73999999999997,
+          "edge_frames": 5.41,
+          "to": [
+            28,
+            8
+          ]
+        },
+        {
+          "node": 11544,
+          "cell": [
+            28,
+            8
+          ],
+          "xy": [
+            170.0,
+            -130.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": true,
+          "time_without_later_leg": 80.32999999999997,
+          "edge_frames": 5.41,
+          "to": [
+            27,
+            9
+          ]
+        },
+        {
+          "node": 15756,
+          "cell": [
+            27,
+            9
+          ],
+          "xy": [
+            150.0,
+            -110.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": true,
+          "time_without_later_leg": 74.91999999999997,
+          "edge_frames": 5.41,
+          "to": [
+            26,
+            10
+          ]
+        },
+        {
+          "node": 19996,
+          "cell": [
+            26,
+            10
+          ],
+          "xy": [
+            130.0,
+            -90.0
+          ],
+          "up": 1,
+          "side": 1,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 69.50999999999998,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            11
+          ]
+        },
+        {
+          "node": 24548,
+          "cell": [
+            25,
+            11
+          ],
+          "xy": [
+            110.0,
+            -70.0
+          ],
+          "up": 2,
+          "side": 2,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 64.09999999999998,
+          "edge_frames": 5.41,
+          "to": [
+            24,
+            12
+          ]
+        },
+        {
+          "node": 29412,
+          "cell": [
+            24,
+            12
+          ],
+          "xy": [
+            90.0,
+            -50.0
+          ],
+          "up": 3,
+          "side": 3,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 58.68999999999998,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            13
+          ]
+        },
+        {
+          "node": 34588,
+          "cell": [
+            25,
+            13
+          ],
+          "xy": [
+            110.0,
+            -30.0
+          ],
+          "up": 4,
+          "side": 4,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 53.27999999999999,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            14
+          ]
+        },
+        {
+          "node": 38220,
+          "cell": [
+            25,
+            14
+          ],
+          "xy": [
+            110.0,
+            -10.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 47.86999999999999,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            15
+          ]
+        },
+        {
+          "node": 42900,
+          "cell": [
+            25,
+            15
+          ],
+          "xy": [
+            110.0,
+            10.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 42.459999999999994,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            16
+          ]
+        },
+        {
+          "node": 47580,
+          "cell": [
+            25,
+            16
+          ],
+          "xy": [
+            110.0,
+            30.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 37.05,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            17
+          ]
+        },
+        {
+          "node": 52260,
+          "cell": [
+            25,
+            17
+          ],
+          "xy": [
+            110.0,
+            50.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 31.64,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            18
+          ]
+        },
+        {
+          "node": 56940,
+          "cell": [
+            25,
+            18
+          ],
+          "xy": [
+            110.0,
+            70.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 26.23,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            19
+          ]
+        },
+        {
+          "node": 61620,
+          "cell": [
+            25,
+            19
+          ],
+          "xy": [
+            110.0,
+            90.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 20.82,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            20
+          ]
+        },
+        {
+          "node": 65520,
+          "cell": [
+            25,
+            20
+          ],
+          "xy": [
+            110.0,
+            110.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 15.41,
+          "edge_frames": 5.41,
+          "to": [
+            25,
+            21
+          ]
+        },
+        {
+          "node": 70226,
+          "cell": [
+            25,
+            21
+          ],
+          "xy": [
+            110.0,
+            130.0
+          ],
+          "up": 1,
+          "side": 0,
+          "falling": false,
+          "support": false,
+          "lift": false,
+          "time_without_later_leg": 10.0,
+          "edge_frames": 5.0,
+          "to": [
+            24,
+            21
+          ]
+        },
+        {
+          "node": 70044,
+          "cell": [
+            24,
+            21
+          ],
+          "xy": [
+            90.0,
+            130.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 5.0,
+          "edge_frames": 5.0,
+          "to": [
+            23,
+            21
+          ]
+        },
+        {
+          "node": 69888,
+          "cell": [
+            23,
+            21
+          ],
+          "xy": [
+            70.0,
+            130.0
+          ],
+          "up": 0,
+          "side": 0,
+          "falling": false,
+          "support": true,
+          "lift": false,
+          "time_without_later_leg": 0.0
+        }
+      ]
+    },
+    {
+      "query": [
+        230,
+        -154
+      ],
+      "unsupported": true
+    }
+  ],
+  "probes": [
+    {
+      "x": 30,
+      "y": -154,
+      "cell": [
+        21,
+        7
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": 317.38000000000005,
+      "T_rise": 317.38,
+      "T_fall": 317.38
+    },
+    {
+      "x": 70,
+      "y": -154,
+      "cell": [
+        23,
+        7
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 317.38000000000005,
+      "T_rise": 317.38,
+      "T_fall": 322.38
+    },
+    {
+      "x": 110,
+      "y": -154,
+      "cell": [
+        25,
+        7
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 317.38000000000005,
+      "T_rise": 317.38,
+      "T_fall": 330.53
+    },
+    {
+      "x": 150,
+      "y": -154,
+      "cell": [
+        27,
+        7
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 317.38000000000005,
+      "T_rise": 317.38,
+      "T_fall": 317.38
+    },
+    {
+      "x": 190,
+      "y": -154,
+      "cell": [
+        29,
+        7
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 317.38000000000005,
+      "T_rise": 317.38,
+      "T_fall": 317.38
+    },
+    {
+      "x": 230,
+      "y": -154,
+      "cell": [
+        31,
+        7
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 317.38000000000005,
+      "T_rise": 317.38,
+      "T_fall": 317.38
+    },
+    {
+      "x": 30,
+      "y": -114,
+      "cell": [
+        21,
+        9
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 306.56000000000006,
+      "T_rise": 306.56,
+      "T_fall": 332.86
+    },
+    {
+      "x": 70,
+      "y": -114,
+      "cell": [
+        23,
+        9
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 306.56000000000006,
+      "T_rise": 306.56,
+      "T_fall": 332.86
+    },
+    {
+      "x": 110,
+      "y": -114,
+      "cell": [
+        25,
+        9
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 306.56000000000006,
+      "T_rise": 306.56,
+      "T_fall": 319.71000000000004
+    },
+    {
+      "x": 150,
+      "y": -114,
+      "cell": [
+        27,
+        9
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 306.56000000000006,
+      "T_rise": 306.56,
+      "T_fall": 306.56
+    },
+    {
+      "x": 190,
+      "y": -114,
+      "cell": [
+        29,
+        9
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 306.56000000000006,
+      "T_rise": 306.56,
+      "T_fall": 306.56
+    },
+    {
+      "x": 230,
+      "y": -114,
+      "cell": [
+        31,
+        9
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 306.56000000000006,
+      "T_rise": 306.56,
+      "T_fall": 306.56
+    },
+    {
+      "x": 30,
+      "y": -74,
+      "cell": [
+        21,
+        11
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 305.74,
+      "T_rise": 305.74,
+      "T_fall": 348.34
+    },
+    {
+      "x": 70,
+      "y": -74,
+      "cell": [
+        23,
+        11
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 295.74000000000007,
+      "T_rise": 295.74,
+      "T_fall": 335.19
+    },
+    {
+      "x": 110,
+      "y": -74,
+      "cell": [
+        25,
+        11
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 295.74000000000007,
+      "T_rise": 295.74,
+      "T_fall": 308.89
+    },
+    {
+      "x": 150,
+      "y": -74,
+      "cell": [
+        27,
+        11
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 295.74000000000007,
+      "T_rise": 295.74,
+      "T_fall": 295.74
+    },
+    {
+      "x": 190,
+      "y": -74,
+      "cell": [
+        29,
+        11
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 295.74000000000007,
+      "T_rise": 295.74,
+      "T_fall": 295.74
+    },
+    {
+      "x": 230,
+      "y": -74,
+      "cell": [
+        31,
+        11
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 295.74000000000007,
+      "T_rise": 295.74,
+      "T_fall": 295.74
+    },
+    {
+      "x": 30,
+      "y": -34,
+      "cell": [
+        21,
+        13
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 304.92,
+      "T_rise": 304.92,
+      "T_fall": 304.92
+    },
+    {
+      "x": 70,
+      "y": -34,
+      "cell": [
+        23,
+        13
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 294.92,
+      "T_rise": 294.92,
+      "T_fall": 294.92
+    },
+    {
+      "x": 110,
+      "y": -34,
+      "cell": [
+        25,
+        13
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 284.9200000000001,
+      "T_rise": 284.92,
+      "T_fall": 284.92
+    },
+    {
+      "x": 150,
+      "y": -34,
+      "cell": [
+        27,
+        13
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 284.9200000000001,
+      "T_rise": 284.92,
+      "T_fall": 284.92
+    },
+    {
+      "x": 190,
+      "y": -34,
+      "cell": [
+        29,
+        13
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 284.9200000000001,
+      "T_rise": 284.92,
+      "T_fall": 284.92
+    },
+    {
+      "x": 230,
+      "y": -34,
+      "cell": [
+        31,
+        13
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 284.9200000000001,
+      "T_rise": 284.92,
+      "T_fall": 284.92
+    },
+    {
+      "x": 30,
+      "y": 6,
+      "cell": [
+        21,
+        15
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": Infinity,
+      "T_rise": Infinity,
+      "T_fall": Infinity
+    },
+    {
+      "x": 70,
+      "y": 6,
+      "cell": [
+        23,
+        15
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": Infinity,
+      "T_rise": Infinity,
+      "T_fall": Infinity
+    },
+    {
+      "x": 110,
+      "y": 6,
+      "cell": [
+        25,
+        15
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": 274.1000000000001,
+      "T_rise": 274.1,
+      "T_fall": 274.1
+    },
+    {
+      "x": 150,
+      "y": 6,
+      "cell": [
+        27,
+        15
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 274.1000000000001,
+      "T_rise": 274.1,
+      "T_fall": 274.1
+    },
+    {
+      "x": 190,
+      "y": 6,
+      "cell": [
+        29,
+        15
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 274.1000000000001,
+      "T_rise": 274.1,
+      "T_fall": 274.1
+    },
+    {
+      "x": 230,
+      "y": 6,
+      "cell": [
+        31,
+        15
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 274.1000000000001,
+      "T_rise": 274.1,
+      "T_fall": 274.1
+    },
+    {
+      "x": 30,
+      "y": 46,
+      "cell": [
+        21,
+        17
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": Infinity,
+      "T_rise": Infinity,
+      "T_fall": Infinity
+    },
+    {
+      "x": 70,
+      "y": 46,
+      "cell": [
+        23,
+        17
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": Infinity,
+      "T_rise": Infinity,
+      "T_fall": Infinity
+    },
+    {
+      "x": 110,
+      "y": 46,
+      "cell": [
+        25,
+        17
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": 263.2800000000001,
+      "T_rise": 263.28000000000003,
+      "T_fall": 263.28000000000003
+    },
+    {
+      "x": 150,
+      "y": 46,
+      "cell": [
+        27,
+        17
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 263.2800000000001,
+      "T_rise": 263.28000000000003,
+      "T_fall": 263.28000000000003
+    },
+    {
+      "x": 190,
+      "y": 46,
+      "cell": [
+        29,
+        17
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 263.2800000000001,
+      "T_rise": 263.28000000000003,
+      "T_fall": 263.28000000000003
+    },
+    {
+      "x": 230,
+      "y": 46,
+      "cell": [
+        31,
+        17
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 273.28000000000003,
+      "T_rise": 273.28000000000003,
+      "T_fall": 273.28000000000003
+    },
+    {
+      "x": 30,
+      "y": 86,
+      "cell": [
+        21,
+        19
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": Infinity,
+      "T_rise": Infinity,
+      "T_fall": Infinity
+    },
+    {
+      "x": 70,
+      "y": 86,
+      "cell": [
+        23,
+        19
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": Infinity,
+      "T_rise": Infinity,
+      "T_fall": Infinity
+    },
+    {
+      "x": 110,
+      "y": 86,
+      "cell": [
+        25,
+        19
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": 252.46000000000004,
+      "T_rise": 252.46000000000004,
+      "T_fall": 252.46000000000004
+    },
+    {
+      "x": 150,
+      "y": 86,
+      "cell": [
+        27,
+        19
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 252.46000000000004,
+      "T_rise": 252.46000000000004,
+      "T_fall": 252.46000000000004
+    },
+    {
+      "x": 190,
+      "y": 86,
+      "cell": [
+        29,
+        19
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 262.46000000000004,
+      "T_rise": 262.46000000000004,
+      "T_fall": 262.46000000000004
+    },
+    {
+      "x": 230,
+      "y": 86,
+      "cell": [
+        31,
+        19
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 272.46000000000004,
+      "T_rise": 272.46000000000004,
+      "T_fall": 272.46000000000004
+    },
+    {
+      "x": 30,
+      "y": 126,
+      "cell": [
+        21,
+        21
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": Infinity,
+      "T_rise": Infinity,
+      "T_fall": Infinity
+    },
+    {
+      "x": 70,
+      "y": 126,
+      "cell": [
+        23,
+        21
+      ],
+      "support": true,
+      "lift": false,
+      "T_support": 231.64000000000004,
+      "T_rise": 231.64000000000004,
+      "T_fall": 231.64000000000004
+    },
+    {
+      "x": 110,
+      "y": 126,
+      "cell": [
+        25,
+        21
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 241.64000000000004,
+      "T_rise": 241.64000000000004,
+      "T_fall": 241.64000000000004
+    },
+    {
+      "x": 150,
+      "y": 126,
+      "cell": [
+        27,
+        21
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 251.64000000000004,
+      "T_rise": 251.64000000000004,
+      "T_fall": 251.64000000000004
+    },
+    {
+      "x": 190,
+      "y": 126,
+      "cell": [
+        29,
+        21
+      ],
+      "support": true,
+      "lift": true,
+      "T_support": 261.64000000000004,
+      "T_rise": 261.64000000000004,
+      "T_fall": 261.64000000000004
+    },
+    {
+      "x": 230,
+      "y": 126,
+      "cell": [
+        31,
+        21
+      ],
+      "support": false,
+      "lift": false,
+      "T_support": 271.64000000000004,
+      "T_rise": 271.64000000000004,
+      "T_fall": 271.64000000000004
+    }
+  ],
+  "map": [
+    "r29 y=   290 ########################################",
+    "r28 y=   270 ########################################",
+    "r27 y=   250 ########################################",
+    "r26 y=   230 ########################################",
+    "r25 y=   210 ########################################",
+    "r24 y=   190 #######s...........s##s...........s#####",
+    "r23 y=   170 #######s...FFFF....s##s....FFFF...s#####",
+    "r22 y=   150 #######s...FFFF....s##s....FFFF...s#####",
+    "r21 y=   130 #####s.....FFFF..sss##sKs..FFFF.....s###",
+    "r20 y=   110 #####s.....FFFF.s##L#####s.FFFF.....s###",
+    "r19 y=    90 #####s.....FFFF.s#s....s#s.FFFF.....s###",
+    "r18 y=    70 #####s.....FFFF.s#s....s#s.FFFF.....s###",
+    "r17 y=    50 #####s.....FFFF.s#s....s#s.FFFF.....s###",
+    "r16 y=    30 #####s.....FFFF.s#s....s#s.FFFF.....s###",
+    "r15 y=    10 #####s.....FFFF.s#ssssss#s.FFFF.....s###",
+    "r14 y=   -10 #####s.....FFFF.s########s.FFFF.....s###",
+    "r13 y=   -30 #####s.....FFFF............FFFF.....s###",
+    "r12 y=   -50 #####s.....FFFF............FFFF.....s###",
+    "r11 y=   -70 #####ss....FFFF............FFFF....ss###",
+    "r10 y=   -90 #######s...FFFF............FFFF...s#####",
+    "r09 y=  -110 #######s...FFFF............FFFF...s#####",
+    "r08 y=  -130 #######s...FFFF............FFFF...s#####",
+    "r07 y=  -150 #######s...FFFF....ssXs....FFFF...s#####",
+    "r06 y=  -170 #######ssssssssssss####ssssssssssss#####",
+    "r05 y=  -190 ########################################",
+    "r04 y=  -210 ########################################",
+    "r03 y=  -230 ########################################",
+    "r02 y=  -250 ########################################",
+    "r01 y=  -270 ########################################",
+    "r00 y=  -290 #################################s######"
+  ],
+  "no_wind_support_counterfactual": {
+    "summary": "clear, 2 leg(s); route cost 144.4, T at the spawn 580 f; 84240 states, 335774 edges per leg; build 0.37 s (route search 0.09 s, field 0.28 s)",
+    "jumps": [
+      5,
+      12
+    ],
+    "floor_T": {
+      "30": 466.28000000000003,
+      "70": 456.28000000000003,
+      "110": 446.28000000000003,
+      "150": 436.28000000000003,
+      "190": 426.28000000000003,
+      "230": 416.2800000000001
+    }
+  },
+  "field_builds": 2,
+  "elapsed_seconds": 0.7427733999999191
+}

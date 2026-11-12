@@ -1,0 +1,3754 @@
+{
+  "protocol": "dataset-catalog-v1",
+  "sources": [
+    "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data"
+  ],
+  "seed": 0,
+  "max_candidates": 2000,
+  "per_source_cap": null,
+  "selection": "one seeded filename-index sample per evenly spaced bin; sources round-robin",
+  "source_counts": {
+    "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data": {
+      "files_listed": 373,
+      "metadata_inspected": 373
+    }
+  },
+  "entries": [
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00000.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00000.npz",
+      "level": "1-1",
+      "raw_rows": 27563,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 496424
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00001.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00001.npz",
+      "level": "1-1",
+      "raw_rows": 23793,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 422933
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00002.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00002.npz",
+      "level": "1-1",
+      "raw_rows": 20705,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 377470
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00003.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00003.npz",
+      "level": "1-1",
+      "raw_rows": 20716,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 374881
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00004.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00004.npz",
+      "level": "1-1",
+      "raw_rows": 16166,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 290323
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00005.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00005.npz",
+      "level": "1-1",
+      "raw_rows": 15239,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 270671
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00006.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00006.npz",
+      "level": "1-1",
+      "raw_rows": 14721,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 267190
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00007.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00007.npz",
+      "level": "1-1",
+      "raw_rows": 13125,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 237995
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00008.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00008.npz",
+      "level": "1-1",
+      "raw_rows": 11269,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 205870
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00009.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00009.npz",
+      "level": "1-1",
+      "raw_rows": 11471,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 208802
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00010.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00010.npz",
+      "level": "1-1",
+      "raw_rows": 9993,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 179047
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00011.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00011.npz",
+      "level": "1-1",
+      "raw_rows": 10704,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 194508
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00012.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00012.npz",
+      "level": "1-1",
+      "raw_rows": 10525,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 192251
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00013.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00013.npz",
+      "level": "1-1",
+      "raw_rows": 9902,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 179950
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00014.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00014.npz",
+      "level": "1-1",
+      "raw_rows": 9221,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 165169
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00015.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00015.npz",
+      "level": "1-1",
+      "raw_rows": 9045,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 161511
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00016.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00016.npz",
+      "level": "1-1",
+      "raw_rows": 8806,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 156389
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00017.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00017.npz",
+      "level": "1-1",
+      "raw_rows": 8098,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 143642
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00018.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00018.npz",
+      "level": "1-1",
+      "raw_rows": 8155,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 144047
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00019.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00019.npz",
+      "level": "1-1",
+      "raw_rows": 7460,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 132483
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00020.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00020.npz",
+      "level": "1-1",
+      "raw_rows": 8858,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 158114
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00021.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00021.npz",
+      "level": "1-1",
+      "raw_rows": 7308,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 127581
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00022.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00022.npz",
+      "level": "1-1",
+      "raw_rows": 7777,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 135463
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00023.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00023.npz",
+      "level": "1-1",
+      "raw_rows": 7545,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 133397
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00024.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00024.npz",
+      "level": "1-1",
+      "raw_rows": 7109,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 122217
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00025.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00025.npz",
+      "level": "1-1",
+      "raw_rows": 7039,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 122134
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00026.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00026.npz",
+      "level": "1-1",
+      "raw_rows": 7467,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 129260
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00027.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00027.npz",
+      "level": "1-1",
+      "raw_rows": 5747,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 94614
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00028.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00028.npz",
+      "level": "1-1",
+      "raw_rows": 6058,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 101874
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00029.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00029.npz",
+      "level": "1-1",
+      "raw_rows": 5956,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 99261
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00030.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00030.npz",
+      "level": "1-1",
+      "raw_rows": 7080,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 121384
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00031.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00031.npz",
+      "level": "1-1",
+      "raw_rows": 6666,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 114132
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00032.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00032.npz",
+      "level": "1-1",
+      "raw_rows": 6840,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 116881
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00033.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00033.npz",
+      "level": "1-1",
+      "raw_rows": 5297,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 84784
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00034.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00034.npz",
+      "level": "1-1",
+      "raw_rows": 5772,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 94984
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00035.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00035.npz",
+      "level": "1-1",
+      "raw_rows": 5669,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 93060
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00036.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00036.npz",
+      "level": "1-1",
+      "raw_rows": 6076,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 100954
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00037.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00037.npz",
+      "level": "1-1",
+      "raw_rows": 2800,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 39567
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00038.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00038.npz",
+      "level": "1-2",
+      "raw_rows": 90050,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1641503
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00039.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00039.npz",
+      "level": "1-2",
+      "raw_rows": 90050,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1660677
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00040.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00040.npz",
+      "level": "1-2",
+      "raw_rows": 84560,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1559425
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00041.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00041.npz",
+      "level": "1-2",
+      "raw_rows": 75438,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1413160
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00042.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00042.npz",
+      "level": "1-2",
+      "raw_rows": 55034,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1051504
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00043.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00043.npz",
+      "level": "1-2",
+      "raw_rows": 47446,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 909419
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00044.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00044.npz",
+      "level": "1-2",
+      "raw_rows": 35835,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 686483
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00045.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00045.npz",
+      "level": "1-2",
+      "raw_rows": 27074,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 513782
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00046.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00046.npz",
+      "level": "1-2",
+      "raw_rows": 23976,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 453631
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00047.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00047.npz",
+      "level": "1-2",
+      "raw_rows": 21459,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 403237
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00048.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00048.npz",
+      "level": "1-2",
+      "raw_rows": 20058,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 371192
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00049.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00049.npz",
+      "level": "1-2",
+      "raw_rows": 18523,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 338101
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00050.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00050.npz",
+      "level": "1-2",
+      "raw_rows": 18485,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 338297
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00051.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00051.npz",
+      "level": "1-2",
+      "raw_rows": 18325,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 322607
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00052.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00052.npz",
+      "level": "1-2",
+      "raw_rows": 15917,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 281733
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00053.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00053.npz",
+      "level": "1-2",
+      "raw_rows": 16561,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 293188
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00054.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00054.npz",
+      "level": "1-2",
+      "raw_rows": 15488,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 273521
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00055.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00055.npz",
+      "level": "1-2",
+      "raw_rows": 14504,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 247874
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00056.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00056.npz",
+      "level": "1-2",
+      "raw_rows": 14506,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 250283
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00057.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00057.npz",
+      "level": "1-2",
+      "raw_rows": 14968,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 257590
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00058.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00058.npz",
+      "level": "1-2",
+      "raw_rows": 12932,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 208124
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00059.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00059.npz",
+      "level": "1-2",
+      "raw_rows": 12581,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 198887
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00060.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00060.npz",
+      "level": "1-2",
+      "raw_rows": 11045,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 159352
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00061.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00061.npz",
+      "level": "1-2",
+      "raw_rows": 11604,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 172909
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00062.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00062.npz",
+      "level": "1-2",
+      "raw_rows": 10469,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 139666
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00063.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00063.npz",
+      "level": "1-2",
+      "raw_rows": 10398,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 140619
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00064.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00064.npz",
+      "level": "1-2",
+      "raw_rows": 10011,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 122604
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00065.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00065.npz",
+      "level": "1-2",
+      "raw_rows": 9899,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 117635
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00066.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00066.npz",
+      "level": "1-2",
+      "raw_rows": 9589,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 112208
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00067.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00067.npz",
+      "level": "1-2",
+      "raw_rows": 9624,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 109023
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00068.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00068.npz",
+      "level": "1-2",
+      "raw_rows": 9523,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 100850
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00069.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00069.npz",
+      "level": "1-2",
+      "raw_rows": 9346,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 97022
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00070.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00070.npz",
+      "level": "1-2",
+      "raw_rows": 9342,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 95042
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00071.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00071.npz",
+      "level": "1-2",
+      "raw_rows": 9468,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 98500
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00072.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00072.npz",
+      "level": "1-2",
+      "raw_rows": 9289,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 91082
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00073.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00073.npz",
+      "level": "1-2",
+      "raw_rows": 9356,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 93344
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00074.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00074.npz",
+      "level": "1-2",
+      "raw_rows": 9255,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 92340
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00075.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00075.npz",
+      "level": "1-2",
+      "raw_rows": 9339,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 93002
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00076.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00076.npz",
+      "level": "1-2",
+      "raw_rows": 9273,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 86758
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00077.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00077.npz",
+      "level": "1-2",
+      "raw_rows": 9148,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 82410
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00078.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00078.npz",
+      "level": "1-2",
+      "raw_rows": 9235,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 81912
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00079.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00079.npz",
+      "level": "1-2",
+      "raw_rows": 9219,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 88906
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00080.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00080.npz",
+      "level": "1-2",
+      "raw_rows": 9094,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 79483
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00081.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00081.npz",
+      "level": "1-2",
+      "raw_rows": 3100,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 10326
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00082.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00082.npz",
+      "level": "1-3",
+      "raw_rows": 9204,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 113303
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00083.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00083.npz",
+      "level": "1-3",
+      "raw_rows": 6528,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 76839
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00084.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00084.npz",
+      "level": "1-3",
+      "raw_rows": 6836,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 78623
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00085.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00085.npz",
+      "level": "1-3",
+      "raw_rows": 6859,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 85395
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00086.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00086.npz",
+      "level": "1-3",
+      "raw_rows": 6633,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 80263
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00087.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00087.npz",
+      "level": "1-3",
+      "raw_rows": 5841,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 70041
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00088.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00088.npz",
+      "level": "1-3",
+      "raw_rows": 5932,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 74668
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00089.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00089.npz",
+      "level": "1-3",
+      "raw_rows": 6122,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 68237
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00090.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00090.npz",
+      "level": "1-3",
+      "raw_rows": 6810,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 83305
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00091.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00091.npz",
+      "level": "1-3",
+      "raw_rows": 6578,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 85601
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00092.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00092.npz",
+      "level": "1-3",
+      "raw_rows": 6745,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 82505
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00093.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00093.npz",
+      "level": "1-3",
+      "raw_rows": 6329,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 76164
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00094.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00094.npz",
+      "level": "1-3",
+      "raw_rows": 5664,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 66828
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00095.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00095.npz",
+      "level": "1-3",
+      "raw_rows": 5908,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 66777
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00096.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00096.npz",
+      "level": "1-3",
+      "raw_rows": 6030,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 68107
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00097.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00097.npz",
+      "level": "1-3",
+      "raw_rows": 6201,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 70097
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00098.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00098.npz",
+      "level": "1-3",
+      "raw_rows": 5353,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 52700
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00099.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00099.npz",
+      "level": "1-3",
+      "raw_rows": 5346,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 55795
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00100.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00100.npz",
+      "level": "1-3",
+      "raw_rows": 5379,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 58361
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00101.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00101.npz",
+      "level": "1-3",
+      "raw_rows": 3880,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 34825
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00102.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00102.npz",
+      "level": "1-4",
+      "raw_rows": 90050,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1467609
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00103.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00103.npz",
+      "level": "1-4",
+      "raw_rows": 86145,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1522115
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00104.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00104.npz",
+      "level": "1-4",
+      "raw_rows": 78875,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1371086
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00105.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00105.npz",
+      "level": "1-4",
+      "raw_rows": 66210,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1137188
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00106.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00106.npz",
+      "level": "1-4",
+      "raw_rows": 46138,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 793343
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00107.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00107.npz",
+      "level": "1-4",
+      "raw_rows": 34521,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 588885
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00108.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00108.npz",
+      "level": "1-4",
+      "raw_rows": 23743,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 388124
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00109.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00109.npz",
+      "level": "1-4",
+      "raw_rows": 23122,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 379799
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00110.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00110.npz",
+      "level": "1-4",
+      "raw_rows": 21581,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 347816
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00111.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00111.npz",
+      "level": "1-4",
+      "raw_rows": 21049,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 340219
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00112.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00112.npz",
+      "level": "1-4",
+      "raw_rows": 20898,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 342745
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00113.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00113.npz",
+      "level": "1-4",
+      "raw_rows": 20170,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 326773
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00114.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00114.npz",
+      "level": "1-4",
+      "raw_rows": 18938,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 301153
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00115.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00115.npz",
+      "level": "1-4",
+      "raw_rows": 18335,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 287696
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00116.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00116.npz",
+      "level": "1-4",
+      "raw_rows": 18726,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 293973
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00117.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00117.npz",
+      "level": "1-4",
+      "raw_rows": 9600,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 136326
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00118.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00118.npz",
+      "level": "1-5",
+      "raw_rows": 90050,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1455429
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00119.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00119.npz",
+      "level": "1-5",
+      "raw_rows": 90050,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1389178
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00120.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00120.npz",
+      "level": "1-5",
+      "raw_rows": 26169,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 392666
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00121.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00121.npz",
+      "level": "1-5",
+      "raw_rows": 23406,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 343018
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00122.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00122.npz",
+      "level": "1-5",
+      "raw_rows": 21881,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 319025
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00123.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00123.npz",
+      "level": "1-5",
+      "raw_rows": 20735,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 296648
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00124.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00124.npz",
+      "level": "1-5",
+      "raw_rows": 20188,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 285848
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00125.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00125.npz",
+      "level": "1-5",
+      "raw_rows": 19010,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 267036
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00126.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00126.npz",
+      "level": "1-5",
+      "raw_rows": 2550,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 18456
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00127.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00127.npz",
+      "level": "1-6",
+      "raw_rows": 73003,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1004383
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00128.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00128.npz",
+      "level": "1-6",
+      "raw_rows": 88495,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 982000
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00129.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00129.npz",
+      "level": "1-6",
+      "raw_rows": 14693,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 230727
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00130.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00130.npz",
+      "level": "1-6",
+      "raw_rows": 14656,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 232211
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00131.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00131.npz",
+      "level": "1-6",
+      "raw_rows": 16680,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 268170
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00132.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00132.npz",
+      "level": "1-6",
+      "raw_rows": 16240,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 256963
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00133.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00133.npz",
+      "level": "1-6",
+      "raw_rows": 16475,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 265194
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00134.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00134.npz",
+      "level": "1-6",
+      "raw_rows": 19456,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 319545
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00135.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00135.npz",
+      "level": "1-6",
+      "raw_rows": 20273,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 330415
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00136.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00136.npz",
+      "level": "1-6",
+      "raw_rows": 18185,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 298652
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00137.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00137.npz",
+      "level": "1-7",
+      "raw_rows": 12012,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 194196
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00138.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00138.npz",
+      "level": "1-7",
+      "raw_rows": 7744,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 111706
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00139.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00139.npz",
+      "level": "1-7",
+      "raw_rows": 9738,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 147923
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00140.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00140.npz",
+      "level": "1-7",
+      "raw_rows": 12145,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 192104
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00141.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00141.npz",
+      "level": "1-7",
+      "raw_rows": 11107,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 176225
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00142.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00142.npz",
+      "level": "1-7",
+      "raw_rows": 14058,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 222213
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00143.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00143.npz",
+      "level": "1-7",
+      "raw_rows": 14056,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 213402
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00144.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00144.npz",
+      "level": "1-7",
+      "raw_rows": 14375,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 223383
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00145.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00145.npz",
+      "level": "1-7",
+      "raw_rows": 12894,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 199424
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00146.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00146.npz",
+      "level": "1-7",
+      "raw_rows": 13104,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 195171
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00147.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00147.npz",
+      "level": "1-7",
+      "raw_rows": 13090,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 197718
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00148.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00148.npz",
+      "level": "1-7",
+      "raw_rows": 12724,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 188211
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00149.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00149.npz",
+      "level": "1-7",
+      "raw_rows": 12215,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 178499
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00150.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00150.npz",
+      "level": "1-7",
+      "raw_rows": 12727,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 185503
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00151.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00151.npz",
+      "level": "1-7",
+      "raw_rows": 13120,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 192292
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00152.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00152.npz",
+      "level": "1-7",
+      "raw_rows": 12691,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 176238
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00153.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00153.npz",
+      "level": "1-7",
+      "raw_rows": 12420,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 176315
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00154.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00154.npz",
+      "level": "1-7",
+      "raw_rows": 12128,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 169075
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00155.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00155.npz",
+      "level": "1-7",
+      "raw_rows": 11701,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 163555
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00156.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00156.npz",
+      "level": "1-7",
+      "raw_rows": 10891,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 145039
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00157.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00157.npz",
+      "level": "1-7",
+      "raw_rows": 11265,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 148837
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00158.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00158.npz",
+      "level": "1-7",
+      "raw_rows": 10902,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 143440
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00159.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00159.npz",
+      "level": "1-7",
+      "raw_rows": 10951,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 147032
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00160.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00160.npz",
+      "level": "1-7",
+      "raw_rows": 10586,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 134158
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00161.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00161.npz",
+      "level": "1-7",
+      "raw_rows": 5050,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 52875
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00162.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00162.npz",
+      "level": "1-8",
+      "raw_rows": 6323,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 58158
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00163.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00163.npz",
+      "level": "1-8",
+      "raw_rows": 6969,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 73896
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00164.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00164.npz",
+      "level": "1-8",
+      "raw_rows": 7313,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 81317
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00165.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00165.npz",
+      "level": "1-8",
+      "raw_rows": 7432,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 79468
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00166.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00166.npz",
+      "level": "1-8",
+      "raw_rows": 600,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 3036
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00167.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00167.npz",
+      "level": "1-9",
+      "raw_rows": 9152,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 120695
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00168.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00168.npz",
+      "level": "1-9",
+      "raw_rows": 11366,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 161121
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00169.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00169.npz",
+      "level": "1-9",
+      "raw_rows": 12096,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 173572
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00170.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00170.npz",
+      "level": "1-9",
+      "raw_rows": 15390,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 229291
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00171.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00171.npz",
+      "level": "1-9",
+      "raw_rows": 17783,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 264173
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00172.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00172.npz",
+      "level": "1-9",
+      "raw_rows": 26715,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 423689
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00173.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00173.npz",
+      "level": "1-9",
+      "raw_rows": 35460,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 555780
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00174.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00174.npz",
+      "level": "1-9",
+      "raw_rows": 19308,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 281526
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00175.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00175.npz",
+      "level": "1-10",
+      "raw_rows": 12427,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 204224
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00176.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00176.npz",
+      "level": "1-10",
+      "raw_rows": 13959,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 232529
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00177.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00177.npz",
+      "level": "1-10",
+      "raw_rows": 14806,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 244257
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00178.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00178.npz",
+      "level": "1-10",
+      "raw_rows": 18481,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 304306
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00179.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00179.npz",
+      "level": "1-10",
+      "raw_rows": 13762,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 224173
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00180.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00180.npz",
+      "level": "1-11",
+      "raw_rows": 4296,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 64733
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00181.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00181.npz",
+      "level": "1-11",
+      "raw_rows": 4698,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 69750
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00182.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00182.npz",
+      "level": "1-11",
+      "raw_rows": 3536,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 48582
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00183.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00183.npz",
+      "level": "1-11",
+      "raw_rows": 4095,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 60672
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00184.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00184.npz",
+      "level": "1-11",
+      "raw_rows": 4628,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 70323
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00185.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00185.npz",
+      "level": "1-11",
+      "raw_rows": 4586,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 70135
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00186.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00186.npz",
+      "level": "1-11",
+      "raw_rows": 4334,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 63830
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00187.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00187.npz",
+      "level": "1-11",
+      "raw_rows": 4757,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 71234
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00188.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00188.npz",
+      "level": "1-11",
+      "raw_rows": 5355,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 83813
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00189.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00189.npz",
+      "level": "1-11",
+      "raw_rows": 5987,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 94957
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00190.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00190.npz",
+      "level": "1-11",
+      "raw_rows": 6005,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 94560
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00191.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00191.npz",
+      "level": "1-11",
+      "raw_rows": 6147,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 100449
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00192.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00192.npz",
+      "level": "1-11",
+      "raw_rows": 6107,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 98546
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00193.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00193.npz",
+      "level": "1-11",
+      "raw_rows": 6745,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 108774
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00194.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00194.npz",
+      "level": "1-11",
+      "raw_rows": 7754,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 125968
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00195.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00195.npz",
+      "level": "1-11",
+      "raw_rows": 8538,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 143469
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00196.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00196.npz",
+      "level": "1-11",
+      "raw_rows": 9404,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 157002
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00197.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00197.npz",
+      "level": "1-11",
+      "raw_rows": 9615,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 156091
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00198.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00198.npz",
+      "level": "1-11",
+      "raw_rows": 10364,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 172008
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00199.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00199.npz",
+      "level": "1-11",
+      "raw_rows": 9040,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 147993
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00200.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00200.npz",
+      "level": "1-11",
+      "raw_rows": 8747,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 138587
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00201.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00201.npz",
+      "level": "1-11",
+      "raw_rows": 10668,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 178123
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00202.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00202.npz",
+      "level": "1-11",
+      "raw_rows": 12569,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 206763
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00203.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00203.npz",
+      "level": "1-11",
+      "raw_rows": 12580,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 214220
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00204.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00204.npz",
+      "level": "1-11",
+      "raw_rows": 10986,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 181813
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00205.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00205.npz",
+      "level": "1-11",
+      "raw_rows": 15190,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 251920
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00206.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00206.npz",
+      "level": "1-11",
+      "raw_rows": 14249,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 237553
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00207.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00207.npz",
+      "level": "1-11",
+      "raw_rows": 13007,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 218348
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00208.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00208.npz",
+      "level": "1-11",
+      "raw_rows": 13985,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 236118
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00209.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00209.npz",
+      "level": "1-11",
+      "raw_rows": 14407,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 245107
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00210.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00210.npz",
+      "level": "1-11",
+      "raw_rows": 13459,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 225824
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00211.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00211.npz",
+      "level": "1-11",
+      "raw_rows": 14432,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 242222
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00212.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00212.npz",
+      "level": "1-11",
+      "raw_rows": 15459,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 260380
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00213.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00213.npz",
+      "level": "1-11",
+      "raw_rows": 14889,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 249330
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00214.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00214.npz",
+      "level": "1-11",
+      "raw_rows": 15208,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 258889
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00215.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00215.npz",
+      "level": "1-11",
+      "raw_rows": 14793,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 248575
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00216.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00216.npz",
+      "level": "1-11",
+      "raw_rows": 15512,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 259208
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00217.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00217.npz",
+      "level": "1-11",
+      "raw_rows": 14408,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 240692
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00218.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00218.npz",
+      "level": "1-11",
+      "raw_rows": 15901,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 268481
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00219.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00219.npz",
+      "level": "1-11",
+      "raw_rows": 16025,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 264336
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00220.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00220.npz",
+      "level": "1-11",
+      "raw_rows": 15323,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 254107
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00221.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00221.npz",
+      "level": "1-11",
+      "raw_rows": 15623,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 256794
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00222.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00222.npz",
+      "level": "1-11",
+      "raw_rows": 15873,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 264709
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00223.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00223.npz",
+      "level": "1-11",
+      "raw_rows": 16441,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 276987
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00224.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00224.npz",
+      "level": "1-11",
+      "raw_rows": 18608,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 298261
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00225.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00225.npz",
+      "level": "1-11",
+      "raw_rows": 17286,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 288178
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00226.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00226.npz",
+      "level": "1-11",
+      "raw_rows": 16273,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 274428
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00227.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00227.npz",
+      "level": "1-11",
+      "raw_rows": 18531,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 309398
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00228.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00228.npz",
+      "level": "1-11",
+      "raw_rows": 16458,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 276396
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00229.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00229.npz",
+      "level": "1-11",
+      "raw_rows": 14756,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 253196
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00230.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00230.npz",
+      "level": "1-11",
+      "raw_rows": 12622,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 218494
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00231.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00231.npz",
+      "level": "1-11",
+      "raw_rows": 15028,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 260012
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00232.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00232.npz",
+      "level": "1-11",
+      "raw_rows": 12944,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 228474
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00233.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00233.npz",
+      "level": "1-11",
+      "raw_rows": 16756,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 294304
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00234.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00234.npz",
+      "level": "1-11",
+      "raw_rows": 18322,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 315235
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00235.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00235.npz",
+      "level": "1-11",
+      "raw_rows": 16099,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 271341
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00236.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00236.npz",
+      "level": "1-11",
+      "raw_rows": 16928,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 289784
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00237.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00237.npz",
+      "level": "1-12",
+      "raw_rows": 7354,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 121208
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00238.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00238.npz",
+      "level": "1-12",
+      "raw_rows": 7865,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 135792
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00239.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00239.npz",
+      "level": "1-12",
+      "raw_rows": 8025,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 136218
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00240.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00240.npz",
+      "level": "1-12",
+      "raw_rows": 8453,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 143951
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00241.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00241.npz",
+      "level": "1-12",
+      "raw_rows": 8931,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 156675
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00242.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00242.npz",
+      "level": "1-12",
+      "raw_rows": 9050,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 157042
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00243.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00243.npz",
+      "level": "1-12",
+      "raw_rows": 8272,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 144232
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00244.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00244.npz",
+      "level": "1-12",
+      "raw_rows": 9229,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 162570
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00245.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00245.npz",
+      "level": "1-12",
+      "raw_rows": 9606,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 167833
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00246.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00246.npz",
+      "level": "1-12",
+      "raw_rows": 8648,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 150113
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00247.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00247.npz",
+      "level": "1-12",
+      "raw_rows": 10360,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 178207
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00248.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00248.npz",
+      "level": "1-12",
+      "raw_rows": 10107,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 175080
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00249.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00249.npz",
+      "level": "1-12",
+      "raw_rows": 13882,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 242304
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00250.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00250.npz",
+      "level": "1-12",
+      "raw_rows": 14244,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 246871
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00251.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00251.npz",
+      "level": "1-12",
+      "raw_rows": 19242,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 334155
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00252.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00252.npz",
+      "level": "1-12",
+      "raw_rows": 28727,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 504858
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00253.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00253.npz",
+      "level": "1-12",
+      "raw_rows": 36360,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 637670
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00254.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00254.npz",
+      "level": "1-12",
+      "raw_rows": 49296,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 872019
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00255.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00255.npz",
+      "level": "1-12",
+      "raw_rows": 63928,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1146921
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00256.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00256.npz",
+      "level": "1-12",
+      "raw_rows": 69004,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 1209511
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00257.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00257.npz",
+      "level": "1-13",
+      "raw_rows": 20622,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 378571
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00258.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00258.npz",
+      "level": "1-13",
+      "raw_rows": 22162,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 405241
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00259.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00259.npz",
+      "level": "1-13",
+      "raw_rows": 20986,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 387940
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00260.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00260.npz",
+      "level": "1-13",
+      "raw_rows": 15206,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 275338
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00261.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00261.npz",
+      "level": "1-13",
+      "raw_rows": 16676,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 303615
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00262.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00262.npz",
+      "level": "1-13",
+      "raw_rows": 15585,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 283224
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00263.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00263.npz",
+      "level": "1-13",
+      "raw_rows": 15846,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 288283
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00264.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00264.npz",
+      "level": "1-13",
+      "raw_rows": 16107,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 293351
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00265.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00265.npz",
+      "level": "1-13",
+      "raw_rows": 14429,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 256923
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00266.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00266.npz",
+      "level": "1-13",
+      "raw_rows": 13992,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 245441
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00267.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00267.npz",
+      "level": "1-13",
+      "raw_rows": 14482,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 255743
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00268.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00268.npz",
+      "level": "1-13",
+      "raw_rows": 14159,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 246814
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00269.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00269.npz",
+      "level": "1-13",
+      "raw_rows": 14124,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 244536
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00270.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00270.npz",
+      "level": "1-13",
+      "raw_rows": 16002,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 281754
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00271.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00271.npz",
+      "level": "1-13",
+      "raw_rows": 14730,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 255525
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00272.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00272.npz",
+      "level": "1-13",
+      "raw_rows": 15053,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 263002
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00273.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00273.npz",
+      "level": "1-13",
+      "raw_rows": 14903,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 262238
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00274.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00274.npz",
+      "level": "1-13",
+      "raw_rows": 14612,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 255528
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00275.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00275.npz",
+      "level": "1-13",
+      "raw_rows": 13858,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 237283
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00276.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00276.npz",
+      "level": "1-13",
+      "raw_rows": 14577,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 254104
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00277.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00277.npz",
+      "level": "1-13",
+      "raw_rows": 13514,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 229834
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00278.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00278.npz",
+      "level": "1-13",
+      "raw_rows": 3450,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 46725
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00279.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00279.npz",
+      "level": "1-14",
+      "raw_rows": 29712,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 583250
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00280.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00280.npz",
+      "level": "1-14",
+      "raw_rows": 29555,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 583157
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00281.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00281.npz",
+      "level": "1-14",
+      "raw_rows": 38434,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 758503
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00282.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00282.npz",
+      "level": "1-14",
+      "raw_rows": 56748,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1097826
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00283.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00283.npz",
+      "level": "1-14",
+      "raw_rows": 49737,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 954191
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00284.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00284.npz",
+      "level": "1-14",
+      "raw_rows": 59202,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1096077
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00285.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00285.npz",
+      "level": "1-14",
+      "raw_rows": 68289,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1239698
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00286.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00286.npz",
+      "level": "1-14",
+      "raw_rows": 81783,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1456426
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00287.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00287.npz",
+      "level": "1-14",
+      "raw_rows": 83636,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1487920
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00288.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00288.npz",
+      "level": "1-14",
+      "raw_rows": 80455,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1412204
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00289.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00289.npz",
+      "level": "1-14",
+      "raw_rows": 4396,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 65913
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00290.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00290.npz",
+      "level": "3-1",
+      "raw_rows": 16852,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 270064
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00291.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00291.npz",
+      "level": "3-1",
+      "raw_rows": 15397,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 240586
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00292.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00292.npz",
+      "level": "3-1",
+      "raw_rows": 20861,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 313828
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00293.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00293.npz",
+      "level": "3-1",
+      "raw_rows": 15272,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 237075
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00294.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00294.npz",
+      "level": "3-1",
+      "raw_rows": 14880,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 208303
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00295.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00295.npz",
+      "level": "3-1",
+      "raw_rows": 17308,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 255240
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00296.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00296.npz",
+      "level": "3-1",
+      "raw_rows": 12724,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 169437
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00297.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00297.npz",
+      "level": "3-1",
+      "raw_rows": 13647,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 170039
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00298.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00298.npz",
+      "level": "3-1",
+      "raw_rows": 13070,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 155887
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00299.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00299.npz",
+      "level": "3-1",
+      "raw_rows": 14837,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 185201
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00300.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00300.npz",
+      "level": "3-1",
+      "raw_rows": 25395,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 303238
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00301.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00301.npz",
+      "level": "3-1",
+      "raw_rows": 20461,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 258636
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00302.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00302.npz",
+      "level": "3-1",
+      "raw_rows": 15639,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 218559
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00303.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00303.npz",
+      "level": "3-1",
+      "raw_rows": 15731,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 222225
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00304.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00304.npz",
+      "level": "3-1",
+      "raw_rows": 18646,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 231947
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00305.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00305.npz",
+      "level": "3-1",
+      "raw_rows": 16082,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 214120
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00306.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00306.npz",
+      "level": "3-1",
+      "raw_rows": 9748,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 113299
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00307.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00307.npz",
+      "level": "3-1",
+      "raw_rows": 13762,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 143579
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00308.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00308.npz",
+      "level": "3-1",
+      "raw_rows": 12834,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 147154
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00309.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00309.npz",
+      "level": "3-1",
+      "raw_rows": 9288,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 93753
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00310.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00310.npz",
+      "level": "3-1",
+      "raw_rows": 10759,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 121396
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00311.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00311.npz",
+      "level": "3-1",
+      "raw_rows": 9089,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 95169
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00312.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00312.npz",
+      "level": "3-1",
+      "raw_rows": 11358,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 111885
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00313.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00313.npz",
+      "level": "3-1",
+      "raw_rows": 8270,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 70326
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00314.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00314.npz",
+      "level": "3-1",
+      "raw_rows": 8039,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 67939
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00315.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00315.npz",
+      "level": "3-1",
+      "raw_rows": 8376,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 72277
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00316.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00316.npz",
+      "level": "3-1",
+      "raw_rows": 8387,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 76625
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00317.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00317.npz",
+      "level": "3-1",
+      "raw_rows": 8463,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 74541
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00318.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00318.npz",
+      "level": "3-1",
+      "raw_rows": 9720,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 98547
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00319.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00319.npz",
+      "level": "3-1",
+      "raw_rows": 10046,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 101144
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00320.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00320.npz",
+      "level": "3-1",
+      "raw_rows": 16497,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 221841
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00321.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00321.npz",
+      "level": "3-1",
+      "raw_rows": 41317,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 672920
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00322.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00322.npz",
+      "level": "3-1",
+      "raw_rows": 68213,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1152348
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00323.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00323.npz",
+      "level": "3-1",
+      "raw_rows": 81872,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1389444
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00324.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00324.npz",
+      "level": "3-1",
+      "raw_rows": 80942,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1362896
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00325.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00325.npz",
+      "level": "3-1",
+      "raw_rows": 78024,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1315643
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00326.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00326.npz",
+      "level": "3-1",
+      "raw_rows": 68205,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1182029
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00327.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00327.npz",
+      "level": "3-1",
+      "raw_rows": 69738,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1221094
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00328.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00328.npz",
+      "level": "3-1",
+      "raw_rows": 61832,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1074247
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00329.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00329.npz",
+      "level": "3-1",
+      "raw_rows": 62256,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1091646
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00330.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00330.npz",
+      "level": "3-1",
+      "raw_rows": 69310,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1252207
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00331.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00331.npz",
+      "level": "3-1",
+      "raw_rows": 70264,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1262005
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00332.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00332.npz",
+      "level": "3-1",
+      "raw_rows": 60732,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1083454
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00333.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00333.npz",
+      "level": "3-1",
+      "raw_rows": 63500,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1143049
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00334.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00334.npz",
+      "level": "3-1",
+      "raw_rows": 61589,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1093528
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00335.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00335.npz",
+      "level": "3-1",
+      "raw_rows": 58003,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1031777
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00336.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00336.npz",
+      "level": "3-1",
+      "raw_rows": 68866,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1242480
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00337.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00337.npz",
+      "level": "3-1",
+      "raw_rows": 66332,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 1192398
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00338.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00338.npz",
+      "level": "3-1",
+      "raw_rows": 55160,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 980496
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00339.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00339.npz",
+      "level": "3-1",
+      "raw_rows": 52471,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 929434
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00340.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00340.npz",
+      "level": "3-1",
+      "raw_rows": 43737,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 748184
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00341.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00341.npz",
+      "level": "3-1",
+      "raw_rows": 20844,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 354108
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00342.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00342.npz",
+      "level": "3-1",
+      "raw_rows": 20810,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 355183
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00343.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00343.npz",
+      "level": "3-1",
+      "raw_rows": 19721,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 335409
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00344.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00344.npz",
+      "level": "3-1",
+      "raw_rows": 15692,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 253894
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00345.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00345.npz",
+      "level": "3-1",
+      "raw_rows": 13937,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 213616
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00346.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00346.npz",
+      "level": "3-1",
+      "raw_rows": 11816,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 168901
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00347.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00347.npz",
+      "level": "3-1",
+      "raw_rows": 10556,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 148845
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00348.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00348.npz",
+      "level": "3-1",
+      "raw_rows": 10276,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 139924
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00349.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00349.npz",
+      "level": "3-1",
+      "raw_rows": 11768,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 169500
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00350.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00350.npz",
+      "level": "3-1",
+      "raw_rows": 11727,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 169514
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00351.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00351.npz",
+      "level": "3-1",
+      "raw_rows": 11381,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 162620
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00352.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00352.npz",
+      "level": "3-1",
+      "raw_rows": 9601,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 127109
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00353.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00353.npz",
+      "level": "3-1",
+      "raw_rows": 10234,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 141540
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00354.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00354.npz",
+      "level": "3-1",
+      "raw_rows": 10180,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 138932
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00355.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00355.npz",
+      "level": "3-1",
+      "raw_rows": 10698,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 148703
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00356.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00356.npz",
+      "level": "3-1",
+      "raw_rows": 9655,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 128843
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00357.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00357.npz",
+      "level": "3-1",
+      "raw_rows": 10211,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 135499
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00358.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00358.npz",
+      "level": "3-1",
+      "raw_rows": 10657,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 145917
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00359.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00359.npz",
+      "level": "3-2",
+      "raw_rows": 2469,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 48672
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00360.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00360.npz",
+      "level": "3-2",
+      "raw_rows": 2468,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 49119
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00361.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00361.npz",
+      "level": "3-2",
+      "raw_rows": 2221,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 45623
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00362.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00362.npz",
+      "level": "3-2",
+      "raw_rows": 2346,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 47210
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00363.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00363.npz",
+      "level": "3-2",
+      "raw_rows": 2820,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 57400
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00364.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00364.npz",
+      "level": "3-2",
+      "raw_rows": 3175,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 63772
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00365.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00365.npz",
+      "level": "3-2",
+      "raw_rows": 2592,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 51975
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00366.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00366.npz",
+      "level": "3-2",
+      "raw_rows": 3135,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 63204
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00367.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00367.npz",
+      "level": "3-2",
+      "raw_rows": 2691,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 53366
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00368.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00368.npz",
+      "level": "3-2",
+      "raw_rows": 3779,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 74530
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00369.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00369.npz",
+      "level": "3-2",
+      "raw_rows": 4226,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 83959
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00370.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00370.npz",
+      "level": "3-2",
+      "raw_rows": 4095,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 81395
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00371.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00371.npz",
+      "level": "3-2",
+      "raw_rows": 3720,
+      "partial": false,
+      "source_mode": "ppo",
+      "compressed_bytes": 75176
+    },
+    {
+      "id": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data\\wave_00372.npz",
+      "source": "c:\\users\\pahstoner\\pycharmprojects\\rea-meatboy\\smbrl\\runs\\collect_2-10_ppo50_01\\wm_data",
+      "shard": "wave_00372.npz",
+      "level": "3-2",
+      "raw_rows": 3582,
+      "partial": true,
+      "source_mode": "ppo",
+      "compressed_bytes": 67544
+    }
+  ],
+  "files_listed": 373,
+  "metadata_inspected": 373,
+  "rows_decoded": 0,
+  "complete_listed_metadata": true,
+  "elapsed_seconds": 0.603435,
+  "limitations": "metadata/header sample only; uninspected levels, events and exact traces unknown"
+}

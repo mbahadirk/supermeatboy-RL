@@ -1,0 +1,11 @@
+{
+  "before_report_sha256": "da64fffec42564eba45bdc1539afa3ecd39af6601d7a7f066cd9f9b3c19c69ef",
+  "original_report_unchanged": true,
+  "manifest_sha256": "1ef6e5ec30453b11d4f295c3daf5dcda57c8884031115d2482c0060b88290dbe",
+  "roster_sha256": "5a4560be433da6e7aa7e19a318dcee8cc8aad5c61ecc255163ec550b2c1bfd39",
+  "checkpoint_sha256": "d979f1dd1b42bd36488139496a3a0f4a7c269de595388d318a686ca2c41b2673",
+  "one_step_exactly_equal": true,
+  "open_loop_exactly_equal": true,
+  "seconds": 39.5559774000003,
+  "note": "Default key_pickup=False reproduced original one-step and key-change-censored v2 rollout metrics; no source-hash equality with historical code is implied."
+}
