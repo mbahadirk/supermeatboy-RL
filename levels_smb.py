@@ -74,6 +74,29 @@ def chapters() -> list[dict]:
         return json.load(f)
 
 
+_PAR = None
+
+
+def a_plus_time(name: str | None) -> float | None:
+    """The game's par time (seconds) of a level: the `par` its .chapter file gives it (chapters.json), the time
+    the game asks for an A+ grade. None: unknown (no chapters.json, or a level without one). Our finish time is
+    the wave's updates x the locked step (agent.py on_finish); whether the game's own timer starts on the same
+    frame, and whether A+ means at most par exactly, is not verified against the game."""
+    global _PAR
+    if _PAR is None:
+        _PAR = {}
+        for c in chapters():
+            if c.get("par") is not None and c["file"] not in _PAR:
+                _PAR[c["file"]] = float(c["par"])
+    return _PAR.get(name) if name else None
+
+
+def a_plus(name: str | None, seconds: float | None) -> bool | None:
+    """Is a finish in `seconds` within the level's A+ time (a_plus_time)? None: unknown."""
+    par = a_plus_time(name)
+    return None if par is None or seconds is None else bool(float(seconds) <= par)
+
+
 _GROUPS = {"light": ("normlevel",), "dark": ("altlevel",), "both": ("normlevel", "altlevel"),
            "warp": tuple(f"warp{i}level" for i in range(1, 6)),
            "all": ("normlevel", "altlevel") + tuple(f"warp{i}level" for i in range(1, 6))}

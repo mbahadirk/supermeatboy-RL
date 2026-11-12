@@ -11,6 +11,13 @@ before it, the action chosen for it (-1 when it chose none: dead / finished), an
 action earned (NaN on its first row). Rows are raw game values, not network inputs, so the world model can
 build its own features from them and the level data.
 
+New captures use wave-end-target-v1: a native wave_end.s at frame F can supply a final target row for the
+last applied action F-1. It has action -1, caller-provided post-action held mirror, and that action's reward
+(NaN if unknown/undefined). Only consecutive, previously alive lives with matching exact state/status/held
+evidence are extended. Early-ended lives are never extended to F. Missing/partial evidence is recorded as a
+skip, not estimated. The ordinary input-world timeline is unchanged; partial end hz/sh evidence is metadata
+only. Older recordings remain untouched and may lack terminal rows.
+
 A wave cut before its end (S, a level change, Ctrl+C / STOP: Collector.cut) is still written, with meta
 "partial": true and "partial_reason"; readers take it like any shard (its last alive rows count as cut by time).
 
@@ -41,6 +48,7 @@ ROW = np.dtype([("wave", "<i4"), ("frame", "<i4"), ("agent", "<i2"),
                 ("flags", "<u4"), ("state", "<i2"), ("status", "<i1"), ("keys", "<u4"),
                 ("held", "<i2"), ("action", "<i1"), ("reward", "<f4")])
 STATUS_ALIVE, STATUS_DEAD, STATUS_FINISHED = 0, 1, 2
+CAPTURE_PROTOCOL = "wave-end-target-v1"
 
 
 def _r(v, nd=2):
@@ -81,6 +89,8 @@ class Collector:
                 "objs": info.get("objs", []), "lethalTypes": info.get("lethalTypes", []),
                 # the camera-bounds kill box [left, right, bottom, top] and what it came from (realgame.js)
                 "kb": info.get("kb"), "cam_bounds": info.get("cam_bounds"), "view_half": info.get("view_half")}
+        if hasattr(lv, "wm_geometry_metadata"):
+            meta.update(lv.wm_geometry_metadata())
         np.savez_compressed(p, words=lv.words0.astype(np.uint32), meta=json.dumps(meta))
 
     def frame(self, m: dict, hz_ids: list, hz_keep: list | None = None):
@@ -122,19 +132,99 @@ class Collector:
             self.chars.append(np.frombuffer(data, np.uint8).copy())
             self.char_frames.append(frame)
 
-    def wave_end(self, wave: int, m: dict, partial: str | None = None):
+    def _final_rows(self, rows, wave, m, partial, held, rewards):
+        """Append only a verified consecutive post-update target. Never extend an already-ended life."""
+        frame = m.get("frame")
+        capture = {"protocol": CAPTURE_PROTOCOL, "frame": frame, "state_source": "wave_end.s",
+                   "target_only": True, "appended": [], "skipped": []}
+        additions = []
+        integer = lambda v: isinstance(v, (int, np.integer)) and not isinstance(v, (bool, np.bool_))
+        states, statuses = m.get("s"), m.get("status")
+        for a in np.unique(rows["agent"]):
+            i = int(a)
+            own = rows[rows["agent"] == a]
+            last = own[np.argmax(own["frame"])]
+            reason = None
+            if partial:
+                reason = "partial_cut_without_post_update_observation"
+            elif not integer(frame) or not 0 <= frame <= np.iinfo(np.int32).max:
+                reason = "invalid_final_frame"
+            elif not integer(wave) or wave != self.cur_wave or last["wave"] != self.n_shards or \
+                    ("wave" in m and (not integer(m["wave"]) or m["wave"] != wave)):
+                reason = "wave_mismatch"
+            elif last["status"] != STATUS_ALIVE:
+                reason = "already_terminal"
+            elif last["frame"] == frame:
+                reason = "already_observed_frame"
+            elif last["frame"] != frame - 1:
+                reason = "nonconsecutive_final_frame"
+            elif len(np.unique(own["frame"])) != len(own):
+                reason = "ambiguous_duplicate_agent_frame"
+            elif last["action"] < 0:
+                reason = "no_source_action"
+            elif not isinstance(states, (list, tuple)) or i >= len(states):
+                reason = "missing_exact_final_state"
+            elif not isinstance(statuses, (list, tuple)) or i >= len(statuses):
+                reason = "missing_final_status"
+            elif held is None or i >= len(held) or not integer(held[i]) or not 0 <= held[i] <= 32767:
+                reason = "missing_exact_held_mirror"
+            if reason is None:
+                s = states[i]
+                if not isinstance(s, (list, tuple)) or len(s) < 8:
+                    reason = "missing_final_state_fields"
+                elif not all(isinstance(v, (int, float, np.integer, np.floating)) and np.isfinite(v) and
+                             abs(v) <= np.finfo(np.float32).max for v in s[:4]):
+                    reason = "invalid_final_physical_state"
+                elif not all(integer(s[k]) for k in (4, 5, 6, 7)) or \
+                        not 0 <= s[4] <= 0xffffffff or not 0 <= s[7] <= 0xffffffff or \
+                        not -32768 <= s[5] <= 32767 or s[6] not in (0, 1, 2):
+                    reason = "invalid_final_discrete_state"
+                elif not integer(statuses[i]) or s[6] != statuses[i]:
+                    reason = "final_status_mismatch"
+            if reason is not None:
+                capture["skipped"].append({"agent": i, "reason": reason})
+                continue
+            reward = float("nan")
+            if rewards is not None and i < len(rewards) and isinstance(rewards[i], (int, float, np.integer, np.floating)):
+                value = float(rewards[i])
+                if np.isfinite(value) and abs(value) <= np.finfo(np.float32).max:
+                    reward = value
+            r = np.zeros(1, ROW)
+            r[0] = (self.n_shards, frame, i, s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+                    held[i], -1, reward)
+            additions.append(r)
+            capture["appended"].append({"agent": i, "held_source": "caller_post_action_mirror",
+                                        "reward_source": "caller_final_step" if np.isfinite(reward) else "unknown_or_undefined"})
+        return np.concatenate([rows, *additions]) if additions else rows, capture
+
+    def wave_end(self, wave: int, m: dict, partial: str | None = None, *, held=None, rewards=None):
         """Write this wave's shard (the game waits for the trainer here anyway). partial: the wave was cut
-        before its end (cut())."""
+        before its end (cut()). held is the caller's mirror AFTER the last applied action; rewards contains
+        that action's actual outcome, not the reward of the preceding recorded row. Missing data is not guessed.
+        New rows are target-only (action -1). Partial end-world evidence stays in metadata, not input timeline.
+        """
         if self.rows:
             k = self.n_shards
+            rows, capture = self._final_rows(np.concatenate(self.rows), wave, m, partial, held, rewards)
             self.n_shards += 1
             base = os.path.join(self.dir, f"wave_{k:05d}")
             meta = {"level": self.level_name, "wave": wave, "why": m.get("why"), "frames": m.get("frame"),
                     "status": m.get("status"), "finish": m.get("finish"),
-                    "source": self.source, "mode": self.mode, **self.meta_extra}
+                    "source": self.source, "mode": self.mode, **self.meta_extra,
+                    "capture_protocol": CAPTURE_PROTOCOL, "final_capture": capture}
+            if not partial:
+                meta["final_observation"] = {"frame": m.get("frame"), "target_only": True,
+                                             "input_context_complete": False,
+                                             "available_fields": [key for key in ("hz", "sh")
+                                                                  if isinstance(m.get(key), (list, tuple))],
+                                             "missing_partial_fields": [key for key in ("hz", "sh")
+                                                                        if not isinstance(m.get(key), (list, tuple))],
+                                             "missing_input_fields": ["dt", "pf", "fx", "tc"],
+                                             **{key: _r(m[key]) for key in ("hz", "sh")
+                                                if isinstance(m.get(key), (list, tuple))}}
             if partial:
                 meta.update(partial=True, partial_reason=partial)
-            np.savez_compressed(base + ".npz", rows=np.concatenate(self.rows), meta=json.dumps(meta))
+            np.savez_compressed(base + ".npz", rows=rows, meta=json.dumps(meta))
             with gzip.open(base + "_world.json.gz", "wt", encoding="utf-8") as f:
                 json.dump(self.world, f, separators=(",", ":"))
             if self.chars:

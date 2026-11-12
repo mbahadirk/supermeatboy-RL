@@ -23,7 +23,7 @@ from mpc import candidates
 from mpc.future import FutureWorld
 from mpc.score import Weights, score, TILE
 from wm.buffer import ROW
-from wm.features import LevelGeom
+from wm.features import LevelGeom, model_layout
 from wm.model import WorldModel
 from wm.rollout import rollout_batched
 
@@ -60,7 +60,8 @@ class MPC:
 
     # ---- level / wave / frame ------------------------------------------------------------------------
     def set_level(self, lv):
-        self.geom = LevelGeom(lv.words0, {"ox": lv.ox, "oy": lv.oy})
+        self.geom = LevelGeom(lv.words0, lv.wm_geometry_metadata(),               # the model's tile encoding
+                              protocol=model_layout(self.model).protocol)
         self.future.new_level()
         self.plans = {}
         self.level_name = lv.name

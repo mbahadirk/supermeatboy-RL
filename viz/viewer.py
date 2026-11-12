@@ -246,6 +246,33 @@ class LevelView:
     key: tuple                   # changes when the drawn tiles change
     goal_boxes: list = field(default_factory=list)    # [x, y, hw, hh, angle]: touched within BODY (planner)
     key_boxes: list = field(default_factory=list)
+    _shape_cells: list | None = field(default=None, repr=False, compare=False)
+
+    def shape_cells(self) -> list:
+        """Half blocks and slopes [(r, c, kind, ox, oy)] (realpath.tile_shape): drawn as their solid part only.
+        Empty without tile words."""
+        if self._shape_cells is None:
+            cells = []
+            if self.words is not None:
+                from realpath import SHAPE_HALF, SHAPE_SLOPE, tile_shape
+                sh = tile_shape(self.words)
+                rr, cc = np.nonzero((sh.kind == SHAPE_HALF) | (sh.kind == SHAPE_SLOPE))
+                cells = [(int(r), int(c), int(sh.kind[r, c]), int(sh.ox[r, c]), int(sh.oy[r, c]))
+                         for r, c in zip(rr, cc)]
+            self._shape_cells = cells
+        return self._shape_cells
+
+    def cell_colour(self, r: int, c: int):
+        """A tile's colour as colours() paints it (None: background)."""
+        solid = bool(self.solid[r, c])
+        if self.words is None:
+            return SOLID if solid else None
+        w = int(self.words[r, c])
+        tid, special = w & 0xff, bool((w >> 8) & 1)
+        if solid:
+            return SPECIAL if special else ACCEL if tid == 98 else SOLID
+        was = (0 < tid < 100) or (special and 0 < tid <= 100)
+        return GONE if was else None
 
     @classmethod
     def from_message(cls, m: dict) -> "LevelView | None":
@@ -291,6 +318,8 @@ class LevelView:
             rgb[solid & special] = SPECIAL
         else:
             rgb[solid] = SOLID
+        for r, c, *_ in self.shape_cells():            # drawn as polygons over this (Renderer.draw_tiles)
+            rgb[r, c] = BG
         return np.ascontiguousarray(rgb[::-1].transpose(1, 0, 2))
 
 
@@ -1009,6 +1038,15 @@ class Renderer:
             sub = self._small[1].subsurface((c0, lv.H - r1, c1 - c0, r1 - r0))
             self._tiles = (key, pg.transform.scale(sub, (max(1, bx - ax), max(1, by - ay))))
         surf.blit(self._tiles[1], (ax, ay))
+        from realpath import solid_polygon
+        for r, c, kind, ox, oy in lv.shape_cells():    # half blocks and slopes: only their solid part
+            if not (c0 <= c < c1 and r0 <= r < r1):
+                continue
+            col = lv.cell_colour(r, c)
+            if col is None:
+                continue
+            x0, y0 = lv.ox + c * TILE, lv.oy + r * TILE
+            pg.draw.polygon(surf, col, [m.pt(x0 + u * TILE, y0 + v * TILE) for u, v in solid_polygon(kind, ox, oy)])
 
     def poly(self, surf, m, b, col, width=0, alpha=None):
         pts = [m.pt(x, y) for x, y in box_corners(b)]
@@ -1054,7 +1092,8 @@ class Renderer:
         if self.show_future:
             for key, alpha in (("16", 60), ("8", 110)):
                 for b in scene.future.get(key) or []:
-                    col = MEMORY if len(b) > 5 and b[5] == KIND_MEMORY else HAZ
+                    kind = b[5] if len(b) > 5 else KIND_HAZARD
+                    col = MEMORY if kind == KIND_MEMORY else SHOT if kind == KIND_SHOT else HAZ
                     self.poly(surf, m, b, col, 1, alpha)
         for b in scene.hazards:
             col = SHOT if len(b) > 5 and b[5] == KIND_SHOT else HAZ

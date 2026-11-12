@@ -113,19 +113,20 @@ Known limit (measured, 1-14): the world model's tile input pads outside the map 
 not fall past the map's bottom edge (they hover about 6 units above it); a fall out of a level whose kill box is
 below the map is not seen by the safety check or the completion.
 
-Goal and key contact (every stage, every candidate; the final stage per member): the swept segment test of
-plan.safety.first_contact against the goal boxes and the next key's box (game.level.Level.goal_boxes /
-key_boxes, reach measured by contact_reach.py), on the candidate's judged frames.
+Goal contact uses plan.safety.first_contact against game.level.Level.goal_boxes. Keys instead use the
+shared LockContext strict native endpoint circle (<22), all keys independently of route order, after each
+predicted update. Coarse models interpolate integer-frame endpoints, not exact intermediate physics.
 - Goal touched at frame t before any deadly contact of that path: a success, total = SUCCESS_SCORE - t (a tiny
   tie-break, under one frame, by the penalty frames up to t). Every success ranks above every non-success, an earlier
   touch above a later one; frames after t count nothing (veto and risk are judged on frames 1..t only).
   Final stage: a success when a majority of members touch the goal safely, t = the (lower) median of their
   touch frames; otherwise the plan is scored as without contact.
-- Next key of the current leg touched at frame t (before any deadly contact): the path goes on with the next
-  leg (and may take the key after that), so T(end) is taken on the leg after the pickups. The legs are
+- Key masks after contacts before geometric death determine the leg via field.leg_of, including keys
+  picked out of route order. T(end) is taken on the leg after the pickups. The legs are
   comparable: progress.ProgressField builds T_leg[j] = T to key j + T_leg[j+1] at key j (as V), the frames to
-  the goal through the remaining keys. Known limit: the lock tiles a key opens stay
-  closed in the imagined tile map (the world model's tile inputs and the support geometry) after the pickup.
+  the goal through the remaining keys. Private imagined keys feed later tile inputs/support and guard;
+  the incoming aggregate step is guarded with its previous mask, with new locks open on the NEXT step.
+  At step4 opening can lag up to3 frames relative to interpolated pickup, not observed native pickup time.
 - The world model's finish head along the chosen path is logged (Plan.finish_model), never scored.
 Plans that touch no goal and no key score exactly as without contact.
 
@@ -167,11 +168,13 @@ from realpath import BODY
 from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MAX_LEN, padded
 from plan.progress import FX_GROUND, ProgressField
 from wm.buffer import ROW
-from wm.features import (BIN_NAMES, FEAT_DIM, N_HAZ, N_STATES, EVENTS, LevelGeom, actions_into, box_distances,
-                         featurize, hazard_features, platform_features, prior)
+from wm.features import (BIN_NAMES, N_STATES, EVENTS, LevelGeom, actions_into, box_distances, featurize,
+                         hazard_features, model_layout, model_prior, platform_features, prior, require_geom)
 from wm.model import N_CONT
+from wm.protocol import GRAVITY_PRIOR
 from wm.model import WorldModel
 from wm.rollout import World, advance, step_actions, _stacked
+from game.level import key_pickup_policy
 
 H_DEFAULT, B1_DEFAULT, BRANCH_DEFAULT, S_DEFAULT, BUDGET_MS = 48, 8, 16, 16, 120.0
 # penalties in frames, from the former V-unit weights by FX_GROUND frames per tile (on open ground 1 V unit ~ 1 tile)
@@ -224,6 +227,7 @@ ROUTE_MOVE = "best route"                    # the candidate's move name (failur
 REAL_RADIUS = 1.0
 REAL_SPEED = 0.5
 RISK_SWITCH = 0.2                            # soft risk: a previous plan riskier than the best by more is dropped
+TRIAL_GAIN = 20.0                            # frames: an unvetoed plan this much better than the best route is tried once
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
 N_ALTERNATIVES = 5
 HAZ_FAR = 300.0                              # wm.features.hazard_features clips offsets and distances here
@@ -245,7 +249,7 @@ CONTACT_EPS = 0.01                           # units: a body put back to contact
 @torch.inference_mode()
 def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.ndarray, dt_ms: float,
             worlds: list, offsets=None, keep_rows: bool = False,
-            terrain: Terrain | None = None, tol: float = None) -> dict:
+            terrain: Terrain | None = None, tol: float = None, key_pickup=False, terrain_for_mask=None) -> dict:
     """wm.rollout.rollout_batched for a subset of ensemble members (`members`, a slice) whose rows may start at
     different future frames: row i at step k sees the level's moving parts worlds[offsets[i] + k] (clamped to
     the last). s0 (n,) ROW, actions (n, K). Returns x, y (E, n, K+1) float64; vx, vy (E, n, K+1): the velocity
@@ -277,38 +281,58 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     alive = np.ones((E, n, K + 1), np.float32)
     fin = np.zeros((E, n, K + 1), np.float32)
     rows = np.zeros((E, n, K + 1), s0.dtype) if keep_rows else None
-    clip = np.zeros((E, n, K + 1), bool) if terrain is not None else None
+    clip = np.zeros((E, n, K + 1), bool) if terrain is not None or terrain_for_mask is not None else None
+    key_masks = np.zeros((E, n, K + 1), np.uint32) if key_pickup else None
+    if key_masks is not None:
+        key_masks[:, :, 0] = s["keys"].reshape(E, n)
     tol = COLLIDE_TOL if tol is None else tol
     xs[:, :, 0], ys[:, :, 0] = s["x"].reshape(E, n), s["y"].reshape(E, n)
     if rows is not None:
         rows[:, :, 0] = s.reshape(E, n)
     rs = torch.as_tensor(model.res_scale)
     # per-step buffers, allocated once (the same arithmetic as (X - mu) / sd and silu(baddbmm(...)) per step)
+    fd = require_geom(model, geom).feat_dim            # the model's input encoding, which geom builds
     n_in = model.mu.numel()
     X = np.empty((E * n, n_in), np.float32)
-    Xf = X if n_in == FEAT_DIM else X[:, :FEAT_DIM]
+    Xf = X if n_in == fd else X[:, :fd]
     Xt = torch.from_numpy(X)
     Z0 = torch.empty((E * n, n_in))
     hid = [torch.empty((E, n, w.shape[2])) for w in Wl]
     al = np.ones(E * n, np.float32)
     done = K
     last = len(worlds) - 1
+    pp = model_prior(model)
     for k in range(K):
+        wk = [worlds[min(o + k * f, last)] for o, _ in groups]     # each group's world this step (f = 1: o + k)
         if f > 1:
-            features_into(Xf, groups, s, a_all[:, k, 0], dt_step, geom, [worlds[min(o + k * f, last)] for o, _ in groups])
+            features_into(Xf, groups, s, a_all[:, k, 0], dt_step, geom, wk)
             actions_into(X, a_all[:, k])
         else:
-            features_into(X, groups, s, a_all[:, k], dt_ms, geom, [worlds[min(o + k, last)] for o, _ in groups])
+            features_into(X, groups, s, a_all[:, k], dt_ms, geom, wk)
         torch.sub(Xt, model.mu, out=Z0)
         z = Z0.div_(model.sd).view(E, n, -1)
         for i in range(len(Wl) - 1):
             z = torch.nn.functional.silu(torch.baddbmm(Bl[i], z, Wl[i], out=hid[i]), inplace=True)
         o = torch.baddbmm(Bl[-1], z, Wl[-1], out=hid[-1]).view(E * n, -1)     # model.split's heads, sliced
-        move = (o[:, :N_CONT] * rs).numpy() + prior(s, dt_step, f)
+        move = (o[:, :N_CONT] * rs).numpy() + prior_into(s, dt_step, f, pp, groups, wk)
         pb = torch.sigmoid(o[:, _BIN]).numpy()
         s2 = advance(s, a_all[:, k], move, pb, o[:, _STATE].argmax(-1).numpy())
         if clip is not None:
-            clip[:, :, k + 1] = collide(terrain, s, s2, tol).reshape(E, n)
+            if terrain_for_mask is None:
+                clipped = collide(terrain, s, s2, tol)
+            else:
+                clipped = np.zeros(len(s), bool)
+                for mask in np.unique(s["keys"]):
+                    idx = np.flatnonzero(s["keys"] == mask)
+                    private = s2[idx].copy()
+                    clipped[idx] = collide(terrain_for_mask(int(mask)), s[idx], private, tol)
+                    s2[idx] = private
+            clip[:, :, k + 1] = clipped.reshape(E, n)
+        if key_pickup:
+            # Guard uses the INCOMING mask for the whole model step. Pickup is post-update; coarse-step
+            # integer endpoints are interpolated, with new private geometry only on the NEXT model step.
+            geom.lock_context.pickup_after_step(s, s2, f)
+            key_masks[:, :, k + 1] = s2["keys"].reshape(E, n)
         s = s2
         al = al * (1.0 - pb[:, EVENTS["death"]])
         xs[:, :, k + 1], ys[:, :, k + 1] = s["x"].reshape(E, n), s["y"].reshape(E, n)
@@ -323,8 +347,11 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
         vy[:, :, 1:] /= f
     vx[:, :, 0] = np.tile(s0["vx"], E).reshape(E, n) * (dt_ms / 1000.0)
     vy[:, :, 0] = np.tile(s0["vy"], E).reshape(E, n) * (dt_ms / 1000.0)
-    return {"x": xs, "y": ys, "vx": vx, "vy": vy, "last": s.reshape(E, n), "alive": alive, "finish": fin,
-            "rows": rows, "steps": done, "clip": clip, "step": f}
+    result = {"x": xs, "y": ys, "vx": vx, "vy": vy, "last": s.reshape(E, n), "alive": alive, "finish": fin,
+              "rows": rows, "steps": done, "clip": clip, "step": f}
+    if key_pickup:
+        result.update(keys=key_masks, key_pickup=key_pickup_policy(f))
+    return result
 
 
 def collide(ter: Terrain, prev: np.ndarray, s: np.ndarray, tol: float = COLLIDE_TOL) -> np.ndarray:
@@ -381,8 +408,18 @@ def _AXES4(n: int) -> np.ndarray:
 
 _BIN = slice(2 * N_CONT, 2 * N_CONT + len(BIN_NAMES))      # wm.model.WorldModel.split's output layout
 _STATE = slice(_BIN.stop, _BIN.stop + N_STATES)
-HAZ_COLS = slice(FEAT_DIM - 6 - 5 * N_HAZ, FEAT_DIM - 6)     # wm.features.featurize: [..., hazards, platform]
-PLAT_COLS = slice(FEAT_DIM - 6, FEAT_DIM)
+
+
+def prior_into(s, dt_ms, f, protocol, groups, worlds):
+    """wm.features.prior of protocol for rows in groups [(offset, row indices)] that see different worlds: one
+    call when every group's fans are the same (or the prior reads none: gravity-v1), else one per group."""
+    w0 = worlds[0]
+    if len(groups) == 1 or protocol == GRAVITY_PRIOR or all(w.fans == w0.fans for w in worlds):
+        return prior(s, dt_ms, f, w0.fans, protocol)
+    out = np.empty((len(s), 4), np.float32)
+    for (_, idx), w in zip(groups, worlds):
+        out[idx] = prior(s[idx], dt_ms, f, w.fans, protocol)
+    return out
 
 
 def features_into(X, groups, s, a, dt_ms, geom, worlds):
@@ -400,14 +437,16 @@ def features_into(X, groups, s, a, dt_ms, geom, worlds):
                                w0.pf_prev, w0.dt_prev_s, w0.fans)
         return
     featurize(s, a, dt_ms, geom, np.zeros((0, 5)), w0.pf, w0.pf_prev, w0.dt_prev_s, w0.fans, out=X)
+    lay = geom.layout                                # wm.features.featurize: [..., hazards, platform]
+    haz_cols, plat_cols = slice(lay.haz, lay.plat), slice(lay.plat, lay.feat_dim)
     for (o, idx), w in zip(groups, worlds):
         x, y = s["x"][idx].astype(np.float64), s["y"][idx].astype(np.float64)
         if w.fans != w0.fans:
             X[idx] = featurize(s[idx], a[idx], dt_ms, geom, _model_boxes(w.boxes, x, y), w.pf, w.pf_prev,
                                w.dt_prev_s, w.fans)
             continue
-        X[idx, HAZ_COLS] = hazard_features(x, y, _model_boxes(w.boxes, x, y))
-        X[idx, PLAT_COLS] = platform_features(x, y, w.pf, w.pf_prev, w.dt_prev_s)
+        X[idx, haz_cols] = hazard_features(x, y, _model_boxes(w.boxes, x, y))
+        X[idx, plat_cols] = platform_features(x, y, w.pf, w.pf_prev, w.dt_prev_s)
 
 
 def _model_boxes(boxes: np.ndarray, x, y) -> np.ndarray:
@@ -845,7 +884,8 @@ class BestRoute:
     """The level's fastest finish of this run: the planned agent's real states and actions of that wave, so the
     planner can stay on (or rejoin) a route the game has proven.
 
-    Planner.observe / played record every planned agent's real state (x, y, vx, vy in units / frame) and action
+    Planner.observe / played record every planned agent's real state (x, y, vx, vy in units / frame, known
+    native key mask) and action
     per wave frame; Planner.finished(agent, frame) keeps that wave's record when it finishes in fewer frames than
     the level's best so far in this run. match(): the best wave's frame whose state is within ROUTE_RADIUS units
     and ROUTE_SPEED units / frame (each velocity component) of a given state, the nearest in wave frames (then
@@ -867,22 +907,22 @@ class BestRoute:
     (Planner.set_level makes a new one), not saved; without a recorded best it does nothing."""
 
     def __init__(self):
-        self.best: dict | None = None                    # {frames, finish, f (frames), x, y, vx, vy, a (arrays)}
+        self.best: dict | None = None                    # {finish, f, x,y,vx,vy,a, keys:uint32, keys_known:bool}
         self.died_at: int | None = None                  # the best wave's frame where playing it killed an agent
         self.new_wave()
 
     def new_wave(self):
-        self.cur: dict[int, dict] = {}                   # agent -> {frame: [x, y, vx, vy, action]}
+        self.cur: dict[int, dict] = {}                   # agent -> {frame: [x, y, vx, vy, action, keys or None]}
         self.using: dict[int, tuple] = {}                # agent -> (decision frame, best-wave frame) while on it
 
-    def observe(self, agent: int, frame: int, x: float, y: float, vx, vy):
+    def observe(self, agent: int, frame: int, x: float, y: float, vx, vy, keys=None):
         if vx is None or vy is None:
             self.cur.pop(int(agent), None)               # no velocities: no route from this agent
             self.cur[int(agent)] = None
             return
         tr = self.cur.setdefault(int(agent), {})
         if tr is not None:
-            tr[int(frame)] = [float(x), float(y), float(vx), float(vy), None]
+            tr[int(frame)] = [float(x), float(y), float(vx), float(vy), None, None if keys is None else int(keys)]
 
     def played(self, agent: int, frame: int, action: int):
         tr = self.cur.get(int(agent))
@@ -909,9 +949,11 @@ class BestRoute:
         if not fs:
             return False
         f = np.array(fs, np.int64)
-        v = np.array([tr[k] for k in fs], np.float64)
+        v = np.array([tr[k][:5] for k in fs], np.float64)
+        known = np.array([len(tr[k]) > 5 and tr[k][5] is not None for k in fs], bool)
+        masks = np.array([tr[k][5] if known[i] else 0 for i, k in enumerate(fs)], np.uint32)
         self.best = {"finish": int(frame), "f": f, "x": v[:, 0], "y": v[:, 1], "vx": v[:, 2], "vy": v[:, 3],
-                     "a": v[:, 4].astype(np.int64)}
+                     "a": v[:, 4].astype(np.int64), "keys": masks, "keys_known": known}
         self.died_at = None
         return True
 
@@ -947,6 +989,103 @@ class BestRoute:
 
 
 # ---- the planner ------------------------------------------------------------------------------------------
+
+
+def route_trial_choice(est: np.ndarray, veto: np.ndarray, gi: int, gain: float, keys: list, tried) -> int | None:
+    """The final-stage candidate to try instead of the best route (index gi): the one with the lowest estimate
+    among those without a veto whose estimate beats the route's by more than `gain` frames and whose key
+    (keys[c]) was never tried. None: no such candidate (or gain <= 0)."""
+    if gain <= 0 or not np.isfinite(est[gi]):
+        return None
+    for c in np.argsort(est, kind="stable"):
+        c = int(c)
+        if not est[c] < est[gi] - gain:
+            return None                              # sorted: no later one is better enough
+        if c != gi and not veto[c] and keys[c] not in tried:
+            return c
+    return None
+
+
+class RouteTrials:
+    """Trying a much better plan than the best route once in the real game (one agent per wave, the plan's exact
+    actions, no replanning while they play: Committer.triggers is silent for Plan.trial_frames).
+
+    Planner.plan offers it where the best route would be played: an unvetoed final-stage candidate whose
+    estimate beats the route's by more than `gain` frames (route_trial_choice). Its key, (state key of the
+    decision, the candidate's moves), is never tried again in this level, whatever happens. While its moves play,
+    observe() compares the real position with the plan's predicted path per frame; the first frame off by more
+    than the surprise tube (Planner.trial_tube(k); default the committer's: max(1.5 x ERR90 at k, 3)) is its
+    deviation. Outcomes: "died" (in or after its window), "faster" (the wave finished before the best route: the
+    route is replaced from that wave by BestRoute.finished), "slower" (finished, not faster), "no finish" (wave
+    ended). Each outcome is one "route trial" event; the window's end gives a "route trial window" event
+    (prediction held or the deviation). Kept per level for the run, like BestRoute."""
+
+    def __init__(self, gain: float = TRIAL_GAIN):
+        self.gain = float(gain)
+        self.tried: dict[tuple, dict] = {}           # candidate key -> its record (never tried again)
+        self.active: dict[int, dict] = {}
+        self.wave_used = False
+
+    def new_wave(self) -> list[dict]:
+        """A wave ended: open trials close as "no finish". Returns their events."""
+        out = [self._close(a, "no finish") for a in list(self.active)]
+        self.wave_used = False
+        return out
+
+    def allowed(self, agent: int) -> bool:
+        return self.gain > 0 and not self.wave_used and int(agent) not in self.active
+
+    def start(self, agent: int, frame: int, key: tuple, path, frames: int, info: dict) -> dict:
+        rec = {"agent": int(agent), "frame": int(frame), "frames": int(frames), **info,
+               "deviation": None, "max_error": 0.0, "window": None, "outcome": None}
+        rec["_path"] = np.asarray(path, np.float64)
+        self.active[int(agent)] = rec
+        self.tried[key] = rec
+        self.wave_used = True
+        return {"kind": "route trial start", "agent": int(agent), "frame": int(frame),
+                **{k: v for k, v in rec.items() if not k.startswith("_") and v is not None}}
+
+    def observe(self, agent: int, frame: int, x: float, y: float, dead: bool = False, cause=None, tube=None) -> list:
+        t = self.active.get(int(agent))
+        if t is None:
+            return []
+        k = int(frame) - t["frame"]
+        path = t["_path"]
+        out = []
+        if 1 <= k <= t["frames"] and k < len(path):
+            px, py = float(path[k, 0]), float(path[k, 1])
+            err = math.hypot(float(x) - px, float(y) - py)
+            t["max_error"] = round(max(t["max_error"], err), 2)
+            thr = float(tube(k)) if tube is not None else max(1.5 * float(S.margin(k)), 3.0)
+            if t["deviation"] is None and err > thr:
+                t["deviation"] = {"frame": int(frame), "k": k, "predicted": [round(px, 2), round(py, 2)],
+                                  "real": [round(float(x), 2), round(float(y), 2)], "error": round(err, 2),
+                                  "tube": round(thr, 2)}
+        if dead:
+            if t["window"] is None and k <= t["frames"]:
+                t["window"] = {"held": False, "died_at": k}
+            out.append(self._close(agent, "died", frame=frame, cause=cause))
+        elif k == t["frames"]:
+            t["window"] = {"held": t["deviation"] is None, "end": [round(float(x), 2), round(float(y), 2)]}
+            out.append({"kind": "route trial window", "agent": int(agent), "frame": int(frame),
+                        "held": t["deviation"] is None, "deviation": t["deviation"], "max_error": t["max_error"]})
+        return out
+
+    def finished(self, agent: int, frame: int, faster: bool) -> dict | None:
+        if int(agent) not in self.active:
+            return None
+        return self._close(agent, "faster" if faster else "slower", frame=frame)
+
+    def _close(self, agent: int, outcome: str, frame=None, cause=None) -> dict:
+        t = self.active.pop(int(agent))
+        t["outcome"] = outcome
+        if frame is not None:
+            t["end_frame"] = int(frame)
+        if cause is not None:
+            t["cause"] = cause
+        return {"kind": "route trial", **{k: v for k, v in t.items() if not k.startswith("_")}}
+
+
 def state_row(x, y, vx, vy, flags, state, keys=0, held=0) -> np.ndarray:
     """One agent row (wm.buffer.ROW) from the game's state values."""
     r = np.zeros(1, ROW)
@@ -984,12 +1123,16 @@ class Planner:
                  branch: int = BRANCH_DEFAULT, S_final: int = S_DEFAULT, budget_ms: float | None = BUDGET_MS,
                  member: int = 0, memory: FailureMemory | None = None, hysteresis: float = 0.0,
                  collide_tol: float | None = COLLIDE_TOL, moves: "MoveMemory | None | str" = "new",
-                 complete_max: int = COMPLETE_MAX, modes: bool = False):
+                 complete_max: int = COMPLETE_MAX, modes: bool = False, key_pickup=True,
+                 route_trial_gain: float = TRIAL_GAIN):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms   # budget: reported only
         self.hysteresis = float(hysteresis)          # frames (switch rule); 0: the best total is chosen
         self.collide_tol = collide_tol               # the collision guard's tolerance; None: no guard
+        self.key_pickup = bool(key_pickup)            # dynamics toggle; contacts always use the native-circle rule
         self.complete_max = int(complete_max)        # airborne completion frames (0: none)
+        self.trial_gain = float(route_trial_gain)     # RouteTrials: frames over the best route (0: never try)
+        self.trial_tube = None                       # k -> deviation threshold (agent.py: the committer's tube)
         self.modes = bool(modes) and len(self.model.members) >= 5     # long-safe / normal / reflex on own members
         self.member = MEMBERS["normal"] if self.modes else member
         self.f = int(getattr(self.model, "step", 1))   # frames per model step (a step-4 model: 4)
@@ -1017,18 +1160,21 @@ class Planner:
         tracker's predictions) start again; the point-of-no-return memory switches to this level's entries."""
         self.lv = level
         self.set_field(field)
-        self.geom = LevelGeom(level.words0, {"ox": level.ox, "oy": level.oy})
+        self.geom = LevelGeom(level.words0, level.wm_geometry_metadata(),        # the model's tile encoding
+                              protocol=model_layout(self.model).protocol)
         self.words = np.asarray(level.words0, np.uint32).copy()
         self.tiles_changed = False                   # a tile differs from the level's start (crumble, lock, switch)
         self.terrain = Terrain(level.words0, level.ox, level.oy)
         self.guard = Terrain(level.words0, level.ox, level.oy, slopes=False)    # the collision guard's tiles
         self._guard_keys = {}
+        self._support_keys = {}
         self.bounds = S.level_bounds(level)
         # what the agent touches to finish / pick a key (contact boxes; empty without contact_reach.json)
         self.goal_boxes = np.asarray(getattr(level, "goal_boxes", list)(), np.float64).reshape(-1, 5)
         self.key_boxes = list(getattr(level, "key_boxes", list)())
         self.memory = memory if memory is not None else FailureMemory()
         self.route = BestRoute()
+        self.trials = RouteTrials(self.trial_gain)
         if self.moves is not None:
             self.moves.set_level(getattr(level, "name", None))
         self.surprise = SurpriseTracker()
@@ -1055,13 +1201,28 @@ class Planner:
         self.terrain.update(self.words)
         self.guard.update(self.words)
         self._guard_keys = {}
+        self._support_keys = {}
+
+    def support_terrain(self, keys=0):
+        """Private support geometry, keeping slopes (the guard intentionally uses a separate geometry)."""
+        mask = int(keys)
+        if not mask:
+            return self.terrain
+        if mask not in self._support_keys:
+            self._support_keys[mask] = self.terrain.opened(self.geom.lock_context.opened_cells(mask))
+        return self._support_keys[mask]
+
+    def imagine_options(self, keys=0):
+        return {"terrain": self.guard_terrain(keys), "tol": self.collide_tol,
+                "key_pickup": self.key_pickup,
+                "terrain_for_mask": self.guard_terrain if self.key_pickup and self.collide_tol is not None else None}
 
     def guard_terrain(self, keys: int) -> Terrain | None:
         """The collision guard's tiles for an agent holding `keys`: the live tiles (plan.geometry.solid_now's
         rule: crumble / lock / switch blocks solid while their word is the start one), slope cells open (real
         agents are recorded inside some slopes' modelled triangles), the lock tiles of the held keys open (the
-        game opens them for that agent only; keys picked up during an imagined path do not open their locks
-        there). Moving platforms are not tiles: not in the guard. None when the guard is off."""
+        game opens them for that agent only). The incoming model-step mask decides the whole guard pass;
+        newly imagined pickups open it only on the next model step. None when the guard is off."""
         if self.collide_tol is None:
             return None
         keys = int(keys)
@@ -1072,7 +1233,8 @@ class Planner:
             t = self._guard_keys[keys] = self.guard.opened(self.lv.opened_cells(keys))
         return t
 
-    def new_wave(self):
+    def new_wave(self) -> list[dict]:
+        """A new wave: per-wave state cleared. Returns the events of route trials the wave left open."""
         self.prev = {}
         self.long = {}                               # agent -> the last long-safe plan {frame, actions, segs, valid}
         self.memory.new_wave()
@@ -1080,15 +1242,20 @@ class Planner:
         if self.moves is not None:
             self.moves.new_wave()
         self.surprise.new_wave()
+        return self.trials.new_wave()
 
     def cell(self, x, y) -> tuple:
         return int((x - self.lv.ox) // 20.0), int((y - self.lv.oy) // 20.0)
 
-    def support(self, x, y, vy=None):
+    def support(self, x, y, vy=None, keys=0):
         """The scoring's support rule at positions (arrays): (supported, ground, wall side). Ground, or a wall
         (plan/geometry.py's probe) while the downward speed -vy (units / frame; None: unknown, any speed) is at
         most CLING_SPEED. The explanation's landings / wall jumps and the safety check use the geometry alone."""
-        g, side = self.terrain.support(x, y, self.lv.plats or None)
+        x, y, masks = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64), np.asarray(keys))
+        g, side = np.zeros(x.shape, bool), np.zeros(x.shape, np.int8)
+        for mask in np.unique(masks):
+            idx = masks == mask
+            g[idx], side[idx] = self.support_terrain(mask).support(x[idx], y[idx], self.lv.plats or None)
         wall = side != 0
         if vy is not None and math.isfinite(CLING_SPEED):
             wall = wall & (-np.asarray(vy, np.float64) <= CLING_SPEED)
@@ -1108,9 +1275,10 @@ class Planner:
         field, so it still takes the best neighbour, which there is the cell below the floor (1-14: V 13.1 on the
         floor at x 110 from the cell below, 22.4 just above it)."""
         x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
-        sup, g, side = self.support(x, y, vy)
+        sup, g, side = self.support(x, y, vy, keys=keys)
         if leg is None:
-            leg = int(self.field.leg_of(np.int64(int(keys))))
+            leg = self.field.leg_of(np.asarray(keys, np.int64))
+            leg = int(leg) if np.ndim(leg) == 0 else leg
         return self.field.values(x, y, leg, sup), sup, g, side, leg
 
     def time_to_go(self, x, y, keys=0, leg=None, vy=None):
@@ -1118,40 +1286,35 @@ class Planner:
         (T, supported, ground, wall side, leg). Supported by Planner.support (cling rule with vy); airborne
         bodies take T_rise when vy > 0 (units / frame), else T_fall (vy None: the better of the two)."""
         x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
-        sup, g, side = self.support(x, y, vy)
+        sup, g, side = self.support(x, y, vy, keys=keys)
         if leg is None:
-            leg = int(self.field.leg_of(np.int64(int(keys))))
+            leg = self.field.leg_of(np.asarray(keys, np.int64))
+            leg = int(leg) if np.ndim(leg) == 0 else leg
         return self.field.times(x, y, leg, sup, vy), sup, g, side, leg
 
-    def _contacts(self, xs, ys, upto, death, leg: int):
+    def _path_keys(self, xs, ys, keys=0, upto=None, death=None):
+        if death is not None:
+            end = (xs.shape[-1] - 1) * self.f if upto is None else upto
+            upto = np.minimum(end, np.where(death > 0, death - 1, end))
+        return self.geom.lock_context.pickup_path(xs, ys, keys, self.f, upto)
+
+    def _contacts(self, xs, ys, upto, death, leg: int, initial_keys=0):
         """Goal and key contact of paths xs, ys (E, n, K+1 columns of self.f frames; every frame in and out is a
         frame) on their frames 1..upto ((n,), None: all K), given
         each path's first deadly contact frame `death` (E, n) (plan.safety.Sweep.contact_frame, -1 none).
         Returns goal (E, n): the first frame touching a goal before any deadly contact (-1 none); legs (E, n):
-        the leg after the route's next keys taken in order before any deadly contact; keys: per key leg tried
-        (leg j, pickup frame (E, n) or -1, key index (E, n) or -1)."""
+        the leg derived from private masks before any deadly contact; keys: per newly touched key
+        (key index, pickup frame (E, n) or -1, key index (E, n) or -1). Native keys are not route-order gated.
+        key_pickup=False disables state/geometry dynamics only, not this geometric contact scoring rule."""
         E, n = xs.shape[:2]
         f = self.f
         safe = lambda t: (t > 0) & ((death < 0) | (death > t))
         g, _ = S.first_contact(xs, ys, self.goal_boxes, upto=upto, step=f)
         goal = np.where(safe(g), g, -1)
-        legs = np.full((E, n), leg, np.int64)
-        keys = []
-        on = np.ones((E, n), bool)                     # every earlier key leg taken
-        last = np.zeros((E, n), np.int64)              # frame of the last pickup
-        never = (xs.shape[2] + 1) * f
-        for j in range(leg, len(self.field.key_order)):
-            ks = [k for k in self.field.key_order[j] if k < len(self.key_boxes)]
-            if not ks or not on.any():
-                break
-            t, w = S.first_contact(xs, ys, [self.key_boxes[k] for k in ks], first=np.where(on, last + 1, never),
-                                   upto=upto, step=f)
-            ok = on & safe(t)
-            if not ok.any():
-                break
-            legs = np.where(ok, j + 1, legs)
-            keys.append((j, np.where(ok, t, -1), np.where(ok, np.asarray(ks)[np.maximum(w, 0)], -1)))
-            on, last = ok, np.where(ok, t, last)
+        masks, touches = self._path_keys(xs, ys, initial_keys, upto, death)
+        legs = self.field.leg_of(masks[..., -1])
+        keys = [(k, touches[..., k], np.where(touches[..., k] > 0, k, -1))
+                for k in range(len(self.geom.lock_context.keys)) if (touches[..., k] > 0).any()]
         return goal, legs, keys
 
     def observe(self, agent: int, frame: int, x: float, y: float, keys: int = 0, dead: bool = False,
@@ -1169,7 +1332,7 @@ class Planner:
         else:
             vyf = None if vy is None else float(vy) * dt_ms / 1000.0
             vxf = None if vx is None else float(vx) * dt_ms / 1000.0
-            self.route.observe(agent, frame, x, y, vxf, vyf)
+            self.route.observe(agent, frame, x, y, vxf, vyf, keys=keys)
             t, sup, _, _, _ = self.time_to_go(np.array([x]), np.array([y]), keys,
                                               vy=None if vyf is None else np.array([vyf]))
             cell = self.cell(x, y)
@@ -1177,7 +1340,7 @@ class Planner:
                                          key=lambda: self.state_key(cell, bool(sup[0]), vxf, vyf))
         if dead and self.moves is not None:
             ev.append(self.moves.died(agent, frame, cause, x=x, y=y))
-        return ev
+        return ev + self.trials.observe(agent, frame, x, y, dead=dead, cause=cause, tube=self.trial_tube)
 
     @staticmethod
     def state_key(cell, supported: bool, vx, vy) -> tuple:
@@ -1196,10 +1359,13 @@ class Planner:
         """The runner reports a planned agent's goal touch in wave frame `frame`: its wave becomes the level's
         best route when it is the fastest finish of this run (BestRoute); the route worked, so the failure
         charges of its (cell, first move) pairs are cleared. Deaths are never forgiven (MoveMemory.finished drops
-        the wave's decisions only). Returns {best_route, failures_cleared}."""
+        the wave's decisions only). A route trial of this agent closes as faster / slower. Returns {best_route,
+        failures_cleared, route_trial (its event or None)}."""
         if self.moves is not None:
             self.moves.finished(agent)
-        return {"best_route": self.route.finished(agent, frame), "failures_cleared": self.memory.finished(agent)}
+        best = self.route.finished(agent, frame)
+        return {"best_route": best, "failures_cleared": self.memory.finished(agent),
+                "route_trial": self.trials.finished(agent, frame, faster=best)}
 
     # ---- airborne completion -----------------------------------------------------------------------------
     def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H):
@@ -1221,6 +1387,7 @@ class Planner:
         acts = np.array([a for f in fan for _, a in f], np.int64)
         n = len(cand)
         s = np.repeat(np.asarray(rows, ROW), nf)
+        endpoint_masks = s["keys"].copy()
         leg = np.asarray(legs, np.int64)[cand]
         Kmax = -(-self.complete_max // f) * f            # frames (whole steps)
         chunk = -(-COMPLETE_CHUNK // f) * f
@@ -1231,13 +1398,13 @@ class Planner:
         at = np.full(n, -1, np.int64)
         hit = [None] * n
         vy0 = s["vy"].astype(np.float64) * dt_ms / 1000.0
-        sup0, g0, side0 = self.support(s["x"].astype(np.float64), s["y"].astype(np.float64), vy0)
+        sup0, g0, side0 = self.support(s["x"].astype(np.float64), s["y"].astype(np.float64), vy0, keys=s["keys"])
         state[sup0] = 1
         at[sup0] = 0
         on = np.where(g0, "ground", "wall").astype(object)
         last_vy = vy0.copy()
         mem = slice(self.member, self.member + 1)
-        ck = {"terrain": self.guard_terrain(keys), "tol": self.collide_tol}
+        ck = self.imagine_options(keys)
         done, rolled = 0, 0
         clipped = np.zeros(n, bool)
         while done < Kmax:
@@ -1258,7 +1425,8 @@ class Planner:
             cf = sw.contact_frame[0]
             tg = S.first_contact(x[None], y[None], self.goal_boxes, step=f)[0][0] if len(self.goal_boxes) else \
                 np.full(len(act_i), -1)
-            sup, g, side = self.support(x[:, 1:], y[:, 1:], vy[:, 1:])
+            masks = out["keys"][0, :, 1:] if self.key_pickup else np.broadcast_to(s["keys"][act_i, None], x[:, 1:].shape)
+            sup, g, side = self.support(x[:, 1:], y[:, 1:], vy[:, 1:], keys=masks)
             land = np.where(sup.any(1), (sup.argmax(1) + 1) * f, -1)
             for j, r in enumerate(act_i):
                 ev = [(t, kd) for t, kd in ((int(land[j]), 1), (int(tg[j]), 2), (int(cf[j]), 3)) if t > 0]
@@ -1266,6 +1434,9 @@ class Planner:
                     continue
                 t, kd = min(ev, key=lambda e: (e[0], -e[1]))     # same frame: a deadly contact, then the goal, then support
                 state[r], at[r] = kd, done + t
+                if self.key_pickup:
+                    endpoint_masks[r] = self._path_keys(x[j:j + 1], y[j:j + 1], s["keys"][r], upto=t)[0][0, -1]
+                    leg[r] = self.field.leg_of(endpoint_masks[r])
                 tc = t // f
                 if kd == 1:
                     on[r] = "ground" if g[j, tc - 1] else "wall"
@@ -1281,6 +1452,9 @@ class Planner:
             xs[fi, dc + 1:dc + Kc + 1], ys[fi, dc + 1:dc + Kc + 1] = x[fly, 1:], y[fly, 1:]
             last_vy[fi] = vy[fly, -1]
             s[fi] = out["last"][0][fly]
+            endpoint_masks[fi] = s["keys"][fi]
+            if self.key_pickup:
+                leg[fi] = self.field.leg_of(endpoint_masks[fi])
             done += K
         # the scores
         end_c = np.where(at >= 0, at, done) // f
@@ -1313,6 +1487,7 @@ class Planner:
                 est, risk = done + self._tt(t_fly[i]), 0
             kk = int(at[i]) if at[i] >= 0 else done
             rec = {"continuation": names[i] if ok or risk == 0 else None, "frames": kk if (ok or not risk) else None,
+                   "keys": int(endpoint_masks[i]),
                    "x": round(float(xe[i]), 2), "y": round(float(ye[i]), 2),
                    "on": on[i] if ok else ("air" if not risk else None), "died": died,
                    "hits": {names[j]: hit[j] for j in idx if state[j] == 3}}
@@ -1334,6 +1509,8 @@ class Planner:
         """The best route's verdict on its recorded REAL path (the best wave's states from index j), or (None, why
         the model judges it). With the time-step lock the game repeats that path from the same state, so it is
         judged by plan.safety's geometry against this decision's deadly boxes, not by the world model:
+        - on key maps the recorded initial mask must be known and equal to the current mask (legacy unknown
+          masks can be trusted only on maps without keys); known endpoint masks select private support/T;
         - only when the state is within REAL_RADIUS units and REAL_SPEED units / frame (each component) of the
           route's state, the hazard future of every judged frame is the trusted recording (recorded >= the
           window), and, for a route state at another wave frame, the level has no moving platforms and no tile
@@ -1348,6 +1525,12 @@ class Planner:
           (its real velocity), supported: the real end state's support.
         Returns (dict, None) or (None, reason)."""
         b = self.route.best
+        masks, known = b.get("keys"), b.get("keys_known")
+        if getattr(self.lv, "keys", ()):
+            if masks is None or known is None or not bool(known[j]):
+                return None, "recorded route key mask is unknown on a key map"
+            if int(masks[j]) != int(keys):
+                return None, f"recorded route key mask {int(masks[j])} differs from current {int(keys)}"
         dv = max(abs(float(b["vx"][j]) - vx0), abs(float(b["vy"][j]) - vy0))
         if dist > REAL_RADIUS or dv > REAL_SPEED:
             return None, f"match {dist:.2f} units, {dv:.2f} u/f off (real path within {REAL_RADIUS:g} / {REAL_SPEED:g})"
@@ -1392,7 +1575,12 @@ class Planner:
             out.update(t_end=0.0, frames=int(tg), supported=True)
         else:
             vy = np.array([float(b["vy"][j + W])])
-            t, sup, _, _, _ = self.time_to_go(xs[-1:], ys[-1:], keys, leg, vy)
+            endpoint = j + W
+            end_keys, end_leg = keys, leg
+            if masks is not None and known is not None and bool(known[endpoint]):
+                end_keys = int(masks[endpoint])
+                end_leg = int(self.field.leg_of(end_keys))
+            t, sup, _, _, _ = self.time_to_go(xs[-1:], ys[-1:], end_keys, end_leg, vy)
             out.update(t_end=float(self._tt(t[0])), frames=int(W), supported=bool(sup[0]))
         return out, None
 
@@ -1426,13 +1614,13 @@ class Planner:
         mem = slice(self.member, self.member + 1)
         timing, counts = {}, {}
         gt = self.guard_terrain(keys)
-        ck = {"terrain": gt, "tol": self.collide_tol}
+        ck = self.imagine_options(keys)
         n_clip = lambda c, upto=None: 0 if c is None else int(
             (c if upto is None else c & (np.arange(c.shape[2])[None, None, :] <= np.asarray(upto)[None, :, None]))
             .any(axis=(0, 2)).sum())
 
-        def ends_time(xe, ye, vye, legs=None):
-            return self.time_to_go(xe, ye, keys, legs, vye)[0]
+        def ends_time(xe, ye, vye, legs=None, masks=keys):
+            return self.time_to_go(xe, ye, masks, legs, vye)[0]
 
         def success_total(t, pen):
             # earlier touch first; the penalty frames (up to the touch) only break ties (< 1 frame)
@@ -1455,7 +1643,7 @@ class Planner:
         fr1 = _near_frames(_cols(frames, steps1 + 1, f), out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1])
         sw1 = S.sweep(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], fr1, self.bounds, self.floor, f)
         tg1, legs1, _ = self._contacts(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1],
-                                       None, sw1.contact_frame, leg)
+                                       None, sw1.contact_frame, leg, keys)
         tg1, legs1 = tg1[0], legs1[0]
         succ1 = tg1 > 0
         # safety over every frame the score credits: the estimate is taken at the common end (a success: its goal
@@ -1465,7 +1653,8 @@ class Planner:
         veto1, vf1, vk1, vid1, soft1, sf1 = _verdict(sw1, np.where(succ1, tg1, end1), veto_upto=own1,
                                                      planned=np.where(succ1, tg1, up1))
         xe1, ye1, vye1 = out1["x"][0, :, steps1], out1["y"][0, :, steps1], out1["vy"][0, :, steps1]
-        tend1 = ends_time(xe1, ye1, vye1, legs1)
+        masks1 = self._path_keys(out1["x"], out1["y"], keys, death=sw1.contact_frame)[0][0, :, -1]
+        tend1 = ends_time(xe1, ye1, vye1, legs1, masks1)
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
         death1 = np.array([death_of(m.name) for m in self.lib])
         pen1 = scale * soft1 + fail1 + death1
@@ -1523,11 +1712,12 @@ class Planner:
         K = int(up2.max()) // f
         fr2 = _near_frames(_cols(frames, K + 1, f), xs2[:, :, :K + 1], ys2[:, :, :K + 1])
         sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds, self.floor, f)
-        tg2, legs2, _ = self._contacts(xs2[:, :, :K + 1], ys2[:, :, :K + 1], up2, sw2.contact_frame, leg)
+        tg2, legs2, _ = self._contacts(xs2[:, :, :K + 1], ys2[:, :, :K + 1], up2, sw2.contact_frame, leg, keys)
         tg2, legs2 = tg2[0], legs2[0]
         succ2 = tg2 > 0
         veto2, vf2, _, _, soft2, _ = _verdict(sw2, np.where(succ2, np.minimum(up2, tg2), up2))
-        tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2)
+        masks2 = self._path_keys(xs2[:, :, :K + 1], ys2[:, :, :K + 1], keys, up2, sw2.contact_frame)[0][0, :, -1]
+        tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2, masks2)
         pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
         est2 = up2 + self._tt(tend2) + pen2
         score2 = np.where(veto2, vetoed_total(vf2, est2), -est2)
@@ -1659,7 +1849,7 @@ class Planner:
         E = out3["x"].shape[0]
         fr3 = _near_frames(_cols(frames, Hc + 1, f), out3["x"], out3["y"])
         saf = S.check(out3["x"], out3["y"], fr3, self.bounds, self.floor, f)
-        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], None, saf.sweep.contact_frame, leg)
+        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], None, saf.sweep.contact_frame, leg, keys)
         n_goal = (tg_e > 0).sum(0)                                   # members touching the goal safely
         succ3 = 2 * n_goal > E
         tg3 = np.full(n3, -1, np.int64)
@@ -1670,8 +1860,9 @@ class Planner:
         vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3, planned=np.where(succ3, tg3, planned3))
         saf = replace(saf, veto=vv, veto_frame=vfr, veto_kind=vkd, veto_id=vid, soft_risk=vsoft, soft_frame=vsf)
         xe, ye, vye = out3["x"][:, :, Hc], out3["y"][:, :, Hc], out3["vy"][:, :, Hc]
-        tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, keys, legs_e, vye)      # (E, n3), each member's own leg
-        vend_e = self.value(xe, ye, keys, legs_e, vye)[0]                         # V: display only
+        masks3 = self._path_keys(out3["x"], out3["y"], keys, death=saf.sweep.contact_frame)[0][..., -1]
+        tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, masks3, legs_e, vye)   # private mask per member/candidate
+        vend_e = self.value(xe, ye, masks3, legs_e, vye)[0]                    # V: display only
         lands = 2 * sup_e.sum(0) > E                                 # a majority of members supported at H
         tend3 = self._tt(tend_e).mean(0)
         base3 = H + tend3                                            # frames used + T at the end
@@ -1747,7 +1938,27 @@ class Planner:
                                         f"at frame {route['frame']}"}
                 best = gi
             route["used"] = best == gi
+        trial = None
+        if gi is not None and route["used"] and self.trials.allowed(agent):   # a much better plan: tried once
+            key0 = self.state_key(cell0, bool(sup0[0]), float(row["vx"][0]) * dt_ms / 1000.0, float(vy0[0]))
+            names = [tuple(nm for nm, a, b in segs if nm != "pad") for segs, _ in final]
+            c = route_trial_choice(est3, saf.veto, gi, self.trials.gain, [(key0, nm) for nm in names],
+                                   self.trials.tried)
+            if c is not None:
+                gain = float(est3[gi] - est3[c])
+                trial = {"key": (key0, names[c]), "moves": list(names[c]), "estimate": round(float(est3[c]), 2),
+                         "route_estimate": round(float(est3[gi]), 2), "gain": round(gain, 2),
+                         "route_frame": route["frame"], "route_finish": route["finish"],
+                         "route_judged": route.get("judged")}
+                route["why"] = (f"route trial: estimate {est3[c]:.0f} vs the route's {est3[gi]:.0f} "
+                                f"({gain:.0f} > {self.trials.gain:g} frames), tried once")
+                switch = {"kept": False, "gain": round(gain, 3), "margin": self.trials.gain, "unit": "frames",
+                          "reason": route["why"]}
+                best = c
+                route["used"] = False
         mode = getattr(prev, "mode", "normal") if best == prev_idx else modes3[best]
+        if trial is not None:
+            mode = "route-trial"
         if mode == "best-route" and route is not None and route["used"]:
             if not (best == prev_idx and agent in self.route.using):
                 self.route.using[agent] = (int(frame), route["frame"])
@@ -1784,12 +1995,14 @@ class Planner:
                            "safe_alternatives": safe_alts,
                            "completions": [None if r is None else {k: r[k] for k in ("continuation", "frames", "on", "died")}
                                            for r in comp_rec]}
+        counts["key_pickup"] = key_pickup_policy(f) if self.key_pickup else {"enabled": False}
 
         # ---- explanation -----------------------------------------------------------------------------------
         segs, acts = final[best]
         mx, my = out3["x"][:, best].mean(0), out3["y"][:, best].mean(0)            # per column (step)
         spread = np.sqrt(out3["x"][:, best].var(0) + out3["y"][:, best].var(0))
-        g, side = self.terrain.support(mx, my, self.lv.plats or None)
+        display_keys = self._path_keys(mx[None], my[None], keys)[0][0, ::f]
+        _, g, side = self.support(mx, my, keys=display_keys)
         sup = g | (side != 0)
         landings = [{"frame": k * f, "x": float(mx[k]), "y": float(my[k]), "on": "ground" if g[k] else "wall"}
                     for k in range(1, Hc + 1) if sup[k] and not sup[k - 1]]
@@ -1803,7 +2016,8 @@ class Planner:
         if real_best:                                # the route's recorded real path is the prediction
             k = np.minimum(np.arange(H + 1), len(real["x"]) - 1)
             mx, my, spread = real["x"][k], real["y"][k], np.zeros(H + 1)
-            g, side = self.terrain.support(mx[::f], my[::f], self.lv.plats or None)
+            display_keys = self.geom.lock_context.pickup_path(mx[None], my[None], keys, step=1)[0][0, ::f]
+            _, g, side = self.support(mx[::f], my[::f], keys=display_keys)
             sup = g | (side != 0)
             landings = [{"frame": k * f, "x": float(mx[k * f]), "y": float(my[k * f]), "on": "ground" if g[k] else "wall"}
                         for k in range(1, Hc + 1) if sup[k] and not sup[k - 1]]
@@ -1860,6 +2074,11 @@ class Planner:
             model_clipped=None if out3["clip"] is None else int(out3["clip"][:, best].any(0).sum()),
             completion=completion, mode=mode, best_route=route)
         plan.first_move_frames = int(first_frames)
+        plan.trial_frames = 0
+        if trial is not None and mode == "route-trial":          # not overridden by the reflex
+            plan.trial_frames = int(sum(b - a for nm, a, b in segs if nm != "pad"))
+            info = {k: v for k, v in trial.items() if k != "key"}
+            plan.route_trial = self.trials.start(agent, frame, trial["key"], plan.path, plan.trial_frames, info)
         self.prev[agent] = plan
         if not plan.from_prev:                       # a kept plan keeps the predictions of its adoption
             self.surprise.add(plan)
@@ -1882,14 +2101,15 @@ class Planner:
         E, n, K1 = x.shape
         fr = _near_frames(_cols(frames, K1, f), x, y)
         sw = S.sweep(x, y, fr, self.bounds, self.floor, f)
-        tg_e, legs_e, _ = self._contacts(x, y, upto, sw.contact_frame, leg)
+        tg_e, legs_e, _ = self._contacts(x, y, upto, sw.contact_frame, leg, keys)
         succ = (tg_e > 0).all(0)
         tg = np.where(succ, tg_e.max(0), -1)
         veto, vf, _, _, soft, _ = _verdict(sw, np.where(succ, np.minimum(upto, tg), upto))
         uc = np.asarray(upto) // f
         ar = np.arange(n)
         xe, ye, vye = x[:, ar, uc], y[:, ar, uc], out["vy"][:, ar, uc]
-        tend = self._tt(self.time_to_go(xe, ye, keys, legs_e, vye)[0]).mean(0)
+        masks = self._path_keys(x, y, keys, upto, sw.contact_frame)[0][..., -1]
+        tend = self._tt(self.time_to_go(xe, ye, masks, legs_e, vye)[0]).mean(0)
         return {"veto": veto, "veto_frame": vf, "soft": soft, "succ": succ, "tg": tg, "tend": tend, "sweep": sw}
 
     def _long_safe(self, row, worlds, frames, dt_ms, ck, leg, keys, pen_first, scale):
@@ -1995,7 +2215,7 @@ class Planner:
         E_all = len(self.model.members)
         a, b = MEMBERS["explore"]
         mem = slice(min(a, E_all - 2), min(b, E_all - 1) + 1)
-        ck = {"terrain": self.guard_terrain(keys), "tol": self.collide_tol}
+        ck = self.imagine_options(keys)
         out = imagine(self.model, mem, self.geom, np.repeat(row, n), acts, dt_ms, worlds, **ck)
         up = np.full(n, H, np.int64)
         j = self._judge(out, frames, up, leg, keys)
@@ -2068,21 +2288,28 @@ class Planner:
     def _touches(xs, ys, tg, keys, E, f: int = 1):
         """The chosen plan's goal touch {frame, x, y, members} (None unless a majority of members touch it)
         and key pickups [{frame, key, x, y}] (those a majority of members make), from its members' paths
-        xs, ys (E, H+1), goal touch frames tg (E,) and per key leg (leg, frames (E,), key index (E,)). frame: the
+        xs, ys (E, H+1), goal touch frames tg (E,) and per key (key index, frames (E,), key index (E,)). frame: the
         (lower) median of the members' touch frames, x / y: the mean of their touch points."""
-        def at(t):
+        def at(t, key=False):
             m = np.nonzero(t > 0)[0]
             if 2 * len(m) <= E:
                 return None
             ts = np.sort(t[m])
-            return int(ts[(len(ts) - 1) // 2]), float(np.mean(xs[m, t[m] // f])), float(np.mean(ys[m, t[m] // f])), m
+            col = t[m] // f
+            xx, yy = xs[m, col], ys[m, col]
+            if key and f > 1:
+                alpha = (t[m] % f) / f
+                nxt = np.minimum(col + 1, xs.shape[1] - 1)
+                xx = xx + alpha * (xs[m, nxt] - xx)
+                yy = yy + alpha * (ys[m, nxt] - yy)
+            return int(ts[(len(ts) - 1) // 2]), float(np.mean(xx)), float(np.mean(yy)), m
         g = at(tg)
         goal = None if g is None else {"frame": g[0], "x": g[1], "y": g[2], "members": int(len(g[3]))}
         out = []
         for j, t, w in keys:
-            k = at(t)
+            k = at(t, key=True)
             if k is None:
-                break
+                continue
             vals, cnt = np.unique(w[k[3]], return_counts=True)
             out.append({"frame": k[0], "key": int(vals[cnt.argmax()]), "x": k[1], "y": k[2]})
         return goal, out

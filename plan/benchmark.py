@@ -83,6 +83,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from plan.analyze_run import HORIZONS, RUNS, analyze, resolve_run      # noqa: E402
+from levels_smb import a_plus, a_plus_time                          # noqa: E402
 
 SPEC = os.path.join(HERE, "benchmark.json")
 EVAL = os.path.join(HERE, "eval_levels.json")
@@ -232,10 +233,12 @@ def _place(x, y, f=None):
     return p if f is None else p + (int(f) // DEATH_FRAMES,)
 
 
-def k_metrics(waves: list, k: int = K_DEFAULT) -> dict:
+def k_metrics(waves: list, k: int = K_DEFAULT, level: str | None = None) -> dict:
     """A level's completed waves in log order (analyze_run wave_list, run folders concatenated) -> the section 4
-    metrics over the first k."""
+    metrics over the first k; with `level`, the A+ target too (levels_smb.a_plus_time: a_plus_k, the best within
+    k at most the A+ time; waves_to_a_plus, the first wave with such a finish)."""
     ws = waves[:k]
+    first_a = next((i for i, w in enumerate(ws) if any(a_plus(level, sc) for _, sc in w["finishes"])), None)
     first = next((i for i, w in enumerate(ws) if w["finished"]), None)
     frames = None
     if first is not None:
@@ -257,6 +260,8 @@ def k_metrics(waves: list, k: int = K_DEFAULT) -> dict:
             "replay_waves": len(rep), "replay_finishes": rp_fin, "replay_completion": _ratio(rp_fin, len(rep)),
             "best_s_k": min(secs) if secs else None,
             "median_s_k": round(float(statistics.median(secs)), 3) if secs else None,
+            "a_plus_k": a_plus(level, min(secs) if secs else None) if secs else (False if ws and a_plus_time(level) else None),
+            "waves_to_a_plus": None if first_a is None else first_a + 1,
             "distinct_finish_frames": len(fin_frames), "distinct_death_places": len(deaths),
             "distinct_stuck_places": len(stuck), "distinct_outcomes": len(fin_frames) + len(deaths) + len(stuck),
             "decisions_k": sum(w["decisions"] for w in ws), "replayed_decisions_k": sum(w["replayed"] for w in ws)}
@@ -274,6 +279,7 @@ def k_overall(levels: dict, k: int = K_DEFAULT) -> dict:
             "finished_waves_k": ff + rf, "fresh_waves": fw, "fresh_finishes": ff, "fresh_completion": _ratio(ff, fw),
             "replay_waves": rw, "replay_finishes": rf, "replay_completion": _ratio(rf, rw),
             "best_s_k": None, "median_s_k": None,
+            "a_plus_k": sum(bool(v.get("a_plus_k")) for v in vs), "waves_to_a_plus": None,
             **{key: sum(v[key] for v in vs) for key in ("distinct_finish_frames", "distinct_death_places",
                                                          "distinct_stuck_places", "distinct_outcomes",
                                                          "decisions_k", "replayed_decisions_k")}}
@@ -306,12 +312,14 @@ def aggregate(results: list, spec: dict, which: str = "levels", k: int = K_DEFAU
         levels[lv] = {
             "waves": waves, "waves_planned": spec["waves_per_level"], "finishes": fins,
             "completion": _ratio(fins, waves), "best_s": min(bests) if bests else None,
+            "a_plus_s": a_plus_time(lv), "a_plus": a_plus(lv, min(bests) if bests else None),
+            "a_plus_finishes": sum(bool(a_plus(lv, x)) for x in secs),
             "median_s": round(float(statistics.median(secs)), 3) if secs else None,
             "deaths": dict(deaths.most_common()), "deaths_total": sum(deaths.values()),
             "deaths_per_wave": _ratio(sum(deaths.values()), waves), "decisions": dec,
             "still_decisions": still, "still": _ratio(still, dec),
             "replayed_decisions": replayed, "replayed": _ratio(replayed, dec),
-            "k": k_metrics([w for _, _, L in parts for w in L.get("wave_list") or []], k),
+            "k": k_metrics([w for _, _, L in parts for w in L.get("wave_list") or []], k, lv),
             "ms_per_decision": ms[0][0] if len(parts) == 1 else _wmean(ms),
             "replan_interval": rp[0][0] if len(parts) == 1 else _wmean(rp),
             "position_error": _merge_err([r["position_error"] for _, r, _ in parts]) if parts else None,
@@ -330,6 +338,7 @@ def aggregate(results: list, spec: dict, which: str = "levels", k: int = K_DEFAU
                "replayed_decisions": sum(v["replayed_decisions"] for v in vs),
                "replayed": _ratio(sum(v["replayed_decisions"] for v in vs), sum(v["decisions"] for v in vs)),
                "levels_finished": sum(v["finishes"] > 0 for v in vs), "levels": len(levels),
+               "levels_a_plus": sum(bool(v["a_plus"]) for v in vs),
                "k": k_overall({lv: v["k"] for lv, v in levels.items()}, k)}
     return levels, overall
 
@@ -415,14 +424,21 @@ def _frac(n, d, r):
 K_HELP = ("1st: wave 1 finished; to 1st: waves to the first finish (fail: none within K) and the game frames to it "
           "(all agents); fresh / replay: finished waves / waves of each kind (replay: any decision replayed the "
           "recorded best route, or a demo); outcomes: distinct finish frames / death places / time-out places; "
-          "replayed: decisions that replayed the best route over every logged decision")
+          "replayed: decisions that replayed the best route over every logged decision; A+: the game's par time "
+          "(levels_smb.a_plus_time), A+ ok: w<N> = the first wave with a finish within it (no: none within K), "
+          "A+ fin: logged finishes within it")
 
 
 def _k_rows(w, levels: dict, overall: dict, k: int):
     w(f"{'level':<8}{'waves':>7}{'logged':>7}{'1st':>5}{'to 1st':>8}{'frames':>8}{'fresh':>12}{'replay':>12}"
-      f"{'best_s':>8}{'med_s':>8}{'outcomes':>9} {'(f/d/t)':<10}{'replayed':>18}")
+      f"{'best_s':>8}{'med_s':>8}{'A+':>6}{'A+ ok':>7}{'outcomes':>9} {'(f/d/t)':<10}{'replayed':>18}")
     for lv, v in list(levels.items()) + [("overall", overall)]:
         x = v["k"]
+        if lv == "overall":
+            aok, apar = f"{x['a_plus_k']}/{x['levels_played']}", ""
+        else:
+            aok = "-" if x["a_plus_k"] is None else (f"w{x['waves_to_a_plus']}" if x["a_plus_k"] else "no")
+            apar = _f(v.get("a_plus_s"), ".1f")
         if lv == "overall":
             first = f"{x['first_try']}/{x['levels_played']}"
             to1 = f"{x['solved']}/{x['levels_played']}"
@@ -434,7 +450,7 @@ def _k_rows(w, levels: dict, overall: dict, k: int):
           f"{_f(x['frames_to_first'], 'd'):>8}"
           f"{_frac(x['fresh_finishes'], x['fresh_waves'], x['fresh_completion']):>12}"
           f"{_frac(x['replay_finishes'], x['replay_waves'], x['replay_completion']):>12}"
-          f"{_f(x['best_s_k']):>8}{_f(x['median_s_k']):>8}{x['distinct_outcomes']:>9} "
+          f"{_f(x['best_s_k']):>8}{_f(x['median_s_k']):>8}{apar:>6}{aok:>7}{x['distinct_outcomes']:>9} "
           f"{'(' + str(x['distinct_finish_frames']) + '/' + str(x['distinct_death_places']) + '/' + str(x['distinct_stuck_places']) + ')':<10}"
           f"{_frac(v['replayed_decisions'], v['decisions'], v['replayed']):>18}")
 
@@ -451,11 +467,16 @@ def _delta_rows(w, levels: dict, dlb: dict):
 
 
 def _logged_rows(w, levels: dict, overall: dict):
-    w(f"{'level':<8}{'waves':>6}{'fin':>5}{'compl':>7}{'best_s':>8}{'med_s':>8}{'d/wave':>8}{'dec':>7}{'ms/dec':>8}"
-      f"{'replan':>7}{'still':>7}")
+    w(f"{'level':<8}{'waves':>6}{'fin':>5}{'compl':>7}{'best_s':>8}{'med_s':>8}{'A+':>6}{'A+ fin':>7}"
+      f"{'d/wave':>8}{'dec':>7}{'ms/dec':>8}{'replan':>7}{'still':>7}")
     for lv, v in list(levels.items()) + [("overall", overall)]:
+        if lv == "overall":
+            apar, afin = "", f"{v.get('levels_a_plus', 0)}/{v['levels']}"
+        else:
+            apar = _f(v.get("a_plus_s"), ".1f")
+            afin = "-" if v.get("a_plus_s") is None else str(v.get("a_plus_finishes", 0))
         w(f"{lv:<8}{v['waves']:>6}{v['finishes']:>5}{_p(v['completion']):>7}"
-          f"{_f(v.get('best_s')):>8}{_f(v.get('median_s')):>8}{_f(v['deaths_per_wave']):>8}{v['decisions']:>7}"
+          f"{_f(v.get('best_s')):>8}{_f(v.get('median_s')):>8}{apar:>6}{afin:>7}{_f(v['deaths_per_wave']):>8}{v['decisions']:>7}"
           f"{_f(v['ms_per_decision'], '.0f'):>8}{_f(v.get('replan_interval'), '.0f'):>7}{_p(v.get('still')):>7}")
 
 

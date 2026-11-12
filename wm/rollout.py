@@ -3,8 +3,9 @@
 Each step feeds the model's own prediction back in: position, velocity, the flag bits that change during
 play (features.FLAG_BITS; the others are kept), the movement state and the jump key (held as realgame.js
 holds it, re-pressed on walls). The tiles are read at the predicted position; hazards, platforms and wind
-come from `worlds` (one per future step). Every ensemble member rolls out its own trajectory, so the spread
-between them grows where the model is unsure (trajectory sampling, as in PETS).
+come from `worlds` (one per future step). Each step adds the physics prior the checkpoint was trained with
+(wm.features.model_prior; its fans from that step's world). Every ensemble member rolls out its own
+trajectory, so the spread between them grows where the model is unsure (trajectory sampling, as in PETS).
 """
 from __future__ import annotations
 
@@ -14,7 +15,8 @@ import numpy as np
 import torch
 
 from wm.features import (featurize, featurize_k, prior, hazard_boxes, RES_SCALE, FLAG_BITS, EVENTS, BIN_NAMES, AIR,
-                         WALL, DT_DEFAULT)
+                         WALL, DT_DEFAULT, model_prior, require_geom)
+from game.level import key_pickup_policy
 
 WALL_REPRESS = 6                                   # realgame.js / realgame.py
 ACT_JUMP = np.array([0, 0, 0, 1, 1, 1, 0, 1, 0, 1], bool)   # realgame.ACTIONS: which actions hold jump
@@ -80,26 +82,33 @@ def step_actions(actions: np.ndarray, k: int) -> np.ndarray:
 
 
 @torch.no_grad()
-def rollout_mean(model, geom, s0, actions, dts, worlds):
+def rollout_mean(model, geom, s0, actions, dts, worlds, key_pickup=False):
     """One rollout per agent with the ensemble's mean prediction; returns the inputs the model saw at each
     step and the rows it predicted ([K] features, [K+1] rows). For training on its own predictions."""
+    require_geom(model, geom)
+    if key_pickup and getattr(model, "step", 1) != 1:
+        raise ValueError("rollout_mean supports step1; use rollout_batched for coarse key pickup")
     n, K = actions.shape
     dts = np.asarray(dts, np.float64)
+    pp = model_prior(model)
     s, feats, states = s0.copy(), [], [s0.copy()]
     rs = torch.as_tensor(RES_SCALE)
     for k in range(K):
         a, dt, w = actions[:, k], (dts[k] if dts.ndim == 1 else dts[:, k]), worlds[k]
         X = featurize(s, a, dt, geom, w.boxes, w.pf, w.pf_prev, w.dt_prev_s, w.fans)
         p = model.predict(torch.as_tensor(X))
-        move = (p["mean"] * rs).numpy() + prior(s, dt)
-        s = advance(s, a, move, p["p"].numpy(), p["state"].argmax(-1).numpy())
+        move = (p["mean"] * rs).numpy() + prior(s, dt, 1, w.fans, pp)
+        s2 = advance(s, a, move, p["p"].numpy(), p["state"].argmax(-1).numpy())
+        if key_pickup:
+            geom.lock_context.pickup_after_step(s, s2)
+        s = s2
         feats.append(X)
         states.append(s.copy())
     return feats, states
 
 
 @torch.no_grad()
-def rollout(model, geom, s0: np.ndarray, actions: np.ndarray, dts, worlds: list) -> dict:
+def rollout(model, geom, s0: np.ndarray, actions: np.ndarray, dts, worlds: list, key_pickup=False) -> dict:
     """s0: agent rows (wm.buffer.ROW, n); actions (n, K); dts: ms, (K,) or (n, K); worlds: K World.
     Returns per member e, agent i, step k (index 0 = start):
       x, y, vx, vy   (E, n, K+1) game units
@@ -107,12 +116,19 @@ def rollout(model, geom, s0: np.ndarray, actions: np.ndarray, dts, worlds: list)
       p              (E, n, K, BIN_NAMES) probabilities after each step (flags, death, finish, landing, blocked)
       std            (E, n, K, 4) the member's own uncertainty of each step (dx, dy, vx, vy)
       airborne       (E, n, K+1) predicted flag"""
+    require_geom(model, geom)
+    if key_pickup and getattr(model, "step", 1) != 1:
+        raise ValueError("rollout supports step1; use rollout_batched for coarse key pickup")
     E = len(model.members)
     n, K = actions.shape
     dts = np.asarray(dts, np.float64)
+    pp = model_prior(model)
     out = {k: np.zeros((E, n, K + 1), np.float32) for k in ("x", "y", "vx", "vy", "alive", "airborne")}
     out["p"] = np.zeros((E, n, K, len(BIN_NAMES)), np.float32)
     out["std"] = np.zeros((E, n, K, 4), np.float32)
+    if key_pickup:
+        out["keys"] = np.zeros((E, n, K + 1), np.uint32)
+        out["keys"][:, :, 0] = s0["keys"]
     rs = torch.as_tensor(RES_SCALE)
     for e, member in enumerate(model.members):
         s = s0.copy()
@@ -127,9 +143,12 @@ def rollout(model, geom, s0: np.ndarray, actions: np.ndarray, dts, worlds: list)
             w = worlds[k]
             X = torch.as_tensor(featurize(s, a, dt, geom, w.boxes, w.pf, w.pf_prev, w.dt_prev_s, w.fans))
             h = model.split(member((X - model.mu) / model.sd))
-            move = (h["mean"] * rs).numpy() + prior(s, dt)
+            move = (h["mean"] * rs).numpy() + prior(s, dt, 1, w.fans, pp)
             pb = torch.sigmoid(h["bin"]).numpy()
             s2 = advance(s, a, move, pb, h["state"].argmax(-1).numpy())
+            if key_pickup:
+                geom.lock_context.pickup_after_step(s, s2)
+                out["keys"][e, :, k + 1] = s2["keys"]
             alive = alive * (1.0 - pb[:, EVENTS["death"]])
             for name in ("x", "y", "vx", "vy"):
                 out[name][e, :, k + 1] = s2[name]
@@ -138,6 +157,8 @@ def rollout(model, geom, s0: np.ndarray, actions: np.ndarray, dts, worlds: list)
             out["p"][e, :, k] = pb
             out["std"][e, :, k] = (torch.exp(0.5 * h["logvar"]) * rs).numpy()
             s = s2
+    if key_pickup:
+        out["key_pickup"] = key_pickup_policy(1)
     return out
 
 
@@ -156,7 +177,7 @@ def _stacked(model):
 
 @torch.no_grad()
 def rollout_batched(model, geom, s0: np.ndarray, actions: np.ndarray, dts, worlds: list, deadline: float | None = None,
-                    keep_rows: bool = False) -> dict:
+                    keep_rows: bool = False, key_pickup=False) -> dict:
     """rollout() with all members in one batched call per step (2-3x faster, same numbers). deadline
     (time.perf_counter() value): stop after the step that passes it; out["steps"] says how many steps were
     rolled out (the arrays keep their full size; the steps after it are left as they were at the stop).
@@ -165,6 +186,8 @@ def rollout_batched(model, geom, s0: np.ndarray, actions: np.ndarray, dts, world
     model step, ceil(K / k) of them (column j = frame j x k; out["step"] = k), the world at each step's first
     frame."""
     import time
+    require_geom(model, geom)
+    pp = model_prior(model)
     E = len(model.members)
     f = getattr(model, "step", 1)
     if f > 1:                                  # a step-k model: K frames -> ceil(K / k) steps (module docstring)
@@ -186,6 +209,8 @@ def rollout_batched(model, geom, s0: np.ndarray, actions: np.ndarray, dts, world
     out = {k: np.zeros((E, n, K + 1), np.float32) for k in ("x", "y", "vx", "vy", "alive", "airborne")}
     out["p"] = np.zeros((E, n, K, len(BIN_NAMES)), np.float32)
     out["std"] = np.zeros((E, n, K, 4), np.float32)
+    if key_pickup:
+        out["keys"] = np.zeros((E, n, K + 1), np.uint32)
     rows = np.zeros((E, n, K + 1), s0.dtype) if keep_rows else None
     alive = np.ones(E * n, np.float32)
     rs = torch.as_tensor(getattr(model, "res_scale", RES_SCALE))
@@ -197,6 +222,8 @@ def rollout_batched(model, geom, s0: np.ndarray, actions: np.ndarray, dts, world
         out["airborne"][:, :, k] = ((s["flags"] & AIR) != 0).reshape(E, n)
         if rows is not None:
             rows[:, :, k] = s.reshape(E, n)
+        if key_pickup:
+            out["keys"][:, :, k] = s["keys"].reshape(E, n)
     put(0, s, alive)
     done = K
     for k in range(K):
@@ -210,9 +237,12 @@ def rollout_batched(model, geom, s0: np.ndarray, actions: np.ndarray, dts, world
         for i in range(len(W) - 1):
             z = torch.nn.functional.silu(torch.baddbmm(B[i], z, W[i]))
         h = model.split(torch.baddbmm(B[-1], z, W[-1]).reshape(E * n, -1))
-        move = (h["mean"] * rs).numpy() + prior(s, dt, f)
+        move = (h["mean"] * rs).numpy() + prior(s, dt, f, w.fans, pp)
         pb = torch.sigmoid(h["bin"]).numpy()
-        s = advance(s, a_all[:, k], move, pb, h["state"].argmax(-1).numpy())
+        s2 = advance(s, a_all[:, k], move, pb, h["state"].argmax(-1).numpy())
+        if key_pickup:
+            geom.lock_context.pickup_after_step(s, s2, f)
+        s = s2
         alive = alive * (1.0 - pb[:, EVENTS["death"]])
         put(k + 1, s, alive)
         out["p"][:, :, k] = pb.reshape(E, n, -1)
@@ -224,4 +254,6 @@ def rollout_batched(model, geom, s0: np.ndarray, actions: np.ndarray, dts, world
     out["step"] = f
     if rows is not None:
         out["rows"] = rows
+    if key_pickup:
+        out["key_pickup"] = key_pickup_policy(f)
     return out

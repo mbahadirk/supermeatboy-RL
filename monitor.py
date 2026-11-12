@@ -21,7 +21,7 @@ os.environ.setdefault("SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN", "1")   # do not tak
 import pygame
 import numpy as np
 
-from realpath import PATH_RGB
+from realpath import PATH_RGB, SHAPE_HALF, SHAPE_SLOPE, solid_polygon, tile_shape
 
 TILE = 20.0
 WIN_W, WIN_H = 1500, 900
@@ -86,7 +86,17 @@ def input_name(j: int) -> str:
         return ("plat dx", "plat dy", "plat vx", "plat vy")[j]
     if j == 4:
         return "jump held"
-    return f"in {j}"
+    j -= 5
+    if j < 2 * n:                        # realgame --shape-inputs: open direction x, then y, rows top-down
+        q = j % n
+        return f"open {'xy'[j // n]} {q % (2 * K + 1) - K:+d},{K - q // (2 * K + 1):+d}"
+    return f"in {j + 5}"
+
+
+def cell_polygon(x0: float, y0: float, ts: float, kind: int, ox: int, oy: int) -> list:
+    """Screen points of a cell's solid part (realpath.solid_polygon) for a cell whose top-left screen corner is
+    (x0, y0) and side ts (screen y down)."""
+    return [(x0 + u * ts, y0 + (1.0 - v) * ts) for u, v in solid_polygon(kind, ox, oy)]
 
 
 def split(n: int, share, k: int) -> list[int]:
@@ -253,6 +263,7 @@ class Monitor:
         surf.fill(BG)
         ts = TILE * sc
         special = getattr(lv, "special", None)
+        shape = tile_shape(lv.words)              # half blocks and slopes: only their solid part is drawn
         for r in range(lv.H):
             for c in range(lv.W):
                 wind = getattr(lv, "wind", None)
@@ -271,7 +282,11 @@ class Monitor:
                 if lv.solid[r, c]:                # live: broken crumble blocks and opened locks are gone
                     x0, y0 = self.ox0 + c * ts, self.oy0 + (lv.H - 1 - r) * ts
                     col = SPECIAL if special is not None and special[r, c] else                         ACCEL if getattr(lv, "accel", None) is not None and lv.accel[r, c] else SOLID
-                    surf.fill(col, pygame.Rect(int(x0), int(y0), max(1, int(x0 + ts) - int(x0)), max(1, int(y0 + ts) - int(y0))))
+                    kind = shape.kind[r, c]
+                    if kind == SHAPE_HALF or kind == SHAPE_SLOPE:
+                        pygame.draw.polygon(surf, col, cell_polygon(x0, y0, ts, kind, shape.ox[r, c], shape.oy[r, c]))
+                    else:
+                        surf.fill(col, pygame.Rect(int(x0), int(y0), max(1, int(x0 + ts) - int(x0)), max(1, int(y0 + ts) - int(y0))))
         pygame.draw.circle(surf, SPAWN, self.pt(*lv.spawn), max(4, int(8 * sc)), 2)
         for g in lv.goals:
             pygame.draw.circle(surf, GOAL, self.pt(*g), max(5, int(10 * sc)))

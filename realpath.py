@@ -40,6 +40,7 @@ from __future__ import annotations
 import heapq
 import math
 import time
+from typing import NamedTuple
 
 import numpy as np
 
@@ -96,22 +97,88 @@ def tile_classes(words: np.ndarray) -> dict:
             "other": sp & ~np.isin(tid, CRUMBLE_IDS + LOCK_IDS + SWITCH_IDS)}
 
 
+def _flip_rotate(t: np.ndarray, x: int, y: int) -> tuple[np.ndarray, np.ndarray]:
+    """A reference direction (x, y) of every tile word t, mirrored by the flip bits 14-15 (1 / 3 mirror x,
+    2 / 3 mirror y), then rotated by the rotation bits 12-13: the game's orientation decode (FUN_004ca9a0;
+    same decode as tools/smbl_extract.tile_shape). The one decode of slope and half-block orientation."""
+    rot, flip = (t >> 12) & 3, (t >> 14) & 3
+    x = np.where((flip == 1) | (flip == 3), -x, x)
+    y = np.where((flip == 2) | (flip == 3), -y, y)
+    xr = np.select([rot == 0, rot == 1, rot == 2, rot == 3], [x, -y, -x, y])
+    yr = np.select([rot == 0, rot == 1, rot == 2, rot == 3], [y, x, -y, -x])
+    return xr, yr
+
+
 def slope_open_corner(words: np.ndarray) -> np.ndarray:
     """For 45-degree slope tiles, the corner of the cell their open triangle has (0 bottom-left, 1 bottom-right,
     2 top-left, 3 top-right; -1 for other cells). The game derives the solid corner by flipping, then rotating a
-    reference corner (FUN_004ca9a0; same decode as tools/smbl_extract.tile_shape)."""
+    reference corner (-1, +1) (_flip_rotate)."""
     t = words.astype(np.uint32)
     slope = (((t >> 18) & 3) >= 2) & ((t & 0xff) > 0) & ((t & 0xff) < 100)
-    rot, flip = (t >> 12) & 3, (t >> 14) & 3
-    x = np.where((flip == 1) | (flip == 3), 1, -1)          # reference solid corner (-1, +1), flipped
-    y = np.where((flip == 2) | (flip == 3), -1, 1)
-    xr =np.select([rot == 0, rot == 1, rot == 2, rot == 3], [x, -y, -x, y])
-    yr = np.select([rot == 0, rot == 1, rot == 2, rot == 3], [y, x, -y, -x])
+    xr, yr = _flip_rotate(t, -1, 1)
     solid_corner = (xr > 0).astype(np.int8) + 2 * (yr > 0).astype(np.int8)
     return np.where(slope, 3 - solid_corner, -1).astype(np.int8)
 
 
+def half_normal(words: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per cell, the direction (nx, ny) from the cell centre to its solid half for half blocks: the upper half
+    (0, +1) flipped, then rotated (_flip_rotate, as slope_open_corner). Defined for every cell; only a half
+    block's value means anything (tile_shape masks it)."""
+    xr, yr = _flip_rotate(words.astype(np.uint32), 0, 1)
+    return xr.astype(np.int8), yr.astype(np.int8)
+
+
 CORNER_SIGN = ((-1, -1), (1, -1), (-1, 1), (1, 1))
+
+# tile_shape kinds (the world model's tile channels and the monitor's drawing use these)
+SHAPE_EMPTY, SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE, SHAPE_SPECIAL = 0, 1, 2, 3, 4
+
+
+class TileShape(NamedTuple):
+    """Per cell: kind (SHAPE_*) and the OPEN direction (ox, oy) in {-1, 0, 1}, x right, y up."""
+    kind: np.ndarray
+    ox: np.ndarray
+    oy: np.ndarray
+
+
+def tile_shape(words: np.ndarray) -> TileShape:
+    """The owner of a collision tile's shape (H x W words, row 0 = bottom): its kind (empty / full / half /
+    slope / special, as tile_classes: special = crumble, lock, switch or other special block, whatever its shape
+    bits) and, for half blocks and slopes, the direction their OPEN part lies in: a slope, the signs of its open
+    corner (CORNER_SIGN[slope_open_corner], both +-1); a half block, the open half's side (minus half_normal: one
+    axis +-1, the other 0). Full, special and empty cells: (0, 0)."""
+    k = tile_classes(words)
+    kind = np.full(np.shape(words), SHAPE_EMPTY, np.int8)
+    kind[k["full"]] = SHAPE_FULL
+    kind[k["half"]] = SHAPE_HALF
+    kind[k["slope"]] = SHAPE_SLOPE
+    kind[k["crumble"] | k["lock"] | k["switch"] | k["other"]] = SHAPE_SPECIAL
+    hx, hy = half_normal(words)
+    oc = slope_open_corner(words)
+    half, slope = kind == SHAPE_HALF, kind == SHAPE_SLOPE
+    ox = np.where(half, -hx, np.where(slope, np.where((oc == 1) | (oc == 3), 1, -1), 0)).astype(np.int8)
+    oy = np.where(half, -hy, np.where(slope, np.where(oc >= 2, 1, -1), 0)).astype(np.int8)
+    return TileShape(kind, ox, oy)
+
+
+_UNIT_SQUARE = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+
+
+def solid_polygon(kind: int, ox: int, oy: int) -> list:
+    """The solid part of one cell as polygon corners (u, v) in 0..1, u right, v up (tile_shape's values): the
+    whole square for full and special blocks, the half opposite the open side for a half block, the triangle
+    without the open corner for a slope; [] for an empty cell."""
+    kind, ox, oy = int(kind), int(ox), int(oy)
+    if kind == SHAPE_EMPTY:
+        return []
+    if kind == SHAPE_HALF:
+        u0, u1 = (0.0, 0.5) if ox > 0 else (0.5, 1.0) if ox < 0 else (0.0, 1.0)
+        v0, v1 = (0.0, 0.5) if oy > 0 else (0.5, 1.0) if oy < 0 else (0.0, 1.0)
+        return [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+    if kind == SHAPE_SLOPE:
+        open_corner = ((1 + ox) / 2, (1 + oy) / 2)
+        return [p for p in _UNIT_SQUARE if p != open_corner]
+    return list(_UNIT_SQUARE)
 SQRT2 = math.sqrt(2.0)
 
 

@@ -91,6 +91,10 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
            WorldModel.load(world_model or WORLD_MODEL).eval())
     if env.step != 1:
         raise SystemExit("the closed loop's world needs a 1-frame model (--world-model)")
+    from wm.features import LevelGeom, model_layout
+    env_protocol = model_layout(env).protocol            # the world model's own input encoding
+    env_geom = planner.geom if env_protocol == planner.geom.layout.protocol else (
+        LevelGeom(lv.words0, lv.wm_geometry_metadata(), protocol=env_protocol))
     com = Committer(replan, tube, triggers, step=planner.f)
     fw = FutureWorld()
     fw.new_level()
@@ -152,7 +156,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
         a = int(cur.actions[f - cur.frame])
         planner.played(0, f, a)
         played[f] = a
-        out = imagine(env, slice(0, 1), planner.geom, s, np.array([[a]]), dt, fw.worlds(f, 1, dt)[0],
+        out = imagine(env, slice(0, 1), env_geom, s, np.array([[a]]), dt, fw.worlds(f, 1, dt)[0],
                       keep_rows=True)
         s2 = out["rows"][0, :, 1].copy()
         x2, y2 = float(s2["x"][0]), float(s2["y"][0])

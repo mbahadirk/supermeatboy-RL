@@ -15,7 +15,7 @@ from plan import safety as S                                          # noqa: E4
 from plan.explain import Plan, SurpriseTracker, HORIZONS, ERR90_AT, SURPRISE_FACTOR   # noqa: E402
 from plan.geometry import Terrain                                     # noqa: E402
 from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MIN_LEN, MAX_LEN, padded       # noqa: E402
-from plan.planner import FailureMemory, Planner                       # noqa: E402
+from plan.planner import TRIAL_GAIN, FailureMemory, Planner           # noqa: E402
 
 MODEL = os.path.join(HERE, "runs", "wm_locked", "wm_model.pt")
 DATA_113 = os.path.join(HERE, "runs", "real_20261102-165351", "wm_data")
@@ -760,6 +760,7 @@ def test_best_route_is_chosen_when_safe_and_never_over_danger(flat):
     n = 120                                                         # the best wave stood still here for 120 frames
     pl.route.best = {"finish": 200, "f": np.arange(100, 100 + n), "x": np.full(n, x0), "y": np.full(n, 46.0),
                      "vx": np.zeros(n), "vy": np.zeros(n), "a": np.full(n, act(0))}
+    pl.trials.gain = 0.0                                            # no route trials here (test_route_trial_*)
     try:
         pl.prev = {}
         p1 = pl.plan(standing(), 100, worlds, frames)
@@ -771,6 +772,7 @@ def test_best_route_is_chosen_when_safe_and_never_over_danger(flat):
         p2 = pl.plan(standing(), 100, worlds, frames)
         assert not p2.best_route["used"] and p2.best_route["why"].startswith("vetoed") and p2.mode != "best-route"
     finally:
+        pl.trials.gain = TRIAL_GAIN
         pl.route.best = None
         pl.prev = {}
         pl.new_wave()
@@ -795,6 +797,7 @@ def test_best_route_is_judged_on_its_recorded_real_path(flat):
         return worlds, [frames[k] if k < k0 else fb for k in range(H + 1)]
     pl.route.best = {"finish": 400, "f": np.arange(100, 100 + n), "x": real_x, "y": np.full(n, 46.0),
                      "vx": np.zeros(n), "vy": np.zeros(n), "a": np.full(n, act(0))}
+    pl.trials.gain = 0.0                                            # no route trials here (test_route_trial_*)
     try:
         pl.new_wave()
         worlds, frames = inputs((x0, 46.0, 4.0, 4.0, 0.0), 30)      # from frame 30 on, where the model stands
@@ -816,6 +819,43 @@ def test_best_route_is_judged_on_its_recorded_real_path(flat):
         off = standing(x0 + REAL_RADIUS + 1.0)
         p_off = pl.plan(off, 100, *inputs((x0, 46.0, 4.0, 4.0, 0.0), 30), recorded=H)
         assert p_off.best_route["judged"].startswith("model: match")
+    finally:
+        pl.trials.gain = TRIAL_GAIN
+        pl.route.best = None
+        pl.prev = {}
+        pl.new_wave()
+
+
+@needs_model
+def test_route_trial_plays_a_much_better_plan_once_then_the_route(flat):
+    """The best route stands still while running right is estimated far faster: that plan is played once
+    (mode route-trial, its moves' frames with no new decision); the same candidate from the same state is never
+    offered again, and only one trial per wave."""
+    from mpc.candidates import act
+    lv, pl = flat
+    x0 = float(standing()["x"][0])
+    n = 120
+    pl.route.best = {"finish": 400, "f": np.arange(100, 100 + n), "x": np.full(n, x0), "y": np.full(n, 46.0),
+                     "vx": np.zeros(n), "vy": np.zeros(n), "a": np.full(n, act(0))}
+    try:
+        pl.new_wave()
+        pl.prev = {}
+        worlds, frames = empty_inputs(pl.future_frames)
+        p1 = pl.plan(standing(), 100, worlds, frames)
+        assert p1.mode == "route-trial" and not p1.best_route["used"], p1.best_route
+        assert p1.best_route["why"].startswith("route trial") and p1.switch["reason"].startswith("route trial")
+        assert p1.trial_frames == sum(b - a for nm, a, b in p1.segments if nm != "pad") > 0
+        ev = p1.route_trial
+        assert ev["kind"] == "route trial start" and ev["gain"] > TRIAL_GAIN and ev["moves"] == p1.chosen
+        assert ev["estimate"] < ev["route_estimate"] - TRIAL_GAIN
+        pl.prev = {}
+        p2 = pl.plan(standing(), 100, worlds, frames)                    # same wave: no second trial
+        assert p2.mode == "best-route" and p2.best_route["used"]
+        out = pl.new_wave()
+        assert [e["outcome"] for e in out] == ["no finish"]
+        pl.prev = {}
+        p3 = pl.plan(standing(), 100, worlds, frames)                    # next wave: another candidate, or none
+        assert p3.chosen != p1.chosen
     finally:
         pl.route.best = None
         pl.prev = {}

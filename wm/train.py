@@ -1,9 +1,24 @@
 """Train the world model on recorded gameplay and report its one-step accuracy.
 
-    python -m wm.train runs/<run>/wm_data [more wm_data folders] [--out runs/wm_<name>] [--epochs 6]
+    python -m wm.train --help
+
+Choose --manifest FILE for trace-split-v1, or explicitly --legacy-split for historical global-modulo
+compatibility. A manifest is a frozen, bounded dataset, not proof of unseen-level performance. Fresh strict
+training needs a new empty output folder. Strict --init requires the identical manifest and matching --step;
+legacy weights and manifest extensions cannot initialize it; a strict parent needs a known trained feature
+protocol. Strict self-correction supports step 1 only. Explicit legacy --init with no fit preserves the
+parent's trained feature protocol; inference's active protocol is reported separately.
+--feature-protocol: fresh training's input encoding (default per-agent-key-tiles-v1, the layout every
+existing checkpoint and the frozen experiment caches use; tile-shapes-v1 is an explicit opt-in). --init
+always continues in the parent's encoding. The checkpoint records it (feature_protocol /
+active_feature_protocol) and every consumer builds that encoding from it.
+--prior-protocol: the physics prior the targets correct (wm/protocol.py; default gravity-v1, the prior of
+every existing checkpoint; gravity-fan-wind-v1 adds the measured fan wind force: explicit opt-in). --init
+keeps the parent's (a different value is an error). The checkpoint records it (prior_protocol) and rollouts
+apply it.
 
 Runs in its own process (it does not touch the game or the PPO trainer); --threads limits its CPU use so a
-training run in the game next to it keeps its speed. Every 5th recorded wave is held out and only used for
+training run in the game next to it keeps its speed. In legacy mode every 5th recorded wave is held out for
 the report: position / velocity errors against two simple guesses (same velocity; same velocity with
 gravity), per situation (ground / air / wall), how sure the model is versus how wrong it is, and the events
 (landing, death, finish, blocked, flags, movement state). Writes wm_model.pt and wm_report.md to --out.
@@ -15,7 +30,8 @@ printed); demo rows of held-out waves stay held out, held-out levels stay out. R
 Demos the user excluded (plan.demos.USER_EXCLUDED: 1-16, 4-6) are never used: their replay folders are dropped from
 the data and their recorded.json entries skipped (the levels' other rows stay).
 Partial shards (a wave cut by S, a level change or a stop; meta "partial") are read like any other.
-Train mode (agent.py --learn) fine-tunes in the background with wm.learner (the same folders' rules, plus the
+Train mode (agent.py --learn with an explicit dataset choice) fine-tunes with wm.learner (legacy discovers
+new folders; a manifest learner stays on its frozen snapshot). In legacy mode it also uses
 agent's own new bests in runs/demos/self.json); this script trains from scratch (--init: self-correction only).
 """
 from __future__ import annotations
@@ -232,7 +248,9 @@ def fit(model, ts: dict, d: dict, va_idx, epochs: int, lr: float, batch: int, t0
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("data", nargs="+", help="wm_data folders")
+    ap.add_argument("data", nargs="*", help="wm_data folders (manifest sources when omitted)")
+    from wm.dataset import add_cli, cli_dataset, sample_validation, load_model, LEGACY
+    add_cli(ap)
     ap.add_argument("--out", default=None, help="output folder (default runs/wm_<time>)")
     ap.add_argument("--epochs", type=int, default=6)
     ap.add_argument("--batch", type=int, default=4096)
@@ -256,31 +274,73 @@ def main():
     ap.add_argument("--sc-epochs", type=int, default=4)
     ap.add_argument("--sc-share", type=float, default=0.35,
                     help="self-correction samples as a share of the real ones (more: better far ahead, worse next step)")
+    from wm.protocol import (FEATURE_PROTOCOL, INPUT_PROTOCOLS, PRIOR_PROTOCOL, PRIOR_PROTOCOLS,
+                             UNTRAINED_FEATURE_PROTOCOL, feature_usage)
+    ap.add_argument("--feature-protocol", choices=INPUT_PROTOCOLS, default=None,
+                    help=f"input encoding (wm/protocol.py). Fresh training: default {FEATURE_PROTOCOL}; "
+                         "tile-shapes-v1 adds the open side of half blocks / slopes (explicit opt-in). --init: the "
+                         "parent's; a different value is an error")
+    ap.add_argument("--prior-protocol", choices=PRIOR_PROTOCOLS, default=None,
+                    help=f"physics prior the targets correct (wm/protocol.py). Fresh training: default {PRIOR_PROTOCOL}; "
+                         "gravity-fan-wind-v1 adds the measured fan wind force (explicit opt-in). --init: the parent's; "
+                         "a different value is an error")
     args = ap.parse_args()
-    args.data = drop_excluded(args.data)
+    dataset = cli_dataset(args)
+    if dataset is not None:
+        args.data = dataset.source_list(args.data)
+        if args.self_correct and args.step != 1:
+            raise ValueError("strict self-correction supports one-frame models; step-k targets are not implemented")
+    elif not args.data:
+        ap.error("--legacy-split needs data folders")
+    args.data = drop_excluded(args.data) if dataset is None else args.data
+    from wm.features import model_layout, model_prior
+    parent, model = None, None
+    parent_feature_protocol = None
+    protocol = args.feature_protocol or FEATURE_PROTOCOL
+    prior_protocol = args.prior_protocol or PRIOR_PROTOCOL
+    if args.init:
+        model, parent = load_model(args.init)
+        parent_feature_protocol = feature_usage(model.info)["checkpoint_trained"]
+        protocol = model_layout(model).protocol
+        if args.feature_protocol and args.feature_protocol != protocol:
+            raise ValueError(f"--feature-protocol {args.feature_protocol} differs from the parent checkpoint's "
+                             f"{protocol} (its weights expect that encoding)")
+        prior_protocol = model_prior(model)
+        if args.prior_protocol and args.prior_protocol != prior_protocol:
+            raise ValueError(f"--prior-protocol {args.prior_protocol} differs from the parent checkpoint's "
+                             f"{prior_protocol} (its outputs correct that prior)")
+        if dataset is not None:
+            dataset.require_model(model)
+            if model.step != args.step:
+                raise ValueError("--step must match the strict parent checkpoint's step")
+        elif (model.info or {}).get("dataset", {}).get("protocol") != LEGACY and (model.info or {}).get("dataset"):
+            raise ValueError("strict checkpoint cannot use --legacy-split")
     immediate()
     torch.set_num_threads(args.threads)
     out = args.out or os.path.join(HERE, "runs", "wm_" + time.strftime("%Y%m%d-%H%M%S"))
+    if dataset is not None and os.path.exists(out) and os.listdir(out):
+        raise SystemExit("strict training needs a new empty output folder; old checkpoints are never overwritten")
     os.makedirs(out, exist_ok=True)
 
     t0 = time.time()
     held = eval_levels()
     d = build(args.data, levels=args.levels, max_samples=args.max_samples, log=lambda *a: None, seed=args.seed,
               frac=args.sample_frac, exclude=held, step=args.step,
-              demos=all_demos(args.demos, args.data) if args.demos else None)
+              demos=all_demos(args.demos, args.data) if args.demos else None, dataset=dataset, protocol=protocol,
+              prior_protocol=prior_protocol)
+    val = sample_validation(d, strict=dataset is not None)
     res_scale = RES_SCALE
     if args.step > 1:                        # targets in unit scale: the corrections' spread over full chains
         full = d["full"]
-        corr = (d["raw"] - d["prior"])[full & (d["shard"] % 5 != 0)]
-        res_scale = np.maximum(corr.std(0), 1e-3).astype(np.float32)
+        corr = (d["raw"] - d["prior"])[full & ~val]
+        if dataset is not None and not len(corr):
+            raise ValueError("manifest has no full training chains for residual scaling")
+        res_scale = model.res_scale if model is not None else np.maximum(corr.std(0), 1e-3).astype(np.float32)
         d["yc"] = (d["yc"] * RES_SCALE / res_scale).astype(np.float32)
         d["wc"] = full.astype(np.float32)
         print(f"step {args.step}: res_scale {np.round(res_scale, 2).tolist()}, {int((~full).sum())} chains cut "
               f"by a death / finish", flush=True)
     n = len(d["X"])
-    val = d["shard"] % 5 == 0
-    if not val.any() or val.all():           # too few waves: hold out the last one
-        val = d["shard"] == d["shard"].max()
     tr_idx, va_idx = np.nonzero(~val)[0], np.nonzero(val)[0]
     args.batch = max(1, min(args.batch, len(tr_idx)))
     print(f"{n} transitions ({len(tr_idx)} train / {len(va_idx)} held out) from "
@@ -288,12 +348,14 @@ def main():
           flush=True)
 
     if args.init:                            # continue from a trained model
-        model = WorldModel.load(args.init)
         print(f"starting from {args.init}")
     else:
         torch.manual_seed(args.seed)
         model = WorldModel(d["X"].shape[1], members=args.members, hidden=args.hidden, layers=args.layers,
                            step=args.step, res_scale=res_scale)
+        # the encoding its inputs use, before any fit (self-correction rebuilds inputs from it)
+        model.info = {"feature_protocol": UNTRAINED_FEATURE_PROTOCOL, "active_feature_protocol": protocol,
+                      "prior_protocol": prior_protocol}
         model.set_norm(torch.as_tensor(d["X"][tr_idx[:200000]], dtype=torch.float32))
         pos = d["yb"][tr_idx].mean(0)
         pw = np.where(np.isin(np.arange(len(BIN_NAMES)), list(EVENTS.values())),
@@ -306,11 +368,17 @@ def main():
               f"transitions; oversampled to {real:.1%} of {len(fit_idx)} training samples "
               f"(asked {args.demo_share:.0%})", flush=True)
     train_set = {k: d[k][fit_idx] for k in ("X", "yc", "yb", "ys", "yr") + (("wc",) if "wc" in d else ())}
+    base_fit_samples, sc_samples, sc_epochs = (len(fit_idx) if not args.init else 0), 0, 0
     if not args.init:
         fit(model, train_set, d, va_idx, args.epochs, 1e-3, args.batch, t0)
+    if dataset is not None:
+        model.info = dict(getattr(model, "info", {}) or {}, dataset=dataset.reference(),
+                          feature_protocol=parent_feature_protocol if args.init else protocol,
+                          active_feature_protocol=protocol)
     if args.self_correct:                    # then on its own rollouts (wm/selfcorrect.py)
         from wm.selfcorrect import generate
-        sc = generate(args.data, model, K=args.self_correct, starts=args.sc_starts, log=lambda *a: None)
+        sc = generate(args.data, model, K=args.self_correct, starts=args.sc_starts, log=lambda *a: None,
+                      dataset=dataset)
         print(f"self-correction: {len(sc.get('X', []))} samples from the model's own {args.self_correct}-step "
               f"rollouts  [{time.time() - t0:.0f}s]", flush=True)
         if sc and args.sc_share > 0 and len(sc["X"]) > args.sc_share * len(train_set["X"]):
@@ -318,15 +386,34 @@ def main():
             sc = {k: v[pick] for k, v in sc.items()}
             print(f"self-correction: using {len(pick)} of them ({args.sc_share:.0%} of the real samples)", flush=True)
         if sc:
+            sc_samples, sc_epochs = len(sc["X"]), args.sc_epochs
             train_set = {k: np.concatenate([train_set[k], sc[k]]) for k in train_set}
             fit(model, train_set, d, va_idx, args.sc_epochs, 3e-4, args.batch, t0)
 
     info = {"data": args.data, "levels": sorted(set(d["level"])), "train": int(len(tr_idx)), "held_out": int(len(va_idx)),
             "eval_levels_excluded": sorted(held), "sample_frac": args.sample_frac,
             "demos": args.demos, "demo_share": args.demo_share if args.demos else None,
-            "hidden": model.hidden, "layers": model.layers, "step": model.step}
+            "hidden": model.hidden, "layers": model.layers, "step": model.step,
+            "dataset": dataset.reference() if dataset is not None else {"protocol": LEGACY},
+            "parent_checkpoint": parent,
+            "active_feature_protocol": protocol,
+            "parent_feature_protocol": parent_feature_protocol,
+            "prior_protocol": prior_protocol,
+            "feature_protocol": protocol if (base_fit_samples and args.epochs > 0) or
+                                (sc_samples and sc_epochs > 0) else
+                                (parent_feature_protocol or UNTRAINED_FEATURE_PROTOCOL),
+            "training": {"epochs": 0 if args.init else args.epochs, "seed": args.seed,
+                         "max_samples": args.max_samples, "sample_frac": args.sample_frac, "batch": args.batch,
+                         "train_transitions": len(tr_idx), "validation_transitions": len(va_idx),
+                         "base_fit_samples": base_fit_samples,
+                         "fit_samples": len(train_set["X"]) if sc_samples else base_fit_samples,
+                         "demo_samples": int(d["demo"][fit_idx].sum()), "actual_sc_samples": sc_samples,
+                         "self_correction": args.self_correct,
+                         "self_correction_epochs": sc_epochs}}
     model.save(os.path.join(out, "wm_model.pt"), info)
     text = "# World model: one-step accuracy\n\n" + \
+        f"Features active: {protocol}; checkpoint trained: {info['feature_protocol']}; prior: {prior_protocol}.\n\n" + \
+        f"Dataset protocol: {info['dataset']['protocol']}; manifest {info['dataset'].get('sha256', 'none (legacy)')}.\n\n" + \
         f"Data: {', '.join(args.data)}; levels {', '.join(info['levels'])}.\n\n" + report(model, d, va_idx)
     with open(os.path.join(out, "wm_report.md"), "w", encoding="utf-8") as f:
         f.write(text)

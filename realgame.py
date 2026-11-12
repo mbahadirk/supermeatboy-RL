@@ -109,6 +109,14 @@ N_HELD = 1                              # frames the jump key has been held (/ 2
                                         # jump, starts only on a new press
 WALL_REPRESS = 6                        # realgame.js: jump held this long in the air against a wall is pressed anew
 OBS = N_STATE + (2 * K + 1) ** 2 + N_PATH + N_HAZ + N_WALL + N_FX + N_SURF + N_STUCK + N_PLAT + N_HELD
+N_SHAPE = 2 * (2 * K + 1) ** 2          # --shape-inputs only: the local map's open direction x, then y
+                                        # (realpath.tile_shape: half blocks' open side, slopes' open corner)
+
+
+def obs_size(shape_inputs: bool = False) -> int:
+    """The observation length: OBS, plus N_SHAPE at the end with --shape-inputs."""
+    return OBS + (N_SHAPE if shape_inputs else 0)
+
 WALL_SLIDE = 9                          # character state while sliding down a wall
 
 # rewards
@@ -170,7 +178,10 @@ def other_trainers() -> list[str]:
 
 
 def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float, haz=None, opened=(),
-            stuck=(0.0, 0.0), held: int = 0) -> np.ndarray:
+            stuck=(0.0, 0.0), held: int = 0, shape_inputs: bool = False) -> np.ndarray:
+    """One agent's PPO observation (obs_size(shape_inputs) floats). shape_inputs: also, at the end, the open
+    direction x and y of the local map's tiles (Level.open_dirs; the grid's window, rows top-down, 0 outside
+    the map)."""
     x, y, vx, vy, flags = s[:5]
     gx, gy = lv.goals[0] if lv.goals else lv.spawn
     d = lv.goal_dist(x, y)
@@ -226,8 +237,14 @@ def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float,
         if np.hypot(px - x, py - y) < 10 * TILE:
             vx_, vy_ = lv.plat_vel[k] if k < len(lv.plat_vel) else (0.0, 0.0)
             plv[:] = np.clip([(px - x) / 200.0, (py - y) / 200.0, vx_ / 300.0, vy_ / 300.0], -2, 2)
-    return np.concatenate([vec, patch[::-1].ravel(), pv, hv, wv, fv, sp[::-1].ravel(),   # patch rows top-down
-                           np.asarray(stuck, np.float32), plv, np.array([min(1.0, held / 20.0)], np.float32)])
+    parts = [vec, patch[::-1].ravel(), pv, hv, wv, fv, sp[::-1].ravel(),   # patch rows top-down
+             np.asarray(stuck, np.float32), plv, np.array([min(1.0, held / 20.0)], np.float32)]
+    if shape_inputs:                               # appended last: an older policy is widened (load_policy)
+        od = lv.open_dirs(K)[:, rr - K:rr + K + 1, cc - K:cc + K + 1]
+        if od.shape[1:] != (2 * K + 1, 2 * K + 1):
+            od = np.zeros((2, 2 * K + 1, 2 * K + 1), np.float32)
+        parts += [od[0, ::-1].ravel(), od[1, ::-1].ravel()]
+    return np.concatenate(parts)
 
 
 def wall_touch(lv: Level, x: float, y: float, side: int, opened=()) -> float:
@@ -266,8 +283,9 @@ class Policy(nn.Module):
 
 
 def load_policy(policy: Policy, path: str):
-    """Load a saved model; one from before the route inputs existed keeps its weights for the old inputs and
-    starts the new input columns small."""
+    """Load a saved model; one from before the route inputs (or the --shape-inputs maps) existed keeps its
+    weights for the old inputs and starts the new input columns small. A model with more inputs than this
+    policy (trained with --shape-inputs, loaded without it) is an error."""
     sd = torch.load(path, map_location="cpu")["policy"]
     own = policy.state_dict()
     widened = False
@@ -280,6 +298,9 @@ def load_policy(policy: Policy, path: str):
             own[k][:, :v.shape[1]] = v
             own[k][:, v.shape[1]:] *= 0.1
             widened = True
+        elif v.dim() == 2 and own[k].shape[0] == v.shape[0] and v.shape[1] > own[k].shape[1]:
+            raise ValueError(f"{path}: {k} takes {v.shape[1]} inputs, this policy {own[k].shape[1]} "
+                             f"(--shape-inputs adds {N_SHAPE}: start with the same choice)")
     policy.load_state_dict(own)
     return widened
 
@@ -347,11 +368,13 @@ class Trainer:
         self.args = args
         self.run_dir = os.path.join(HERE, "runs", args.name)
         os.makedirs(self.run_dir, exist_ok=True)
-        self.policy = Policy()
+        self.shape_inputs = bool(getattr(args, "shape_inputs", False))
+        self.policy = Policy(obs_size(self.shape_inputs))
         if args.load:
             p = args.load if args.load.endswith(".pt") else os.path.join(args.load, "model.pt")
             widened = load_policy(self.policy, p)
-            print(f"loaded {p}" + (" (older model: the route inputs start untrained)" if widened else ""))
+            print(f"loaded {p}" + ("" if not widened else " (older model: the shape inputs start small)"
+                                   if self.shape_inputs else " (older model: the route inputs start untrained)"))
         self.ppo = PPO(self.policy)
         self.control = getattr(args, "control", "ppo")
         self.mpc = None                      # the world-model planner (--control mpc / mpc+ppo), mpc/
@@ -704,7 +727,8 @@ class Trainer:
             obs = np.stack([observe(lv, grid, states[i], self.route(i), self.cur_s[i], self.cur_off[i],
                                     moving_features(states[i][0], states[i][1], pos, self.hz_vel, moving),
                                     lv.opened_cells(self.keys_of[i]) if self.keys_of[i] else (),
-                                    self.stuck_inputs(i, m["frame"]), self.jump_held[i]) for i in live])
+                                    self.stuck_inputs(i, m["frame"]), self.jump_held[i], self.shape_inputs)
+                            for i in live])
             if self.args.test:
                 a = np.array([self.scripted(m["frame"], i) for i in live])
                 lp = v = np.zeros(len(live), np.float32)
@@ -772,7 +796,8 @@ class Trainer:
                     off = route.offset(x, y) if route is not None else 0.0
                     obs.append(observe(lv, grid, [x, y, float(e["vx"]), float(e["vy"]), int(e["flags"]),
                                                   int(e["state"]), 0, s[7] if len(s) > 7 else 0], route, prog, off,
-                                       moving_features(x, y, pos, self.hz_vel, moving), opened, stuck, int(e["held"])))
+                                       moving_features(x, y, pos, self.hz_vel, moving), opened, stuck, int(e["held"]),
+                                       self.shape_inputs))
                 with torch.no_grad():
                     return self.policy.vf(torch.as_tensor(np.stack(obs))).squeeze(-1).numpy()
             act, info = self.mpc.plan(i, s, self.jump_held[i], frame, route, self.reached[i], lv,
@@ -799,11 +824,10 @@ class Trainer:
         return 7 if (f % period) < 10 else 6
 
     def on_wave_end(self, m: dict):
-        if self.wm and not self.protected:
-            self.wm.wave_end(m["wave"], m)
         lv = self.level
         self.waves += 1
         n = len(self.traj)
+        final_rewards = [float("nan")] * n
         for i in range(n):           # outcomes of the wave's last frame; agents alive at the time limit are cut
             tr = self.traj[i]
             if not (self.alive[i] and tr["a"]):
@@ -812,18 +836,23 @@ class Trainer:
             self.fit[i] = self.agent_fitness(i, won=st == 2, dead=st == 1)
             step_cost = R_STEP_SPEED if self.phase == "speed" else R_STEP
             if st == 1:
-                tr["r"].append(step_cost + R_DEATH)
+                final_rewards[i] = step_cost + R_DEATH
+                tr["r"].append(final_rewards[i])
                 tr["done"] = True
                 self.to_ppo(tr, 0.0)
             elif st == 2:
-                tr["r"].append(step_cost + self.finish_reward(m["finish"][i] if m["finish"][i] >= 0 else m["frame"]))
+                final_rewards[i] = step_cost + self.finish_reward(m["finish"][i] if m["finish"][i] >= 0 else m["frame"])
+                tr["r"].append(final_rewards[i])
                 tr["done"] = True
                 self.to_ppo(tr, 0.0)
             else:
-                tr["r"].append(step_cost)
+                final_rewards[i] = step_cost
+                tr["r"].append(final_rewards[i])
                 with torch.no_grad():
                     lv_ = float(self.policy.vf(torch.as_tensor(tr["o"][-1])).item())
                 self.to_ppo(tr, lv_)
+        if self.wm and not self.protected:
+            self.wm.wave_end(m["wave"], m, held=list(self.jump_held), rewards=final_rewards)
         rets = [sum(tr["r"]) for tr in self.traj if tr["r"]]
         hops = 60.0 * sum(self.hops) / max(1, sum(self.frames))         # hops per agent-second
         self.snapshot_best(m["wave"])
@@ -1008,8 +1037,9 @@ class Trainer:
 
     # saving
     def save(self, path=None):
-        torch.save({"policy": self.policy.state_dict(), "obs": OBS, "actions": ACTIONS},
-                   path or os.path.join(self.run_dir, "model.pt"))
+        extra = {"shape_inputs": True} if self.shape_inputs else {}    # without the flag: the file as before
+        torch.save({"policy": self.policy.state_dict(), "obs": obs_size(self.shape_inputs), "actions": ACTIONS,
+                    **extra}, path or os.path.join(self.run_dir, "model.pt"))
 
     def save_best(self, level: str, t: float, agent: int):
         d = os.path.join(self.run_dir, "levels", level)
@@ -1177,6 +1207,10 @@ def main():
     ap.add_argument("--probe-char", type=int, default=0, metavar="FRAMES",
                     help="also save the first agent's character bytes for this many frames (hidden timers)")
     ap.add_argument("--no-monitor", action="store_true", help="no monitor window")
+    ap.add_argument("--shape-inputs", action="store_true",
+                    help=f"PPO also sees the local map's tile shapes: the open direction x and y of half blocks "
+                         f"and slopes ({N_SHAPE} inputs appended; an older --load is widened, its new inputs "
+                         f"start small). Default off: observations as before")
     ap.add_argument("--control", choices=("ppo", "mpc", "mpc+ppo"), default="ppo",
                     help="who picks the actions: PPO (default, unchanged), the world-model planner (mpc/), or the "
                          "planner with PPO taking over when a plan cannot be finished or the model is unsure. "

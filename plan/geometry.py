@@ -29,13 +29,13 @@ from __future__ import annotations
 import numpy as np
 
 from game.level import tile_solid, TILE
-from realpath import BODY, slope_open_corner, tile_classes
+from realpath import (BODY, SHAPE_EMPTY as SHAPE_OPEN, SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE, half_normal,
+                      slope_open_corner, tile_shape)
 
 GROUND_PROBE = BODY + 1.5
 FOOT_DX = BODY - 0.5
 WALL_PROBE = BODY + 1.0
 
-SHAPE_OPEN, SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE = 0, 1, 2, 3
 _DC, _DR = np.array([0, 1, 0, 1]), np.array([0, 0, 1, 1])     # box_overlap: the 2 x 2 cells a box can touch
 PAD_TOL = 1.0                                                  # units: the collision guard's tolerance (planner COLLIDE_TOL)
 SUB = TILE / 2                                                 # travel: half blocks are 2 of 4 such squares
@@ -48,19 +48,6 @@ def solid_now(words0: np.ndarray, words: np.ndarray) -> np.ndarray:
     special = ((w0 >> 8) & 1).astype(bool) & tile_solid(w0)
     solid[special] = (words.astype(np.uint32) == w0)[special]
     return solid
-
-
-def half_normal(words: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Per cell, the direction (nx, ny) from the cell centre to its solid half for half blocks: the upper half
-    (0, +1) flipped (flip bits 14-15: 1 / 3 mirror x, 2 / 3 mirror y), then rotated by the rotation bits 12-13
-    (as realpath.slope_open_corner)."""
-    t = words.astype(np.uint32)
-    rot, flip = (t >> 12) & 3, (t >> 14) & 3
-    x = np.zeros(t.shape, np.int64)
-    y = np.where((flip == 2) | (flip == 3), -1, 1)
-    xr = np.select([rot == 0, rot == 1, rot == 2, rot == 3], [x, -y, -x, y])
-    yr = np.select([rot == 0, rot == 1, rot == 2, rot == 3], [y, x, -y, -x])
-    return xr.astype(np.int8), yr.astype(np.int8)
 
 
 class Terrain:
@@ -79,10 +66,10 @@ class Terrain:
     def update(self, words: np.ndarray):
         w = np.asarray(words, np.uint32)
         solid = solid_now(self.words0, w)
-        k = tile_classes(w)
+        kind = tile_shape(w).kind                       # realpath owns the shape; solidity is the live rule
         shape = np.where(solid, SHAPE_FULL, SHAPE_OPEN).astype(np.int8)
-        shape[solid & k["half"]] = SHAPE_HALF
-        shape[solid & k["slope"]] = SHAPE_SLOPE if self.slopes else SHAPE_OPEN
+        shape[solid & (kind == SHAPE_HALF)] = SHAPE_HALF
+        shape[solid & (kind == SHAPE_SLOPE)] = SHAPE_SLOPE if self.slopes else SHAPE_OPEN
         self.shape = shape
         self.nx, self.ny = half_normal(w)
         self.open_corner = slope_open_corner(w)

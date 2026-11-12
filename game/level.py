@@ -13,7 +13,7 @@ from collections import deque
 
 import numpy as np
 
-from realpath import BODY, box_distance, tile_classes
+from realpath import BODY, box_distance, tile_classes, tile_shape
 import contact_reach
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the smbrl folder (tools/, imported/)
@@ -88,6 +88,128 @@ def piece_names(level: str) -> list[str] | None:
         out = None
     _names_cache[level] = out
     return out
+
+
+LOCK_CONTEXT_PROTOCOL = "private-locks-v1"
+KEY_PICKUP_RADIUS = 22.0                 # realgame.js KEY_R: strict post-update endpoint distance
+
+
+def key_pickup_policy(step=1):
+    return {"rule": "strict-native-endpoint-circle-v1", "radius": KEY_PICKUP_RADIUS,
+            "frames_per_model_step": int(step), "interpolated_integer_endpoints": int(step) > 1,
+            "guard_mask": "before_incoming_model_step", "new_mask_usable": "next_model_step",
+            "maximum_opening_delay_frames": max(0, int(step) - 1),
+            "delay_reference": "own_interpolated_pickup_not_observed_game" if int(step) > 1 else "predicted_endpoint",
+            "approximation": "linear_integer_samples_no_midstep_physics" if int(step) > 1 else "post_update_endpoint"}
+
+
+def key_lock_groups(words, ox, oy, keys):
+    """The existing game's adapter rule: connected lock cells belong to their nearest supplied key."""
+    lock = tile_classes(words)["lock"]
+    H, W = words.shape
+    out = [[] for _ in keys]
+    if not keys or not lock.any():
+        return out
+    seen = np.zeros_like(lock)
+    for r0, c0 in zip(*np.nonzero(lock)):
+        if seen[r0, c0]:
+            continue
+        comp, q = [], [(r0, c0)]
+        seen[r0, c0] = True
+        while q:
+            r, c = q.pop()
+            comp.append((r, c))
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    rr, cc = r + dr, c + dc
+                    if 0 <= rr < H and 0 <= cc < W and lock[rr, cc] and not seen[rr, cc]:
+                        seen[rr, cc] = True
+                        q.append((rr, cc))
+        cx = [ox + (c + 0.5) * TILE for _, c in comp]
+        cy = [oy + (r + 0.5) * TILE for r, _ in comp]
+        k = min(range(len(keys)), key=lambda k: min(np.hypot(np.array(cx) - keys[k][0],
+                                                           np.array(cy) - keys[k][1])))
+        out[k] += [int(r) * W + int(c) for r, c in comp]
+    return out
+
+
+def opened_lock_cells(groups, mask, width):
+    return [divmod(int(ci), width) for k, g in enumerate(groups) if (int(mask) >> k) & 1 for ci in g]
+
+
+class LockContext:
+    """Immutable private lock association and deterministic endpoint pickup rule; no learned pickup head."""
+
+    def __init__(self, words, meta):
+        self.width = words.shape[1]
+        self.keys = tuple(tuple(k) for k in meta.get("keys", []))
+        context = meta.get("lock_context")
+        if context is not None:
+            if context.get("protocol") != LOCK_CONTEXT_PROTOCOL or context.get("source") != "python-go-payload" or \
+                    tuple(tuple(k) for k in context.get("keys", [])) != self.keys:
+                raise ValueError("invalid applied key/lock context")
+            groups = context.get("groups")
+            if not isinstance(groups, list) or len(groups) != len(self.keys):
+                raise ValueError("key/lock context has no matching per-key groups")
+            cells = [ci for group in groups for ci in group]
+            if any(not isinstance(ci, (int, np.integer)) or not 0 <= ci < words.size for ci in cells) or \
+                    len(set(cells)) != len(cells):
+                raise ValueError("invalid or overlapping lock cells")
+            self.groups = tuple(tuple(g) for g in groups)
+            self.source = "python-go-payload"
+        elif len(self.keys) <= 1:
+            self.groups = tuple(tuple(g) for g in key_lock_groups(words, meta["ox"], meta["oy"], self.keys))
+            self.source = "legacy-single-key-reconstruction" if self.keys else "no-keys"
+        else:
+            self.groups, self.source = None, "unknown-legacy-multi-key"
+
+    def opened_cells(self, mask):
+        mask = int(mask)
+        if mask == 0:
+            return []                         # preserves legacy/no-key inputs without guessing a mapping
+        if mask < 0 or mask >> len(self.keys):
+            raise ValueError("key mask contains an unknown key index")
+        if self.groups is None:
+            raise ValueError("key-owned legacy multi-key data needs a recorded applied lock context")
+        return opened_lock_cells(self.groups, mask, self.width)
+
+    def pickup_path(self, xs, ys, initial=0, step=1, upto=None):
+        """Private masks after each integer-frame endpoint; no continuous-segment pickup.
+
+        step1 matches realgame.js pickKeys after updateChar (even if its status changed). Coarse paths
+        linearly interpolate integer endpoints, an approximation only: callers expose new masks to
+        physics/guard only at the NEXT model step. Geometry and caller arrays are never mutated.
+        """
+        xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+        if xs.shape != ys.shape or xs.ndim < 1 or xs.shape[-1] < 2 or int(step) != step or step < 1:
+            raise ValueError("key pickup needs matching paths and a positive integer frame step")
+        prefix = xs.shape[:-1]
+        mask = np.broadcast_to(np.asarray(initial, np.uint32), prefix).copy()
+        count = (xs.shape[-1] - 1) * int(step)
+        limit = np.broadcast_to(count if upto is None else upto, prefix)
+        masks = np.empty(prefix + (count + 1,), np.uint32)
+        first = np.full(prefix + (len(self.keys),), -1, np.int64)
+        masks[..., 0] = mask
+        for frame in range(1, count + 1):
+            col, frac = divmod(frame - 1, int(step))
+            alpha = (frac + 1) / int(step)
+            x = xs[..., col] + alpha * (xs[..., col + 1] - xs[..., col])
+            y = ys[..., col] + alpha * (ys[..., col + 1] - ys[..., col])
+            for k, (kx, ky) in enumerate(self.keys):
+                bit = np.uint32(1 << k)
+                hit = (frame <= limit) & ((mask & bit) == 0) & (np.hypot(x - kx, y - ky) < KEY_PICKUP_RADIUS)
+                first[..., k] = np.where(hit, frame, first[..., k])
+                mask = mask | np.where(hit, bit, np.uint32(0))
+            masks[..., frame] = mask
+        # Legacy multi-key geometry cannot silently invent which private locks a newly held key opens.
+        for owned in np.unique(masks[..., -1]):
+            self.opened_cells(owned)
+        return masks, first
+
+    def pickup_after_step(self, previous, following, step=1):
+        masks, _ = self.pickup_path(np.stack([previous["x"], following["x"]], -1),
+                                    np.stack([previous["y"], following["y"]], -1), previous["keys"], step)
+        following["keys"] = masks[..., -1]
 
 
 class Level:
@@ -368,39 +490,27 @@ class Level:
     def _lock_groups(self) -> list[list[int]]:
         """Per key: the lock tiles it opens (cell indices row * W + col). Lock tiles in touch form a group;
         each group is opened by the key nearest to it."""
-        lock = tile_classes(self.words0)["lock"]
-        out = [[] for _ in self.keys]
-        if not self.keys or not lock.any():
-            return out
-        seen = np.zeros_like(lock)
-        for r0, c0 in zip(*np.nonzero(lock)):
-            if seen[r0, c0]:
-                continue
-            comp, q = [], [(r0, c0)]
-            seen[r0, c0] = True
-            while q:
-                r, c = q.pop()
-                comp.append((r, c))
-                for dr in (-1, 0, 1):
-                    for dc in (-1, 0, 1):
-                        rr, cc = r + dr, c + dc
-                        if 0 <= rr < self.H and 0 <= cc < self.W and lock[rr, cc] and not seen[rr, cc]:
-                            seen[rr, cc] = True
-                            q.append((rr, cc))
-            cx = [self.ox + (c + 0.5) * TILE for _, c in comp]
-            cy = [self.oy + (r + 0.5) * TILE for r, _ in comp]
-            k = min(range(len(self.keys)), key=lambda k: min(np.hypot(np.array(cx) - self.keys[k][0],
-                                                                        np.array(cy) - self.keys[k][1])))
-            out[k] += [int(r) * self.W + int(c) for r, c in comp]
-        return out
+        return key_lock_groups(self.words0, self.ox, self.oy, self.keys)
 
     def opened_cells(self, mask: int) -> list[tuple[int, int]]:
         """Lock tiles open for an agent holding keys `mask` (bit k = key k)."""
-        out = []
-        for k, g in enumerate(self.lock_groups):
-            if (mask >> k) & 1:
-                out += [divmod(ci, self.W) for ci in g]
-        return out
+        return opened_lock_cells(self.lock_groups, mask, self.W)
+
+    def wm_geometry_metadata(self):
+        """The same key-index association passed to realgame.js by the Python go payload."""
+        return {"ox": self.ox, "oy": self.oy, "keys": [list(k) for k in self.keys],
+                "lock_context": {"protocol": LOCK_CONTEXT_PROTOCOL, "source": "python-go-payload",
+                                 "keys": [list(k) for k in self.keys], "groups": [list(g) for g in self.lock_groups]}}
+
+    def open_dirs(self, pad: int) -> np.ndarray:
+        """(2, H + 2 pad, W + 2 pad) float32: the open direction (x, y) of every cell's live tile word
+        (realpath.tile_shape: a half block's open side, a slope's open corner; 0 elsewhere and outside the map),
+        padded by pad cells. Cached until a tile word changes (apply_tiles)."""
+        cache = self.__dict__.setdefault("_open_dirs", {})
+        if pad not in cache:
+            t = tile_shape(self.words)
+            cache[pad] = np.pad(np.stack([t.ox, t.oy]).astype(np.float32), ((0, 0), (pad, pad), (pad, pad)))
+        return cache[pad]
 
     def apply_tiles(self, changes: list):
         """Cells the game changed this frame. A special tile (crumble / lock / switch block) whose word differs
@@ -411,6 +521,8 @@ class Level:
                 continue
             old = int(self.words[r, c])
             self.words[r, c] = w
+            if old != int(w):
+                self.__dict__.pop("_open_dirs", None)     # open_dirs reads the live words
             if self.special[r, c]:
                 solid = int(w) == int(self.words0[r, c])
             else:

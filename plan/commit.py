@@ -213,7 +213,14 @@ class Committer:
         if self.on and planner is not None:
             xy = np.asarray(plan.path, np.float64)
             c.xs, c.ys = xy[:, 0], xy[:, 1]
-            g, side = planner.terrain.support(c.xs, c.ys, planner.lv.plats or None)
+            initial = int(plan.state.get("keys", 0))
+            masks = np.full(len(c.xs), initial, np.uint32)
+            if planner.key_pickup:
+                masks = planner.geom.lock_context.pickup_path(c.xs, c.ys, initial, step=1)[0]
+                # Coarse pickup is visible only at model-step boundaries, matching the incoming guard.
+                boundary = np.arange(len(masks)) // planner.f * planner.f
+                masks = masks[boundary]
+            _, g, side = planner.support(c.xs, c.ys, keys=masks)
             c.support = support_kind(g, side)
             if fboxes is not None:
                 cf, _, risk = path_check(c.xs, c.ys, fboxes, planner.bounds)
@@ -235,6 +242,8 @@ class Committer:
             return ["interval"] if (k < 0 or k >= self.replan or k >= n) else []
         if k < 0 or k >= n:
             return ["start"]
+        if k < int(getattr(p, "trial_frames", 0) or 0):          # a route trial: its exact actions, no decision
+            return []
         out = ["start: tiles"] if tiles else []
         if k >= self.replan:
             out.append("interval")
@@ -246,7 +255,7 @@ class Committer:
             if err > thr:
                 out.append(f"surprise +{k} err {err:.1f} > {thr:.1f}")
         if c.support is not None and planner is not None and 1 <= k < len(c.support):
-            g, side = planner.terrain.support(np.array([x]), np.array([y]), planner.lv.plats or None)
+            _, g, side = planner.support(np.array([x]), np.array([y]), keys=keys)
             real = int(support_kind(g, side)[0])
             near = c.support[max(0, k - 1):k + 2]
             if real not in near:

@@ -1,5 +1,738 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Shots not yet fired, recorded shots, and the A+ target (2026-11-12; offline, uncommitted)
+
+**Diagnosis on 1-15** (`runs/capture_2-14_route_check01`, the user's run with the `wm_step4` model):
+- 90 waves gave 5 finishes and 85 deaths, every one from a shot.
+- The killing shot was a median 23 frames old at the death; 92% were younger than 48 frames. The planner never saw them, because only flying shots were predicted.
+- 1-15's launchers fire from fixed points with exact periods of 119 or 238 frames.
+
+**`mpc/future.py`:**
+- **Recorded shots:** where a trusted recording is used, its shots are taken as recorded. This includes shots fired later, with radius `REC_RADIUS`. A separate `shots_trusted` flag stops this once the shots differ from the recording by more than `MATCH_TOL`, as aimed shots would.
+- **Launcher model, from this wave only:**
+  - A shot seen from its first frame is a birth at its spawn point (`LAUNCH_KEY` 2 units).
+  - Two births in one wave give the period; the period is kept for the level, the phase is re-seen each wave.
+  - The last whole flight is the launcher's template.
+  - Future births at last + m x P follow the template by age, with margin `SHOT_BASE` + one frame of motion; an unfinished template is extended with `shot_future`.
+  - Nothing is predicted before a launcher's period has been seen, or once it has been silent for longer than P + 1.
+
+**Measured** (`runs/experiments/launcher_future_v1/evaluate.py` and `evaluation.json`). Recorded 1-15 waves were replayed as first lives. The question: does a decision h frames before each of the 85 shot deaths see the killing shot at the death place?
+
+| h (frames) | launchers off | launchers on |
+|---|---|---|
+| 16 | 57/85 | 69/85 |
+| 24 | 41/85 | 58/85 |
+| 32 | 25/85 | 48/85 |
+| 48 | 7/85 | 27/85 |
+
+- Predicted not-yet-fired shots matched a real shot 22,024 of 22,024 times.
+- Replay mode, with the recording from earlier waves: 85/85 at 16 and 32 frames, 83/85 at 48.
+- The remaining first-life misses are deaths before a launcher's second birth: about frame 490 for the 238-frame launchers. Exact prediction from frame 0 would need the launchers' timers read from the game, which is not done.
+- Tests: two new ones in `tests/test_shot_future.py`.
+
+**A+ target.**
+- `levels_smb.a_plus_time(level)` is the game's `par` from the level's `.chapter` file (`chapters.json`); `a_plus(level, seconds)` is seconds <= par.
+- Agent finish events record `a_plus_seconds` and `a_plus`, and the console prints the time against A+.
+- `plan/benchmark.py` reports:
+  - the A+ time;
+  - "A+ ok" within K: the first wave with an A+ finish;
+  - "A+ fin": logged A+ finishes;
+  - overall levels with an A+ best.
+- `plan/first_eval.py` records and reports `a_plus_seconds` and `a_plus` for a first-life success.
+- On the user's run, 1-14's first 20 waves were all 9.93 s against an A+ of 8.0. Later route trials found 5.05 s, and 71 of the 98 finishes were A+.
+- Planned bests in `best_times.json` are at or under par on 1-5, 1-8, 1-13, 1-14, 1-16, 1-17 and 1-19, and over it on 1-15 (10.77 vs 10.0). These are multi-wave bests, not first lives.
+- **Unverified:**
+  - whether A+ means at most par exactly;
+  - whether the game's timer starts on our frame 0. An old note says 1-1 got A+ in 203 frames, 3.38 s against a par of 3.0, which conflicts with a plain "at most par" rule.
+  - The planner's objective was not changed; it already minimises time.
+- Full suite: 371 passed, plus 3 new A+ tests, excluding the pre-existing `test_cling_rule_fast_falls_are_not_support` failure.
+
+## Route trials: a much better plan than the best route is tried once (2026-11-12; offline, uncommitted)
+
+**Rule** (`plan/planner.py` `route_trial_choice`, `RouteTrials`). The trial is offered where the run's best route would be played, after the incumbent rule kept the route.
+- **Candidate:** the final-stage candidate with the lowest estimate among those that have no veto, beat the route's estimate by more than `--route-trial-gain` frames (default 20; 0 = off), and whose key was never tried.
+- **Key:** the FailureMemory state key of the decision plus the candidate's moves.
+- **How it plays:** the candidate is played with mode `route-trial`. `Plan.trial_frames` (its non-pad moves) are played exactly: `Committer.triggers` stays silent, so there is no surprise, danger or tile replan. A reflex override cancels the trial before it starts.
+- **Limits:** one trial per wave, by one agent. A key is never tried again in this level for the run, whatever the outcome. Like BestRoute, trials are not saved and `set_level` starts them fresh.
+
+**Recording:**
+- During the window, each real position is compared with the plan's predicted path. The first frame off by more than the committer's surprise tube, max(1.5 x tube(k), 3), is the deviation: frame, k, predicted, real, error and tube.
+- Events in events.jsonl:
+  - `route trial start`: moves, estimate, route estimate, gain, route frame and finish;
+  - `route trial window`: held or not, the deviation, max error;
+  - `route trial`: the outcome — `died` (with the death cause from plan.safety's explanation), `faster` (BestRoute.finished replaced the route with this wave), `slower`, or `no finish` (closed at the wave end).
+
+**How often it would fire, measured on logs:** decisions that used the route and had a logged unvetoed alternative more than 20 frames better.
+- bench_20261110-032340: 1-14 2,313; 1-13 222; 1-5 54; 1-8 48.
+- bench_20261111-014526: 1-8 220; 1-5 78.
+
+The field's T is optimistic, so many trials are expected to end "not held". The never-again memory bounds them.
+
+**Checks:**
+- Tests: `tests/test_route_trials.py` (choice, held / faster, deviation, death, committer silence) and a planner test on the flat level (the standing-still route is replaced once, the same wave falls back to the route, the next wave does not repeat the candidate).
+- The two earlier best-route planner tests set gain 0. The key-pickup stub got `trials`.
+- Full suite: 369 passed, excluding the pre-existing `test_cling_rule_fast_falls_are_not_support` failure.
+- Not run live.
+
+## Fan-wind physics prior and shot/moving-piece futures (2026-11-12; offline, uncommitted, not deployed)
+
+**Fan wind in the world-model prior.**
+- **Measured law** (2-10 recordings, read-only; 421,924 airborne in-wind transitions):
+  - Per frame, airborne: `vy' = vy + (W - 550) dt`, with W taken at the frame's start position.
+  - `W = st * c` along the fan axis, where `c = 1 - (Euclidean distance from the fan point) / range`, x5 when `c >= 0.5`.
+  - The wind acts where `along >= 0`, `|lateral| <= hw` (no +6 band) and `c >= 0`.
+  - |residual| median/p90/p99 is 0.010/0.017/0.022, and 99.85% are under 0.5. The old `wind` formula gets 27.5%.
+  - 634 of the 635 outliers are ceiling hits.
+  - Grounded and wall wind, and the x axis, are unmeasured; every recorded fan is vertical.
+- **Code:**
+  - New versioned prior `gravity-fan-wind-v1` (`wm/protocol.py`, `wm/features.py` `fan_force` / `prior` / `model_prior`), applied only to airborne rows. Checkpoints without a marker are `gravity-v1`, byte-identical to before.
+  - The prior is selected from the checkpoint. Training opts in with `wm.train --prior-protocol`, and `--init` keeps the parent's prior.
+  - Rollouts and planner `imagine` apply the checkpoint's prior with each step's fans.
+  - `Level.wind_at` (PPO observation) and the `wind` input columns still use the old approximation; changing them needs a new feature protocol.
+- **Experiment `runs/experiments/wind_prior_v1`:**
+  - Same as `wind_control_v1` (old 321-column features, 3 epochs) except the prior. A gravity-v1 re-fit reproduced the old weights bit for bit.
+  - On 2-10 validation, wind_control_v1 → wind_prior_v1:
+    - fan one-step position median/p90 1.326/2.662 → 0.955/1.942;
+    - fan velocity 33.0/61.9 → 21.9/49.9;
+    - no-fan rows unchanged;
+    - overall metrics unchanged.
+  - Fan rides, |y| error at +48: three rides 116 → 33. Two deep fan-bottom rides 98 → 102: the prior alone is correct there, but the learned residual (only 1,320 of 388,982 samples had wind) cancels part of the lift.
+  - Not yet combined with the larger 113-shard tile-shapes manifest or the 12-epoch schedule above.
+
+**Hazard futures on a first life (`mpc/future.py`).**
+- Before, recorded "shots" were extrapolated in a straight line with an extra radius of 2 + 0.5 x speed x t. Measured on recordings:
+  - 4-4 and 4-6 shots are lava balls with constant d2y = -0.150 units/frame²;
+  - bullets (1-15, 1-16, 2-3, 3-1) move straight;
+  - linear error at +48 is 180 units on lava balls, while the extra radius was 119-192.
+- **Now, shots:**
+  - Each shot is fitted by least squares as a quadratic over its last 8 consecutive frames in this wave, with a margin from the fit residual and bounded fallbacks for 1-2 frame histories.
+  - Reused ids are split into separate flights.
+  - A shot is dropped once its centre is surely inside a solid tile, using the planner's live `pl.terrain`, passed by `agent.py` `observe(..., terrain=)`.
+- **Now, moving kill boxes without a trusted recording:** a box that has repeated its own motion in this wave is looked up one period back with radius 1. Otherwise the old linear rule applies. World-model input boxes are unchanged.
+- **Measured on recorded waves replayed as first lives** (`runs/experiments/shot_future_v1/evaluation.json`):
+
+  | Class | Misses at +8/+16/+32/+48, before → after | Mean radius at +48, before → after |
+  |---|---|---|
+  | Lava ball | 9.6/34/77/95% → 0% | 86 → 20 |
+  | Bullet | 1.9-4.6% → 0% | 139 → 39 |
+  | Moving piece | 19/27/45/60% → 10/15/23/33% | – |
+
+  - The remaining moving-piece misses are frames before one period has been seen. None of the alternatives tried reduced both misses and area.
+  - Bullet phantoms at +48 fell from 2,283 to 101 thanks to the wall stop.
+  - 4-6 lava balls vanish in lava, a hazard rather than a tile, so they are not stopped.
+  - Cost on 4-6: 1.7 → 3.1 ms per frame.
+- **Unverified:**
+  - live behaviour;
+  - a terminal fall-speed cap;
+  - turning, bouncing or aimed shots;
+  - planner decisions re-run with the new boxes.
+
+**Tests.** New `tests/test_wind_prior.py` (11) and `tests/test_shot_future.py` (7). The full suite gave 362 passed and 1 failed: `test_planner.py::test_cling_rule_fast_falls_are_not_support`. Its stub lacks `Planner.support_terrain`, which the imagined-key-transition patch above added; the failure is not from these changes.
+
+## Private imagined key transitions (2026-11-12; implemented and checked offline)
+
+The normal planner now advances each ensemble member/candidate's private key mask, feeding the subsequent
+tile inputs, collision guard and support/time lookup. The implementation is in `game/level.py`,
+`wm/rollout.py`, `plan/planner.py` and `plan/commit.py`; no model weights, feature widths/protocols, loss,
+progress-field edges or reward formula changed. `LockContext` owns the deterministic rule from
+`realgame.js`: strict distance <22 at the post-update endpoint, all keys independently of route order.
+Progress legs derive from owned masks. Shared tile words/cache/base terrain are not opened or mutated.
+
+The incoming model step uses its OLD mask for guard collision; acquisition is computed afterward and can
+open locks only for the NEXT model step. Step1 uses that endpoint ordering. At step4 the four intermediate
+integer endpoints are linearly interpolated between corrected model endpoints; a continuous segment crossing
+the circle does not suffice. This is an approximate intermediate path, not intermediate native physics.
+Opening can lag up to3 frames relative to the rule's OWN interpolated pickup, not necessarily relative to
+observed gameplay. The output records this policy explicitly. Completion and Committer support calculations
+also use private masks. Raw `wm.rollout` methods retain default `key_pickup=False`; normal Planner enables
+the rule explicitly. Planner's False option disables pickup dynamics, not the new native-circle geometric
+contact scoring; it is not a promise to reproduce the former AABB contact heuristic.
+
+BestRoute now records native key masks and their knownness. A key-map route with an unknown or mismatching
+initial mask cannot bypass model/guard judgment using its recorded real path; the fallback reason is logged.
+Known recorded endpoint masks select endpoint support/T. Legacy routes without masks may still be trusted
+on maps without keys. This closes an unsafe context-equality exception; first-life evaluation has no route
+memory and is unaffected. No broader held/flag/memory matching was added.
+
+**Actual bounded checks.** Evidence is in `analysis/key_transition_20261112/rapor.md`, `cases.json`,
+`gate_cases.json`, `evaluation_final.json`, `baseline_stall.json`, `after_stall.json` and
+`frozen_rollout_compatibility.json`; the earlier `evaluation.json` remains preserved. Key-window and frozen
+compatibility checks use the unchanged12-epoch checkpoint
+`d979f1dd1b42bd36488139496a3a0f4a7c269de595388d318a686ca2c41b2673`; the stall audit also references preserved wm_step4.
+Only manifest-validation agents were selected for the key checks; no fit, game connection or save/persistent
+memory-file write occurred. The final 24-window model check took6.88 seconds.
+
+- On recorded positions, the shared rule reproduced 38,032 true consecutive endpoints and45 native pickups
+  with zero mask differences. This is teacher-forced rule correctness, not motion prediction.
+- Eight positive pickup and eight near-key negative 48-frame windows were frozen before evaluation.
+  Enabled raw and guarded rollouts each predicted8/8 positive pickups by ensemble majority; one of eight
+  negatives was a false pickup, with all five members agreeing. Disabled masks necessarily stayed fixed
+  (0/8 detected). Coarse first-owned-boundary timing error on detected positives had median0/p90+4 frames
+  against observed timing; this includes model-motion/interpolation error and is not a calibrated rate.
+- Whole-window motion error did not improve: guarded +48 position median/p90 remained14.66/107.56 game units
+  with pickup disabled or enabled. Private state consistency is fixed; long-horizon physical error remains.
+- The earliest recorded pickup-to-lock entry in the available validation episodes was260 frames later.
+  None of the positive 48-frame windows proves the full acquisition-to-gate sequence. Eight later owned-key
+  gate windows were checked separately: carrying masks along the OBSERVED path gave zero differences;
+  on the same observed gate-entry segments, mask0 clipped8/8 and mask1 clipped0/8 in the guard. This is
+  private-geometry/teacher-forced evidence, not a 260-frame model rollout or live keyless collision proof;
+  examples can share a source wave. Recorded x/y remains a body-anchor proxy.
+
+**Stall decision audit.** From the same recorded wave_00001/agent0/frame200 state in the earlier 2-10 planner
+run, with fresh memories/no replay and recorded future worlds, the old `wm_step4` chooses left-jump then
+wait: T317.38 ->318.38, estimate366.38 at48 frames. The12-epoch model chooses two right run-jumps:
+T317.38 ->295.74, estimate355.74 at60 frames (48+12 completion), reaching about x239 in its chosen path versus
+about x31 for the old choice. Each model's actions/scores are IDENTICAL before/after this key patch. Thus
+the newer model already produces a useful rightward candidate at this one state; no progress-field/horizon
+patch was made. This is not an escape/completion demonstration in the actual game. Historical initial-field
+reconstruction differences documented in the field audit still apply; data/encoding also differ between models.
+
+The old frozen 419-input v2 evaluation was rerun with raw `key_pickup=False`: one-step panels on272,085 samples
+and open-loop panels on128 starts matched EXACTLY (39.56 seconds); the original report was unchanged.
+Eighteen focused key tests cover private/timing/geometry/replay boundaries, alongside earlier feature,
+experiment and commit regressions; overlapping test runs are not added as independent tests. Source records,
+Root's final agent/first-eval integration also passed43 tests in48.12 seconds (only the existing pygame
+pkg_resources deprecation warning), without attaching the game. These runs are not summed across overlaps.
+Source records,
+manifests, checkpoints and earlier evidence were preserved. No retraining, deployment or live gameplay was
+performed in this phase. Earlier notes below describing unchanged imagined keys are pre-patch history.
+
+## New 2-10 evidence and shape-aware epoch results (2026-11-12; offline, not deployed)
+
+**New recorded evidence.** The user's 2-10 collection added 70 files / 1,449,419 raw rows to
+`collect_2-10_ppo50_01`: 3,450 completed agent traces, all distinct exact full traces; 2,034 recorded key
+0-to-1 changes near the key; 517 same-agent key-then-lock-region segments; 512 final finish rows and
+473,777 computed nonzero-wind transitions. See `analysis/key_audit_20261112/rapor.md` and
+`key_coverage.json`. These reduce the earlier fan/key data gap. The region test joins recorded x/y positions,
+not the full collision body: 15 keyless segments also intersect the lock rectangle, so keyless blocking
+was NOT established. No records were deleted/repaired from this proxy. The updated complete collection has
+443 files / 8,631,891 rows; the experiment below did not consume that entire archive.
+
+**Fixed experiment.** `runs/experiments/tile_shapes_epochs_v1` extends the previous 73-file snapshot with
+40 explicit completed PPO files (two per new level, eight for 2-10), giving 113 shards / 1,402,115 raw rows.
+Manifest SHA-256: `1ef6e5ec30453b11d4f295c3daf5dcda57c8884031115d2482c0060b88290dbe`.
+All selected step-4 samples were featurized with explicit `tile-shapes-v1`: 1,396,847 x 419 inputs,
+1,124,762 train / 272,085 validation. Validation includes 270,624 full four-frame targets and 1,461
+terminal-short targets; 16,826 full targets start with a key owned. No training/evaluation split membership
+or feature layout was inferred from file order. All three arms used fresh weights, seed0, five members,
+3 x 256 hidden units, batch4096 and two CPU threads; no init, demos or self-correction. OneCycleLR duration
+scales with each requested epoch count: this is an epoch/schedule-budget comparison, not identical LR paths.
+
+The pre-training v2 roster SHA-256 is
+`5a4560be433da6e7aa7e19a318dcee8cc8aad5c61ecc255163ec550b2c1bfd39`: 128 fixed starts across 21 levels.
+Six starts are on 2-10 (four initial-wind / two zero-input-wind; three keys=0 / three keys=1). Resource and
+encoding limits and the recorded-key-change censor policy are sealed into the roster. The 0.5 event
+threshold and comparison rule were fixed before fitting. Source hashes remained unchanged through all
+training and evaluation. Raw evidence is `training_plan.json`, `evaluation_roster.json`,
+`training_results.json`, each `epoch_03/06/12/{training_result.json,evaluation.json}`, `comparison.json` and
+the readable `sonuc_raporu.md`.
+
+| Measured quantity | 3 epochs | 6 epochs | 12 epochs |
+| --- | ---: | ---: | ---: |
+| Full four-frame position median / p90 (n270,624) | 0.679 / 4.156 | 0.454 / 2.935 | 0.307 / 2.098 |
+| Initial-wind position median / p90 (n11,854) | 0.628 / 1.782 | 0.509 / 1.528 | 0.381 / 1.311 |
+| Key-owned position median / p90 (n16,826) | 0.851 / 4.148 | 0.580 / 2.831 | 0.417 / 2.202 |
+| +48-frame position median / p90 (n101) | 25.659 / 87.358 | 21.983 / 73.446 | 15.310 / 61.773 |
+| Fit wall seconds | 275.6 | 444.5 | 810.8 |
+| Peak process working set, GiB | 3.22 | 3.21 | 3.18 |
+
+The complete training sequence took 1,531.0 seconds (25.5 minutes), with no timeout. Six and twelve epochs
+both pass the predefined comparison against three: overall/wind/zero-wind four-frame position p90 and
++16/+48-frame position p90 do not worsen, with at least one strict reduction. Twelve is best among these
+arms on the reported main motion metrics. This does not imply that every metric improves monotonically:
+the six-epoch +8 and +32 p90 values were worse than three. Wind strata classify the initial model-input
+columns6/7, not the presence/absence of fan effects over the entire future interval.
+
+At threshold0.5, full-target finish recall improves from99/128 (77.3%) to116/128 (90.6%), but precision is
+only0.117 to0.256. Full-target death precision is still0.103 at twelve epochs (319/359 positives recalled).
+The alive-endpoint death false-alarm rate falls2.05% ->1.53% ->1.03%. Full and terminal-short labels are
+reported separately; overlapping four-frame chains are not independent terminal events. These event heads
+are not calibrated safety probabilities. The normal `agent.py` planner still scores geometric contacts,
+time-to-go and memory/risk terms, not the learned finish/death/reward heads.
+
+**Remaining limits.** Open-loop errors use recorded actions and future hazard/platform observations with
+the start map fixed. At +48,26 starts are terminal-censored and one lacks a row; no selected prefix actually
+encountered a key change. Therefore the v2 key-change censor is implemented but this roster does not test
+prediction through a pickup. Known-key starting patches are represented correctly, while imagined states
+still retain their initial keys: contact checking can advance the progress-field leg without updating
+future tile/guard geometry for newly imagined keys. More epochs did not implement that missing transition.
+
+Features contain no explicit goal/key object positions or identity channels (only physical state, local
+tile geometry, hazards/platforms/wind; current keys affect the tile patch). This is a representation limit
+relevant to finish/pickup interpretation, not proof that observed correlations cannot predict finishes.
+The 2-10 time-field plateau documented below also remains unresolved; a better motion model alone has
+not demonstrated an escape from it. New data and block encoding changed together relative to the old
+321-input experiment, so their individual effects were not isolated. This one-seed, same-level trace-split
+test is not unseen-level/first-life or agent-completion evidence. No checkpoint was deployed or loaded into
+the game, and no planner score/edge/imagined-key behavior was changed in this experiment.
+
+## Handoff audits (2026-11-12; offline evidence, no production change)
+
+Root's bounded inventory/coverage of the user's new PPO collection is saved under
+`analysis/data_audit_20261112/coverage.json`: 373 shards, 7,182,472 raw rows, 7,164,622 eligible transitions,
+16 levels (1-1 through 1-14 plus 3-1/3-2), no held-out levels. There are 17,850 agent episodes: 17,050 complete,
+all distinct full exact traces; 800 partial episodes with 707 distinct traces across 17 partial shards.
+Last observed outcomes are 6,952 finishes, 8,884 deaths and 2,014 alive tails (including partials). Recorded
+wind context is known throughout but all computed exposure is zero; key masks/changes are also all zero.
+The user confirmed that 2-10 has not yet been collected in this new run. No invalid dt or missing/mismatched
+terminal metadata was found. The collection adds ordinary movement/finish diversity, not fan/key evidence;
+50 simultaneously recorded agents are not automatically independent local transitions. Root measured this
+audit at 66.6 seconds. Existing tile-shape tests were independently checked (17 passed).
+
+The read-only field diagnosis is in `analysis/field_audit_20261112/{audit.py,graph_audit.json,point_checks.json,report.md}`.
+Two single-thread field builds (0.743 seconds excluding startup/imports) show that the stall heuristic's
+plateau exists with normal clear mode and jump limits (5,12), not an unlimited-jump fallback. The T graph
+from pedestal (30,-150) ascends diagonally through (130,-50) to fan-support at (150,-30), then reaches the
+central wall and key. Every diagonal ascent costs max(5,5.41)=5.41 frames; entering a supported fan cell
+resets the jump budget. Thus horizontal travel fits into the same vertical-time lower bound: stall x30
+and fan x190 at y=-154 both have T317.38, despite zero versus about +1800.526 computed upward wind force.
+Removing only lift in a diagnostic counterfactual restores a horizontal fresh-start T gradient; that
+counterfactual is not a proposed fix, since it removes real fan capability.
+
+Correction to the earlier description: y=-154 across x30..230 is not one physical floor. Only the stall is
+on its pedestal; other positions can be airborne. T_support/T_rise are flat there, but T_fall at x70 is
+322.38 and x110 is330.53. Runtime support/velocity selects the appropriate lookup. The graph is optimistic
+about jump state, fan support and parallel travel; this proves a heuristic plateau, not that a physical
+route is impossible or that 48 frames alone is the cause. Candidate reach/pruning/completion/risk at the
+actual stalled decision still needs a separately bounded analysis before choosing a fix.
+
+The saved frame-0 reconstruction has 26 kill-shape boxes versus 25 in the historical initial field event,
+and 244,991 versus 245,009 edges, although route cost87.4, spawn T412 and stall T317.38 match. The missing
+pre-frame-info hazard snapshot is not reconstructed or invented. No production score/edge/model change,
+new fit, deployment, game attachment or model rollout was performed in these handoff audits; existing
+recordings, manifests and checkpoints were preserved.
+
+## Planner decision audit, 2-10 stall, tile shapes (2026-11-12; read-only audit + uncommitted code)
+
+**Decision audit (measured, read-only).** The audit script, kept outside the repo, reads `plans.jsonl`. It was run on the user's planner run `bench_20261111-014526`: 5,053 decisions on 1-5, 1-8, 1-11, 4-6, 4-4 and 3-1.
+- Triggers: interval 4,028; move 629; surprise 614; support 168; danger 13.
+- Decisions:
+  - the previous plan was kept 2,013 times (40%);
+  - best-route (previous wave's fastest route) 1,078 times. This route does not exist in `--eval-first`;
+  - gain switches 966, with a median gain of +31 frames. Only 28% were under 10 frames, so most switches are not score noise;
+  - risk switches 675; princess 287; veto 17.
+- Real horizontal reversals were rare: 55 of 2,879 adopted plans pointed against the previous plan's path, mostly in the air.
+- **More important:** 494 adopted plans end with a larger time-to-go than they started (`t_end > t_start + 4`). On 1-11, all candidates end at the same worse point, each marked "no progress".
+- On 1-11, 4-4, 4-6 and 3-1, about half of the kept plans' estimates did not fall over 8 frames. The kept plan made no progress.
+- Inference: the dominant failure is a progress-field plateau or trap that the 48-frame horizon cannot cross. It is not indecision.
+
+**2-10 stall (measured; cause partly inferred).** `collect_2-10_fan_keys_01`:
+- Waves 2-6 are identical. The agent falls from the spawn (-30,130) to (30,-154) and waits about 1,000 frames until the timeout.
+- 130 of 158 decisions have an empty plan.
+- Field: 2 legs (the key at (69.8,130), then the goal). T at the spawn is 412 frames.
+- At the stall, T is 317 along the whole floor (x 30..230) and falls only with height, about 11 frames per 40 units, at every x.
+- The fans are at x≈-140 and x≈181, blowing up; lift cells fill both columns. Planned paths never passed x=85.
+- So no 48-frame candidate shows progress, and the key is never reached. This is why no key-owned data exists.
+- **Not yet verified:** whether the field wrongly allows rising anywhere in that open region, or is right and needs more than 48 frames. The next offline step is to trace the field's route cells and edge types from the stall cell. Possible fixes after that: correct the field's edges, or measure progress toward the next route cell as a sub-goal.
+
+**Tile shapes: slopes and half blocks with direction (code, uncommitted; 312 tests pass, 17 new in `tests/test_tile_shapes.py`).**
+
+Before this change:
+- The world model saw slopes only as one ordinal scalar, (open corner+1)/4, and half blocks without orientation.
+- PPO's 11x11 grid and surface map treated slopes and half blocks as full blocks.
+- The monitor drew every solid cell as a square.
+- Level 1-3 has 19 slopes in all four orientations and no half blocks.
+
+Changes:
+- **Owner:** `realpath.tile_shape(words)` gives each cell a kind (empty/full/half/slope/special) and the open direction (ox, oy):
+  - slope: the signs of its open corner;
+  - half block: minus `half_normal`;
+  - everything else: (0,0).
+
+  `realpath.solid_polygon` gives the solid part of a cell. `slope_open_corner` and `half_normal` (moved from plan/geometry.py) share one flip/rotate decoder. `plan/geometry.Terrain` uses the same owner.
+- **Monitor** (`monitor.py _level_bg`): draws slopes as the solid triangle and half blocks as the solid half. An offscreen render of 1-3 matches the game's diagonal corners.
+- **World model:** new feature protocol `tile-shapes-v1` (`wm/protocol.py`).
+  - The tile patch has 6 channels: full, half, slope, special, open-x, open-y. That is 389 inputs at step 1 and 419 at step 4; the old layout stays 291/321.
+  - The protocol is selected from the checkpoint's recorded `feature_protocol`, never from data. Unknown or conflicting markers are errors, and `model_layout` checks the input width.
+  - Old checkpoints, including the default `runs/wm_step4`, get byte-identical old features. Regression hashes:
+    - collect_2-10_explore_01 step 4: `6befca3a…ba68344` (the earlier audit hash, reproduced);
+    - demo_1-3 step 1: `75e09e7b…8465ccb`;
+    - demo_1-3 step 4: `4c6f85d6…bb5e8c4a0`.
+  - Fresh training uses the new protocol only on explicit opt-in: `wm.train --feature-protocol tile-shapes-v1`. `--init` keeps the parent's protocol.
+  - `wm.experiment` is pinned to the old protocol for its frozen 321-column cache. The live model swap in agent.py refuses a model with a different protocol.
+- **PPO:** `realgame.py --shape-inputs`, default OFF. Off means exactly 282 inputs, as before.
+  - On, it appends two 11x11 maps (open-x, open-y; outside the map 0) from the cached `Level.open_dirs`, for 524 inputs.
+  - An older `--load` checkpoint is widened (new columns ×0.1). `real_20261103-012157/model.pt` was checked offline: it loads identically with the flag off and is widened to 524 with it on.
+  - Loading a wider checkpoint without the flag now raises an error; this is one-way. `mpc/offline.py` has the same flag. Reward and actions are unchanged.
+- **Unverified:**
+  - the live monitor;
+  - live PPO with `--shape-inputs`;
+  - any model trained on `tile-shapes-v1` (none exists);
+  - half-block orientations on real data (synthetic only).
+
+**PPO architecture (discussion, no change).** The user proposed deeper layers or attention against memorization. My position:
+- First measure memorization: the same PPO checkpoint on a trained level versus an unseen level, on the first life.
+- Level diversity and input design matter more than depth:
+  - level-specific absolute inputs (goal direction and distance, route progress) are a memorization channel;
+  - the flat MLP over flattened 11x11 maps has no spatial sharing;
+  - cell types are close scalars, for example crumble 0.8 versus solid 1.0.
+- Candidates, in this order: one-hot cell channels with a small CNN, then attention over variable sets of nearby objects (hazards, fans, platforms, keys), not a full transformer.
+- Any change of input shape beyond widening means retraining PPO from scratch.
+
+**State and next steps:**
+- The user is collecting PPO data across training levels with `realgame.py --agents 50 --end-after 0 --wave-seconds 30 --paths 3 --load runs/real_20261103-012157 --wm-collect --name collect_2-10_ppo50_01`, without `--shape-inputs`. Held-out levels must not be entered.
+- Proposed order:
+  1. 2-10 field trace, offline.
+  2. Epoch experiment E1: same manifest, seed and roster, fresh 3/6/12 epochs, with metrics fixed in advance. Decide whether to run it on the old or the new tile protocol, and keep every arm on one protocol.
+  3. Verify 2-10 key pickup → lock pass in the PPO data:
+     - the keys mask goes 0→1 near the key;
+     - the same agent passes the lock cell, row 20 / col 19, about x -20..0, y 100..120;
+     - agents without the key are stopped there.
+  4. Data experiment E2 on a new manifest extension.
+- Everything from the 2026-11-11 stage and this one is uncommitted in the working tree.
+
+## First bounded wind-control experiment (2026-11-11; frozen inputs and evaluation contract)
+
+The user authorized a first offline feasibility experiment. Its NEW immutable manifest is
+`runs/experiments/wind_control_v1/dataset.json`, SHA-256
+`d2ac03c2643d37682584cf6ccab45ddd3b6fca265245f3ac18a0e70b841e5162`.
+The explicit selection has 73 shards, 391,506 raw rows, 16 sources and 1,234 distinct full exact-trace groups:
+the prior 39-shard representative snapshot, 31 completed 2-10 exploration waves, and three representative
+completed 1-8 terminal-capture traces. Partial waves and the repeated planner 2-10 probe are excluded; no
+automatic archive discovery, repair, prefix deduplication or new split algorithm was introduced.
+
+Root built a bounded cache (`features.npz`) with step=4, frac=1, max_samples=0 and opt-in provenance. It has
+388,982 x 321 feature rows: 312,778 train (310,831 full, 1,947 terminal-short) and 76,204 validation (75,739 full,
+465 terminal-short). Initial-input nonzero-wind rows number 1,084 train / 281 validation; full-chain counts
+are 1,075 / 281. These differ from the earlier one-frame exposure counts by definition. The float16 X array
+occupies about 249.7 MB; compressed cache is about 29 MB. Build/cache took 25.7 seconds. Provenance is a
+compact N x 4 int64 array of manifest entry index, agent, start frame and current keys; ordinary feature
+build output is unchanged unless `provenance=True` is explicitly requested with a manifest.
+
+`wm.experiment.prepare_roster` freezes validation-only row indices and seeded agent-start identities before
+training. The recorded roster `evaluation_roster.json` has SHA-256
+`b6fa16faa6fb46acb5e368df2fd85c726979cda6bb3db0dec4d78a731e549b5f`:
+all 76,204 validation feature rows and 128 rollout starts (16 eligible levels x 8). The 2-10 starts contain
+four initial-wind and four zero-input-wind cases from six exact-trace groups; historical comparison has 965
+validation rows from that source, all keys=0. A cache-content hash binds array values, dtype, shape and row
+alignment; the roster also binds the manifest and feature protocol. Selection is fixed, and its hash must
+not be silently changed after training begins.
+
+The fresh architecture is the existing five-member, 3 x 256 step-4 model, seed 0, two CPU threads,
+batch 4,096, no init, no demos, no self-correction. Root's discarded train-only warmup used two warmup plus
+eight timed updates at that architecture/batch: mean 0.2048 seconds/update, approximately 15.57 seconds for
+76 updates/epoch; reported peak process working set was 990,490,624 bytes (about 945 MiB). The first diagnostic
+memory-API call failed and remains recorded separately; `warmup.json` records the corrected bounded probe.
+No warmup checkpoint was retained or used to initialize the experiment. Three epochs were chosen from cost
+before inspecting validation error, within a 15-minute training wall budget. These setup figures alone
+establish no model improvement; completed measurements are recorded below.
+
+**Measured fit and evaluation:** `training_result.json` reports successful completion (exit 0, no timeout)
+in 77.736 seconds wall / 126.953 seconds CPU, peak process working set 1,156,579,328 bytes (about 1.08 GiB).
+The recorded training-code source hashes remained unchanged. The fresh checkpoint is
+`model/wm_model.pt`, SHA-256 `15543315b5125633ea8e23bc24fe58e46a00c7836cfd086d7c47c2a2508608ec`.
+It records three epochs, 312,778 training samples, no demos/self-correction, the strict manifest and current
+feature protocol. It was NOT published to or loaded by the game. The raw roster-file digest in the training
+result is `380e9d1a9aeab4558bbddfe44429032e967b093f4422be25ef9bc596f6e166f7`; the canonical document seal above
+is a separate digest of the roster body, not a changed case selection.
+
+`historical_reference.json` and `candidate_evaluation.json` compare only the matched 2-10 validation subset
+to the old model. On 281 full four-frame nonzero-initial-wind targets, position median/p90 improved from
+2.894/5.798 to 1.326/2.662 game units; velocity median improved from 69.169 to 32.978. On 663 full zero-input-wind
+targets, position median/p90 worsened from 0.836/5.887 to 1.716/6.777, and velocity median worsened from 21.481
+to 47.010. Across all 944 matched full targets, position median worsened from 1.063 to 1.604 (p90 improved
+5.878 to 5.458). This is a mixed result, not a replacement-model approval or an isolated causal proof about
+wind training. There is no old-model global comparison across the other levels.
+
+The eight matched fixed 2-10 starts gave +48-frame position median/p90 55.096/146.040 for the reference versus
+53.779/66.979 for the candidate, with only six scored survivors and two terminal-censored cases in each.
+The small, correlated survivor-only sample cannot establish safer planning, survival prediction or level
+completion. The candidate's global full-target position median/p90 was 1.221/6.223 over 75,739 targets;
+this is a standalone strict-split measurement, not an improvement claim against the old model.
+
+At threshold 0.5 the candidate recalled zero of 20 validation finish labels (five full / fifteen short),
+with zero predicted finishes. Full-target death recall was 124/150, but precision was only 124/3,936 (3.15%);
+3,810/75,584 alive-endpoint targets produced a death false alarm (5.04%). Terminal-short death recall was
+372/450 and precision 372/378, a different target population. These probabilities/thresholds are not declared
+calibrated or safe for planner decisions. Every experimental key mask was zero; no real key-owned example
+or live agent benefit was demonstrated. Existing old checkpoints/data remain preserved.
+
+The new evaluator does not train. Its strict-model role retains `Dataset.require_model`; historical-reference
+is a separate, explicit role restricted to `collect_2-10_explore_01/wm_data` validation cases with keys=0.
+Old weights/metadata are never relabelled or attached to the new strict manifest. The strict report contains
+a matched historical subset so both models use exactly the same cases, recorded prior and each model's own
+residual scale. There is no historical-model comparison across the mixed-seen old levels. Source chronology
+and the previous keys=0 byte-equality proof are evidence, not cryptographic assurance about all prior training.
+Outputs use exclusive creation and bind loaded checkpoint bytes, roster and manifest hashes.
+
+Primary one-step position/velocity median/p90 metrics use FULL four-frame targets, with counts overall,
+initial-input wind/nonwind and 2-10. Terminal-short event panels remain separate; threshold 0.5, event-positive,
+predicted-positive, precision/recall and alive-endpoint death false-alarm denominators are explicit. This is
+not a calibration result. Raw open-loop +8/16/32/48 position metrics use the same recorded actions/worlds,
+without a guard; terminal/missing-row/action/world evidence is censored and counted, never padded into fake
+truth. Geometry applies recorded tile changes up to each start only, not future crumble changes or imagined
+key pickups. These survivor-only errors do not measure correct predicted death timing or planner success.
+Shared prefixes/local correlations/shared tiles and the absence of real key-owned data remain limitations;
+the experiment does not establish unseen-level completion or fan-physics accuracy without its actual results.
+
+## Known-key world-model tile inputs (2026-11-11; deterministic component checks)
+
+The common feature builder now applies each row's already-known `keys` mask to a private copy of its local
+tile patch. Different agents, candidates and ensemble trajectories can share LevelGeom without opening each
+other's locks or mutating its words/padding/cache. Offline build/self-correction/evaluation and planner/MPC
+inference consume the same feature function and domain-owned lock association. The existing Level lock-group
+algorithm is extracted into a shared helper; its native go-payload ordering and physics are unchanged.
+New static collector metadata records that applied key-index/group association with `private-locks-v1`
+and `python-go-payload` provenance. Existing static files are not overwritten. Old single-key geometry can
+reconstruct the association through the same domain owner; owned masks in old multi-key data without an
+applied association are explicitly unsupported, while keys=0 inputs remain usable without guessing.
+
+Input dimensions and model heads are unchanged (291 for step 1; 321 for step 4). Active feature semantics are
+`per-agent-key-tiles-v1`; checkpoint **trained** semantics are a separate field. Existing unlabelled weights
+remain `legacy-unspecified`, are still loadable for ordinary inference/explicit legacy compatibility, and
+are never silently relabelled. The shared strict dataset/model boundary requires the current feature
+protocol as well as the identical manifest. Fresh/continued weights acquire the new trained marker only
+after a successful nonzero fit; notably `wm.train --init` without self-correction still performs no fit and
+preserves the parent's trained marker. Reports and inference metadata expose active versus trained semantics.
+No existing data, model, manifest, split/group identity or PPO reward/control behavior was changed.
+
+Bounded independent checks compared old HEAD versus current keys=0 features on the 2-10 exploration recording:
+5,474 step-4 samples (321 inputs) and X/yc/yb/shard bytes matched exactly; X SHA-256 is
+`6befca3a27c224f62c99ec9df7fb01ad986b5f9cddd245e3b2179d5d0ba68344`.
+In RAM only, the actual saved 2-10 lock at (-10,110) produced a closed mask=0 patch and open mask=1 patch,
+with equal offline reconstruction/runtime association and unchanged shared geometry. Synthetic tests cover
+mixed masks, grouped planner buffers, tile updates/reset, provenance, unknown mapping rejection and no-fit
+lineage. These are deterministic input-correctness checks, not model training, model rollout, or live pickup.
+
+Imagined key pickup, radius/timing rules, scoring and guard transitions are deliberately unchanged: predicted
+states retain their current key mask. The probes below contain only keys=0, so this after-key correction
+does not by itself explain failure to reach the key or establish a learned benefit. Wind accuracy and a
+future imagined pickup transition require separate evidence. No additional blind-random collection is proposed.
+
+## Bounded fan/key probes on 2-10 (2026-11-11; recording evidence)
+
+The user selected 2-10, which is not a held-out level. The initial planner collection audit
+`runs/collect_2-10_fan_keys_01/collection_audit_v1.json` contains six shards / 6,791 rows: five completed
+20-second timeout waves and one partial cut. All recorded key masks remained zero; two fans were reported,
+with nonzero computed wind in 185 of 6,785 eligible known-context transitions. Longer repeated planner waves
+therefore did not demonstrate key collection or new model learning.
+
+The subsequent single-agent model-free exploration audit
+`runs/collect_2-10_explore_01/collection_audit_v1.json` contains 32 shards / 5,515 rows: 31 completed waves
+with 31 distinct complete exact-trace groups and one partial wave. There were 29 deaths, two timeouts and
+zero finishes; all 31 completed final targets passed capture checks. Nonzero computed wind occurred in
+1,365 / 5,483 eligible known-context transitions (24.9%). Every key mask was still zero. The nearest sampled
+position to the key was about 65.7759 units away, at approximately (3.99, 130.86); the direct approach from
+the spawn is blocked by a wall in the inspected map. More blind random waves are not currently proposed.
+These probes demonstrate diverse movement/wind exposure and recording quality, not successful key/lock
+behavior, independent local samples, trained-model improvement or generalization.
+
+The saved 2-10 static geometry has one key and one lock cell. Reconstructing the existing Level mapping from
+saved words/origin/dimensions/keys gives `[[819]]` (row 20, column 19), matching the actual Level class and
+key object. The probe audit identified that the then-current feature path ignored recorded key masks;
+the deterministic known-key input correction above now addresses that component, while imagined pickup
+remains unchanged. No actual key-owned frames exist in these probes to validate learned after-key behavior,
+and these cases are not declared training-ready. No existing recording was repaired or used for new training
+by this probe audit. The completed-only trace split has 24 train episodes / 4,475 transitions (1,084 nonzero
+wind, 23 exposed episodes) and seven validation episodes / 965 transitions (281 nonzero wind, six exposed
+episodes). Wind appears on both sides; this is exposure evidence, not an accuracy result.
+
+## Native wave-end targets in new recordings (2026-11-11; tests and bounded live check)
+
+The collector now preserves the exact final next-state supplied by the existing game script's `wave_end.s`.
+When the message reports frame F, the action of update F-1 has already run. A target row at F is appended
+only for a previously alive agent whose last row is F-1 with a recorded action, whose native state/status
+and wave identity agree, and whose caller supplies its held-input mirror. All eight state fields come from
+the native snapshot. Early-dead/finished agents are not extended to F; an already observed F row is not
+duplicated or overwritten. Ambiguous duplicate agent/frame records and missing/nonconsecutive/invalid evidence
+remain unextended, with explicit reasons in metadata. There is no inference or repair of missing positions.
+
+The new row's action is -1: it is a next-state target, not a new control decision. Its held count is the
+runner/trainer mirror AFTER the last applied input, not a claim to read an internal game timer. Its reward
+belongs to that last input. Planner-family controllers retain NaN rewards; the PPO trainer forwards the SAME
+final step-cost/death/finish reward that it already puts in its trajectory, after computing it. No reward
+formula, PPO math, policy decision or game-script behavior changed. A final survivor (timeout or quota) can
+provide an alive target: its last transition remains nonterminated and its episode remains truncated.
+
+New shards identify `capture_protocol: wave-end-target-v1` and list appended/skipped agents, held/reward
+provenance, and the end frame in `final_capture`. Exact partial hz/sh from the end message is stored in
+`final_observation` with target-only/incomplete-context provenance. No frame-F input-world record is fabricated:
+dt/platform/fan/tile-change context was not supplied there, and the existing F-1 input world remains unchanged.
+Missing final reward stays NaN with an unknown/undefined source; missing held evidence prevents append. The
+existing NaN-to-reward-target handling is outside this change. Partial S/stop/level-switch cuts and legacy
+messages without final states preserve their original rows with explicit missing-evidence reasons.
+
+The earlier bounded coverage results below describe OLD immutable recordings and are not retroactively
+repaired. Existing data, manifests, checkpoints and trace-split-v1 group definitions are unchanged; a newly
+captured true target naturally produces new content/group hashes. Tests exercise exact final fields, held /
+reward alignment, mixed early/late terminal lives, alive tails, short chains, duplicate/end callbacks,
+legacy/partial evidence and PPO forwarding without running training. The existing runner fake-message tests
+also check new targets and absence of synthetic targets for legacy messages.
+
+**Measured live collector check:** `runs/terminal_capture_1-8_check01/capture_audit_v2.json` audits 28 shards /
+5,421 rows from the user's normal collection run on the already-seen level 1-8. All 27 completed waves
+(26 finishes, one death) have the verified consecutive frame-F target, matching native status, action -1 and
+post-action held mirror; planner target rewards remain NaN. Metadata finishes/deaths now match the observed
+next-row labels: 26/26 and 1/1. The ordinary input-world timeline ends at F-1. Partial wave 28 stopped with
+rows 0..128 and no appended state, with its cut reason recorded.
+
+This is recording/protocol evidence, not generalization or new training success: the first life died at
+frame 169, no learn-model event occurred, and the completed waves contain only three exact-trace groups
+(death wave 1, first finish wave 2, and the same trace repeated in waves 3..27). First-life evaluation still
+prohibits collection. Clean-detach acknowledgement, overlay appearance and live PPO reward forwarding were
+not verified by this planner collection check; PPO alignment remains covered by offline caller tests.
+
+## Bounded data coverage before another training run (2026-11-11)
+
+`wm.coverage inventory` and `wm.coverage report` measure data evidence without fitting models, building large
+feature arrays, or rolling models out. Inventory requires an explicit source list/request and candidate /
+per-source caps. `Dataset.catalog` samples one filename index per evenly spaced bin with a deterministic
+source/seed-specific RNG, then visits sources round-robin; only NPZ metadata and row-array headers are read.
+Uninspected files' levels, states and events remain unknown. `Dataset.create` now also accepts explicitly
+selected shard paths with a new-row budget and a soft time limit, preserving the original lexical default and
+the existing trace group definition. Explicit selections must belong to declared sources and fit the caps;
+invalid traces are rejected with the source path and agent index, never repaired or silently deduplicated.
+
+Coverage reporting requires an immutable manifest, max-shards and max-rows. The dataset owner checks whole
+shard row headers before decoding a shard that would exceed the row budget; no partial agent trace is counted
+as a complete new episode. Soft time caps are checked between shards, not hard real-time interruption of an
+individual compressed file. Output records processed/unprocessed IDs, decoded rows, elapsed time and stop
+reason. Completeness of this measurement and completeness of the manifest's listed sources are separate.
+
+Counters are grouped by source, level and split. Raw episode occurrences mean (shard, agent) recordings;
+pool agent IDs are not independent experience. Exact-trace-deduplicated core counts and repeat factors are
+reported separately; a global unique group may appear in multiple source buckets. Flag-ground/air/wall use
+the model's existing AIR/WALL bit grouping (WALL first), not physical contact truth. Landing and blocked are
+the existing label heuristics. One-frame transition and K-step chain denominators stay separate; terminal-short
+chains are distinguished from full chains and from alive-at-record-end/time-limit tails that may yield no
+K-step training sample. Platform presence/nearest-centre-within-200-units are proximity proxies, not evidence
+of standing or landing on a platform. Wind is the nonzero `wm.features.wind` input proxy after a fan report is
+known and carried forward within a shard; unknown context has its own denominator. Proxy/outcome dedup is not
+claimed because world context and metadata outcomes are not included in the exact state/action trace hash.
+
+**Measured bounded review (root audit, not a whole-archive claim):**
+
+- Sources were the 14 folders listed in the actual checkpoint metadata from
+  `runs/first_eval_1-8_check01/run.json`; request/budgets/seed 0 are in
+  `runs/coverage_checks/source_request_v1.json`.
+- `inventory_v1.json`: 203 of 1,903 listed NPZ files inspected, at most 16 per source, 18 sampled levels and
+  32 source-level strata; zero state rows decoded, about 0.37 s. The root recorded an explicit deterministic
+  source-level round-robin selection in `selection_v1.json`: 40 shards / 408,950 header rows.
+- Builder validation rejected `runs/real_20261102-165351/wm_data/wave_00077.npz` (1-5): 50 duplicate
+  agent/frame pairs at frame 401 had conflicting state/action/held/reward values. The bounded validity audit
+  inspected only the selected 40 files / 408,950 rows. `validity_audit_v1.json` records the failure; the file
+  was preserved. `selection_v2.json` explicitly excludes that complete file, with no repair or replacement.
+- `representative_snapshot_v2.json` / `coverage_v2.json`: 39 shards, 385,471 raw rows, 14 sources and
+  17 levels; 1,200 episode occurrences / 1,200 exact groups; 384,271 eligible one-frame transitions
+  (309,148 train / 75,123 validation). Coverage took about 3.05 s. All 23,025 observed world frames had
+  known, locked 16.667 ms steps. The snapshot remains an incomplete subset of the 1,903 listed files.
+- In this subset: flag-wall 6,799 / 384,271 (1.77%); platform-centre proximity 8,049 / 384,271 (2.09%);
+  computed nonzero wind 0 / 384,271 known contexts. These are input/label proxies, not gameplay capabilities
+  or proof that the whole archive lacks wind data. Validation has no examples for 1-1, 1-8 or 2-1; 1-2 has
+  zero training transitions and 1,199 validation transitions. This selection does not establish adequate
+  per-level or per-event coverage and is NOT automatically training-ready.
+
+**Data-quality limit measured before training:** the recorder can omit an agent's final next-state row when
+its last update ends a wave. Outcome evidence can then exist only in shard metadata. Coverage therefore
+reports raw `meta.status[agent]` outcomes, last-row status and terminal labels separately, without inventing
+the missing state/transition. In the 39-file subset metadata reports 30 finishes / 782 deaths, while eligible
+transitions contain 9 finish / 763 death labels: 40 terminal outcomes have no terminal row (21 finishes,
+19 deaths). An earlier separate 21-file planner snapshot had 20 metadata terminal outcomes and zero terminal
+last rows. This is a bounded recording-quality finding, not a proven explanation of all training failures;
+older multi-agent PPO recordings can have different terminal coverage. Existing collector/training behavior
+was not changed in this measurement step.
+
+At the time of this measurement, terminal recording was still an open next step; the subsequent new-capture
+fix is documented above and does not repair these old artifacts. Remaining decisions are to verify that fix
+in a seen-level collection run, decide the treatment of conflicting old traces, and fill the measured
+validation/event gaps before approving controlled training.
+No game connection, actual model training, model rollout or full-archive state fingerprint scan was run here.
+The reviewed artifacts under `runs/coverage_checks/` preserve the inventory, selection, exclusion and report
+provenance. CLI syntax can be inspected without a data scan with `python -m wm.coverage --help`.
+
+## Dataset snapshots and exact-trace separation (2026-11-11)
+
+New world-model training and offline evaluation CLI calls must explicitly choose `--manifest FILE` or
+`--legacy-split`. Legacy means historical global-shard-modulo behavior, labelled as such in new reports,
+checkpoint metadata and learner state; it does not establish independence. `agent.py --learn` similarly
+requires `--dataset-manifest FILE` or `--legacy-split` before attaching to the game and forwards that choice.
+Ordinary planner/PPO/inference behavior without learning is unchanged.
+
+`wm.dataset.Dataset` owns the versioned `trace-split-v1` protocol. A manifest freezes normalized source/shard
+identities and content hashes for each selected shard, world timeline and static level file. Consumers verify
+these at their loading boundary and decode the same checked bytes. Manifest creation requires an explicit
+maximum number of NEW shards to fingerprint; it never scans the entire archive implicitly. Coverage records
+selected/candidate counts and whether the LISTED sources were complete. Bounded/incomplete snapshots are
+explicit subsets, not a whole-archive audit. Excluded demo replay folders (1-16 and 4-6, per the user's existing
+preference) are rejected; ordinary non-demo gameplay on these levels remains allowed.
+
+Split membership belongs to each agent's complete exact state/action trace, not its shard number. Trace
+identity includes static semantic geometry and ordered frame/state/action fields; agent ID, wave ID and
+reward are excluded. Signed zero is canonicalized and non-finite physical states are rejected. Equal traces
+therefore stay together across waves/shards, even within mixed-agent crowd shards. This is NOT a guarantee
+against shared prefixes, near duplicates, correlated local transitions, shared-world/crowd effects, or unseen
+level leakage. Held-out LEVEL exclusions remain separate from trace validation.
+
+`wm.features`, `wm.train`, `wm.selfcorrect`, `wm.compare_steps`, `wm.evaluate`, and `wm.learner` use the same
+owner. Training masks (including normalizer, event weighting and step-k residual scaling) come from trace
+membership. Validation agents cannot enter self-correction or optimizer samples. Missing train/validation
+samples are an explicit error; strict mode never substitutes training rows for validation. Checkpoints record
+the manifest reference/hash/protocol, actual training/cycle counts and exact parent-checkpoint hash.
+
+Existing checkpoints are retained as legacy evidence. Attaching a new manifest never relabels their weights
+as newly separated training. Strict `--init`/evaluation requires the identical checkpoint manifest. A manifest
+extension is written to a NEW file, preserves old membership, and records its parent hash; it requires a fresh
+training experiment in this first version. New files do not enter an old snapshot. The strict learner runs
+one initial cycle (or one explicitly requested `--once` cycle) and then waits; extra files are pending, not
+training triggers. Its selected validation entry IDs (at most 40) are fixed in state. Existing unrelated output
+checkpoints are never overwritten by a new strict session.
+
+Strict step-4 training and `wm.compare_steps` position evaluation are supported. The older `wm.evaluate`
+event-report indexing and self-correction target generator only support step 1 in strict mode; other steps
+give explicit errors instead of mislabelled results. Guard/planning/reward code has not been changed.
+
+No new actual training or real-game evaluation was run for this step. Small synthetic tests replace fitting
+and model rollouts with probes. A separately bounded review snapshot can demonstrate duplicate grouping and
+missing-validation rejection; it is not automatically a training-ready dataset. Full-archive fingerprinting,
+coverage measurements and a new training experiment require a separate bounded measurement brief. CLI syntax
+can be inspected without starting training with `python -m wm.dataset --help` and `python -m wm.train --help`.
+
+## Current direction and first-life evaluation (2026-11-11)
+
+The user clarified the target: a world-model/planning agent that finishes a previously unseen level quickly
+on its first life, accepting a measured speed/risk trade-off. PPO is retained as an earlier method; replaying
+a successful route or searching by repeatedly playing the target level does not demonstrate this target.
+The older status summaries below describe earlier stages, not the acceptance criteria for this direction.
+
+The first implementation step adds `agent.py --eval-first LEVEL`, an opt-in evaluation protocol. It uses one
+planned agent, zero explore agents, a frozen checkpoint, and no persistent death/move/best-time file reads or
+writes. Training, data collection, demos, and real-game wave search are rejected. Observations from the SAME
+life remain available (e.g. hazard/platform velocity); no previous wave is used to predict the future. Normal
+planner and PPO behavior is unchanged when the flag is absent. Existing run evidence is never appended to or
+overwritten: the evaluation requires a new empty run folder.
+
+From `smbrl/`, with the game already on 1-18 (the user chooses the level):
+
+```powershell
+python agent.py --eval-first 1-18 --model runs/wm_step4/wm_model.pt --name first_eval_1-18_v1
+python -m plan.first_eval report runs/first_eval_1-18_v1
+```
+
+Use a fresh run name for a later experiment. The process stops after success, death, or the wave timeout.
+`run.json` records requested/effective configuration, the exact loaded checkpoint bytes' SHA256, checkpoint
+metadata, and source revision/dirty state. `evaluation.json` records validity separately from the outcome:
+success/death/timeout, or invalid/incomplete evidence. Frame 0, wave 1, the spawn, the confirmed fixed step,
+and contiguous frames are required. A manual stop/level change is incomplete; malformed data or a planning /
+script error is invalid. A timeout is not a death. Both game time and wall time are recorded, with planning
+costs: lockstep slow motion must not be confused with real-time speed. Only the first life is acted on; the
+existing go/next-frame-stop protocol releases the game without applying a second life's inputs.
+
+A declared held-out level is not proof that a checkpoint never trained on it. `training_overlap` is `seen`
+when the checkpoint lists the target in its data, otherwise `unknown`; the declared split is reported apart.
+Older multi-wave logs are not relabelled as genuine unseen-level evaluations. Current checkpoints lack a
+complete audited training lineage, so this step establishes an evaluation protocol, not a generalization result.
+
+Next steps, requiring separate reviewed briefs: audit data coverage and checkpoint lineage; evaluate multi-step
+physics and event prediction by situation; then simplify/compare planning rules and improve global route search
+before collecting targeted training data. No reward tuning, new planning algorithm, or training was added here.
+The protocol is checked with synthetic message-boundary tests, not by training a clone. **Measured live protocol
+check:** the user's `runs/first_eval_1-8_check01` completed a valid first-life success: 250 frames, 4.16675 game
+seconds, 8.99641 attempt wall seconds, and 46 decisions. States 0..249 were contiguous, no best route was used,
+no future frame came from a previous-wave recording, and no second-wave plan was made. The checkpoint had
+already seen 1-8, so this is a protocol check, not unseen-level performance or evidence of improved playing.
+**Still unverified:** a clean-detach acknowledgement (not logged), overlay appearance, and general success
+rates. The recorded stop behavior does not establish an acknowledged detach from the game.
+
 This document describes the project as it is: what it is for, what each part does and why it was built that
 way, what has been measured, what does not work, and where the code and ideas got tangled. Read it first
 before changing anything. Any agent working on this project gets this file as its briefing.

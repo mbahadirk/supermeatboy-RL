@@ -198,6 +198,24 @@ def test_runner_plays_a_recorded_wave(tmp_path):
     shard = np.load(next((run / "wm_data").glob("wave_*.npz")))
     meta = json.loads(str(shard["meta"]))
     assert meta["source"] == "planner" and meta["agent_sources"] == {"planner": [0, 1], "explore": []}
+    # Collector captures the native last-update death as a target, not a predicted point or another input.
+    rows = shard["rows"]
+    last0 = rows[rows["agent"] == 0][-1]
+    last1 = rows[rows["agent"] == 1][-1]
+    assert last0["frame"] == N_FRAMES and last0["status"] == 1 and last0["action"] == -1
+    assert [last0["x"], last0["y"]] == pytest.approx(end_xy, abs=1e-4)
+    assert np.isnan(last0["reward"])
+    assert last1["frame"] == DIE_AT and last1["status"] == 1     # early-dead agent is never extended
+    assert len(set(zip(rows["agent"].tolist(), rows["frame"].tolist()))) == len(rows)
+    assert [v["agent"] for v in meta["final_capture"]["appended"]] == [0]
+    assert meta["final_capture"]["skipped"] == [{"agent": 1, "reason": "already_terminal"}]
+    from wm.rollout import next_held
+    previous = rows[(rows["agent"] == 0) & (rows["frame"] == N_FRAMES - 1)][0]
+    assert last0["held"] == next_held(np.array([previous["held"]]), np.array([previous["action"]]),
+                                       np.array([previous["flags"]], np.int64))[0]
+    import gzip
+    world = json.load(gzip.open(next((run / "wm_data").glob("wave_*_world.json.gz")), "rt", encoding="utf-8"))
+    assert max(w["f"] for w in world) == N_FRAMES - 1
     # overlay: realgame.js 'path' payloads, small, well-formed
     over = [q["payload"] for q in r.script.posts if q["type"] == "path"]
     assert over and any(over)
@@ -241,6 +259,12 @@ def test_old_wave_end_without_final_states(tmp_path):
     end = [e for e in events if e["kind"] == "death" and e["agent"] == 0]
     assert len(end) == 1 and end[0]["estimated"]
     assert [e for e in events if e["kind"] == "wave"][-1]["estimated"] == 1
+    z = np.load(next((tmp_path / "run" / "wm_data").glob("wave_*.npz")))
+    rows, meta = z["rows"], json.loads(str(z["meta"]))
+    last = rows[rows["agent"] == 0][-1]
+    assert last["frame"] == N_FRAMES - 1 and last["status"] == 0   # telemetry's estimate is never stored as truth
+    assert not meta["final_capture"]["appended"]
+    assert {v["agent"]: v["reason"] for v in meta["final_capture"]["skipped"]}[0] == "missing_exact_final_state"
 
 
 def agent_mod():

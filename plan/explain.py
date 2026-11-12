@@ -122,6 +122,8 @@ class Plan:
     mode: str = "normal"                              # the planning mode that produced it (plan/planner.py MODES)
     best_route: dict | None = None                    # the run's best route matched here: {frame, dist, frames,
     #                                                   finish, used, why (when not used)} (plan.planner.BestRoute)
+    trial_frames: int = 0                             # mode "route-trial": frames played exactly, no new decision
+    #                                                   (plan.planner.RouteTrials, plan.commit.Committer.triggers)
 
     @property
     def name(self) -> str:

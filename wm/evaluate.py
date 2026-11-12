@@ -1,8 +1,12 @@
 """How the world model's predictions hold up over many steps (open loop, the agents' real actions).
 
-    python -m wm.evaluate runs/<run>/wm_data --model runs/wm_<name>/wm_model.pt [--horizon 32] [--starts 40]
+    python -m wm.evaluate --help
 
-From waves the model never trained on (every 5th recorded wave, as wm.train holds out), rollouts start at
+Choose --manifest FILE or explicitly --legacy-split. Strict evaluation requires the checkpoint's identical
+trace-split-v1 manifest and filters agents by its validation membership. The event report supports one-frame
+models; strict step-k models are rejected (use wm.compare_steps for their position errors).
+
+In legacy mode waves are selected by the historical global-modulo rule, not proof of a clean split. Rollouts start at
 --starts frames per wave for every agent alive there and run --horizon steps with the actions the agents
 really took. Reported:
   - position / velocity error after 1, 2, 4, 8, 16, 32 steps, with the real time steps ("known dt") and with
@@ -26,7 +30,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from wm.buffer import load_shards, load_level, STATUS_DEAD   # noqa: E402
-from wm.features import LevelGeom, AIR                       # noqa: E402
+from wm.features import LevelGeom, AIR, model_layout         # noqa: E402
 from wm.model import WorldModel                               # noqa: E402
 from wm.rollout import rollout, World                         # noqa: E402
 from wm.train import auc                                      # noqa: E402
@@ -148,7 +152,9 @@ def summarise(cases, H) -> str:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("data", nargs="+")
+    ap.add_argument("data", nargs="*")
+    from wm.dataset import add_cli, cli_dataset
+    add_cli(ap)
     ap.add_argument("--model", required=True)
     ap.add_argument("--horizon", type=int, default=32)
     ap.add_argument("--starts", type=int, default=40, help="start frames per held-out wave")
@@ -157,22 +163,37 @@ def main():
     import torch
     torch.set_num_threads(args.threads)
     model = WorldModel.load(args.model).eval()
+    dataset = cli_dataset(args, model)
+    if dataset is not None:
+        args.data = dataset.source_list(args.data)
+        if model.step != 1:
+            raise ValueError("wm.evaluate's event report supports one-frame models; use wm.compare_steps "
+                             "with --manifest for step-k position errors")
+    elif not args.data:
+        ap.error("--legacy-split needs data folders")
     rng = np.random.default_rng(0)
+    protocol = model_layout(model).protocol          # the checkpoint's input encoding
     cases, shard_no, levels = [], 0, set()
     for d in args.data:
         geoms = {}
-        for meta, rows, world in load_shards(d):
+        for meta, rows, world in (dataset.iter_shards(d, split="validation") if dataset is not None else load_shards(d)):
             shard_no += 1
-            if shard_no % 5:                         # the waves wm.train held out
+            if dataset is None and shard_no % 5:     # legacy only
                 continue
             lv = meta.get("level")
             if lv not in geoms:
-                geoms[lv] = LevelGeom(*load_level(d, lv))
+                geoms[lv] = LevelGeom(*(dataset.level(d, lv) if dataset is not None else load_level(d, lv)),
+                                      protocol=protocol)
             c = shard_cases(meta, rows, world, geoms[lv], model, args.horizon, args.starts, rng)
             cases += c
             levels.add(lv)
             print(f"wave {shard_no} ({lv}): {sum(len(x['air0']) for x in c)} rollouts", flush=True)
-    text = (f"# World model: multi-step rollouts\n\nModel {args.model}; held-out waves of {', '.join(sorted(levels))}; "
+    protocol = dataset.reference() if dataset is not None else {"protocol": "legacy-global-mod5", "sha256": "none"}
+    from wm.protocol import feature_usage
+    features = feature_usage(model.info)
+    text = (f"# World model: multi-step rollouts\n\nDataset {protocol['protocol']}; manifest {protocol['sha256']}\n\n"
+            f"Features active: {features['active']}; checkpoint trained: {features['checkpoint_trained']}.\n\n"
+            f"Model {args.model}; held-out waves of {', '.join(sorted(levels))}; "
             f"{sum(len(c['air0']) for c in cases)} rollouts of {args.horizon} steps with the agents' real actions. "
             f"Hazards and platforms at their recorded positions.\n\n") + summarise(cases, args.horizon)
     print(text)

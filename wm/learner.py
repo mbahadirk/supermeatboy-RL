@@ -1,8 +1,15 @@
 """Train mode's background learner: fine-tunes the world model on the data as it grows and publishes better models.
 
-    python -m wm.learner --init runs/wm_step4/wm_model.pt --out runs/wm_live [--min-shards 20] [--once]
+    python -m wm.learner --help
 
-agent.py --learn starts it as a child process (and stops it on exit). Data: every runs/*/wm_data folder with the
+Choose --manifest FILE or explicitly --legacy-split. Strict mode requires a checkpoint from the SAME
+trace-split-v1 manifest. It runs one initial cycle, then waits; --once explicitly requests one cycle.
+New files remain pending outside the snapshot and never trigger training. A new/extended manifest is a new
+experiment requiring fresh training; extension fine-tuning is not supported. Validation entry IDs are frozen
+in learner.json (at most 40 entries), with per-agent membership supplied by the manifest.
+
+agent.py --learn requires --dataset-manifest FILE or --legacy-split and forwards the choice. The following
+automatic data-discovery description applies ONLY to explicit legacy mode: every runs/*/wm_data folder with the
 time-step lock (the model's own training folders first, in its order, then new ones by name; a folder is locked
 when its first shard's world frames all step 16.667 ms), as wm.train: held-out levels never (eval_levels.json),
 the user-excluded demos never (plan.demos.USER_EXCLUDED: their replay folders and records), every 5th shard held
@@ -120,8 +127,16 @@ def due(state: dict, counts: dict, n_self: int, min_shards: int) -> tuple[bool, 
     return (new >= min_shards or new_self > 0), new, new_self
 
 
-def eval_waves(model, n: int = EVAL_WAVES) -> list:
+def eval_waves(model, n: int = EVAL_WAVES, dataset=None) -> list:
     """n of the model's held-out waves (wm.compare_steps.held_out), evenly spread, held-out levels left out."""
+    if dataset is not None:
+        dataset.require_model(model)
+        waves = [e["id"] for e in dataset.entries if any(a["split"] == "validation" for a in e["agents"].values())]
+        if not waves or not any(a["split"] == "train" for e in dataset.entries for a in e["agents"].values()):
+            raise ValueError("manifest needs both training and validation traces")
+        if len(waves) > n:
+            waves = [waves[i] for i in np.linspace(0, len(waves) - 1, n).round().astype(int)]
+        return waves
     from wm.buffer import eval_levels, shard_files
     from wm.compare_steps import held_out
     held_lv = eval_levels()
@@ -138,10 +153,11 @@ def eval_waves(model, n: int = EVAL_WAVES) -> list:
     return waves
 
 
-def errors(model, waves: list) -> dict:
+def errors(model, waves: list, dataset=None) -> dict:
     """{horizon: [median, 90%, n]} of the open-loop position error on the waves (wm.compare_steps.wave_errors)."""
     from wm.compare_steps import wave_errors
-    err = wave_errors([model], [(_norm(d), k) for d, k in waves], HORIZONS, EVAL_STARTS)[0]
+    err = wave_errors([model], waves, HORIZONS, EVAL_STARTS, dataset=dataset)[0] if dataset is not None else \
+        wave_errors([model], [(_norm(d), k) for d, k in waves], HORIZONS, EVAL_STARTS)[0]
     return {str(h): [round(float(np.median(e)), 3), round(float(np.percentile(e, 90)), 3), len(e)] if len(e)
             else [None, None, 0] for h, e in err.items()}
 
@@ -158,15 +174,18 @@ def not_worse(cand: dict, pub: dict) -> bool:
 def fine_tune(model, folders: list, demo_paths: list, args, log=print):
     """One fine-tuning pass of `model` (in place) on the folders' training shards; returns transitions used."""
     from wm.buffer import eval_levels
-    from wm.features import build, RES_SCALE
+    from wm.features import build, model_layout, model_prior, RES_SCALE
     from wm.train import all_demos, demo_oversample, fit
     t0 = time.time()
+    from wm.dataset import sample_validation
+    dataset = getattr(args, "dataset", None)
     d = build(folders, max_samples=args.max_samples, log=lambda *a: None, seed=args.seed, frac=args.sample_frac,
-              exclude=eval_levels(), step=model.step, demos=all_demos(demo_paths, folders))
+              exclude=eval_levels(), step=model.step, demos=all_demos(demo_paths, folders), dataset=dataset,
+              protocol=model_layout(model).protocol, prior_protocol=model_prior(model))
     if model.step > 1:                       # the targets in the model's own scale
         d["yc"] = (d["yc"] * RES_SCALE / model.res_scale).astype(np.float32)
         d["wc"] = d["full"].astype(np.float32)
-    val = d["shard"] % 5 == 0
+    val = sample_validation(d, strict=True) if dataset is not None else d["shard"] % 5 == 0
     tr_idx, va_idx = np.nonzero(~val)[0], np.nonzero(val)[0]
     fit_idx, real = demo_oversample(tr_idx, d["demo"], args.demo_share)
     log(f"[learner] {len(d['X'])} transitions ({len(tr_idx)} train), demos {real:.1%} of the samples "
@@ -176,6 +195,12 @@ def fine_tune(model, folders: list, demo_paths: list, args, log=print):
     fit(model, ts, d, va_idx if len(va_idx) else tr_idx[:1000], args.epochs, args.lr,
         max(1, min(args.batch, len(fit_idx))), t0)
     model.eval()
+    model.cycle_stats = {"transitions": len(d["X"]), "train_transitions": len(tr_idx),
+                         "validation_transitions": len(va_idx), "fit_samples": len(fit_idx),
+                         "demo_samples": int(d["demo"][fit_idx].sum()), "epochs": args.epochs,
+                         "sample_frac": args.sample_frac, "max_samples": args.max_samples,
+                         "batch": args.batch, "seed": args.seed, "lr": args.lr,
+                         "levels": sorted(set(d["level"]))}
     return len(d["X"])
 
 
@@ -203,17 +228,34 @@ def cycle(args, state: dict, folders: list, counts: dict, n_self: int) -> dict:
     from wm.model import WorldModel
     t0 = time.time()
     base = _norm(state["base"])
-    model = WorldModel.load(base)
+    from wm.dataset import load_model, LEGACY
+    model, parent = load_model(base)
+    dataset = getattr(args, "dataset", None)
+    if dataset is not None:
+        dataset.require_model(model)
     demo_paths = [p for p in (args.demos, args.self_demos) if p and os.path.exists(p)]
     n = fine_tune(model, folders, demo_paths, args)
-    cand = errors(model, state["eval_waves"])
+    cand = errors(model, state["eval_waves"], dataset=dataset) if dataset is not None else errors(model, state["eval_waves"])
     pub = state["errors"]
     ok = not_worse(cand, pub)
     v = int(state.get("version", 0))
-    new = dict(state, shards=counts, self_demos=n_self, cycles=int(state.get("cycles", 0)) + 1)
+    new = dict(state, shards=counts, self_demos=n_self, cycles=int(state.get("cycles", 0)) + 1,
+               dataset=dataset.reference() if dataset is not None else {"protocol": LEGACY})
     if ok:
         v += 1
+        stats = getattr(model, "cycle_stats", {})
+        from wm.protocol import feature_usage
+        features = feature_usage(model.info)                 # the encoding fine-tuning kept (the parent's)
+        parent_features = features["checkpoint_trained"]
         info = dict(model.info or {}, data=folders,
+                    active_feature_protocol=features["active"], parent_feature_protocol=parent_features,
+                    feature_protocol=features["active"] if stats.get("epochs", 0) > 0 and
+                                     stats.get("fit_samples", 0) > 0 else parent_features,
+                    dataset=dataset.reference() if dataset is not None else {"protocol": LEGACY},
+                    parent_checkpoint=parent,
+                    train=stats.get("train_transitions"), held_out=stats.get("validation_transitions"),
+                    levels=stats.get("levels", []), sample_frac=stats.get("sample_frac"),
+                    demos=demo_paths, demo_share=getattr(args, "demo_share", None), training=stats,
                     learner={"version": v, "parent": _rel(base), "errors": cand, "parent_errors": pub,
                              "time": time.strftime("%Y-%m-%d %H:%M:%S")})
         new.update(version=v, errors=cand, base=_rel(publish(model, info, args.out)))
@@ -235,6 +277,8 @@ def set_low_priority():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    from wm.dataset import add_cli, cli_dataset, load_model, LEGACY
+    add_cli(ap)
     ap.add_argument("--init", required=True, help="the model to start from (when --out has no newer published one)")
     ap.add_argument("--out", default=LIVE)
     ap.add_argument("--min-shards", type=int, default=20, help="new shards that start a cycle (or a new self-demo)")
@@ -257,29 +301,45 @@ def main(argv=None):
     import torch
     torch.set_num_threads(max(1, args.threads))
     from wm.model import WorldModel
+    initial, _ = load_model(args.init)
+    args.dataset = dataset = cli_dataset(args, initial)
     os.makedirs(args.out, exist_ok=True)
     spath = os.path.join(args.out, "learner.json")
     state = read_json(spath, {})
+    if dataset is not None and not state and set(os.listdir(args.out)) - {"learner_output.txt"}:
+        raise ValueError("strict learner needs a new empty output folder or compatible snapshot state")
+    if dataset is not None and state and state.get("dataset", {}).get("sha256") != dataset.hash:
+        raise ValueError("learner state belongs to a different or legacy snapshot; use a new output folder")
     pub_path = os.path.join(args.out, "wm_model.pt")
     same_init = state.get("init") == _rel(args.init) and state.get("base") == state.get("init")
     newer_pub = os.path.exists(pub_path) and os.path.getmtime(pub_path) >= os.path.getmtime(args.init)
     keep = bool(state.get("base") and state.get("eval_waves") and state.get("errors")
                 and os.path.exists(_norm(state["base"])) and (same_init or newer_pub))
     if not keep:                             # start (again) from --init: its held-out waves and errors; the
-        init = WorldModel.load(args.init).eval()     # version number keeps counting
+        init = initial.eval()                    # version number keeps counting
         state = {"init": _rel(args.init), "base": _rel(args.init), "version": int(state.get("version", 0)),
-                 "eval_waves": eval_waves(init),
-                 "shards": shard_counts([_rel(_norm(d)) for d in init.info.get("data", [])])}
-        state["errors"] = errors(init, state["eval_waves"])
+                 "eval_waves": eval_waves(init, dataset=dataset),
+                 "shards": shard_counts([_rel(_norm(d)) for d in init.info.get("data", [])]),
+                 "dataset": dataset.reference() if dataset is not None else {"protocol": LEGACY}}
+        state["errors"] = errors(init, state["eval_waves"], dataset=dataset) if dataset is not None else errors(init, state["eval_waves"])
         atomic_json(spath, state)
         log_line(args.out, f"start from {_rel(args.init)}: {len(state['eval_waves'])} evaluation waves, error "
                            f"median/90% {fmt(state['errors'])}")
-    first = [_rel(_norm(d)) for d in WorldModel.load(_norm(state["base"])).info.get("data", [])]
+    resumed = WorldModel.load(_norm(state["base"]))
+    if dataset is not None:
+        dataset.require_model(resumed)
+    first = [_rel(_norm(d)) for d in resumed.info.get("data", [])]
     while True:
-        folders = discover(first)
+        folders = dataset.sources if dataset is not None else discover(first)
         counts = shard_counts(folders)
-        n_self = len(read_json(args.self_demos, []))
-        go, new, new_self = due(state, counts, n_self, args.min_shards)
+        n_self = 0 if dataset is not None else len(read_json(args.self_demos, []))
+        if dataset is not None:
+            pending = sum(counts.values()) - len(dataset.entries)
+            go, new, new_self = state.get("cycles", 0) == 0, 0, 0
+            print(f"[learner] immutable snapshot: {max(0, pending)} files pending outside it; no automatic growth",
+                  flush=True)
+        else:
+            go, new, new_self = due(state, counts, n_self, args.min_shards)
         if go or args.once:
             print(f"[learner] cycle: {new} new shards, {new_self} new self-demos", flush=True)
             state = cycle(args, state, folders, counts, n_self)

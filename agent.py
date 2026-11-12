@@ -71,7 +71,11 @@ and publishes runs/wm_live/wm_model.pt only when its error at +16 and +48 frames
 learner.log). Between waves (never mid-wave) a newer published model replaces the planner's: "[learn] model v<N>
 loaded (+16 error a -> b)". A planned agent's new best time (lock on, not a held-out level) appends its wave rows
 to runs/demos/self.json (--self-demos), which the learner trains on as a demo.
-    python smbrl/agent.py --learn
+    python smbrl/agent.py --learn --legacy-split
+
+The command above explicitly selects historical training compatibility. --learn without a split choice is
+rejected before attaching. --dataset-manifest FILE selects a frozen trace-split-v1 learner instead; its model
+must already belong to that exact snapshot. A strict learner does not absorb new gameplay automatically.
 Wave search (--search, --search-agents N, default 50; plan/search.py, PLAN_GAME_SEARCH.md section 5): no planner,
 no model ("none (search)" in the level event); the game is the simulator. Agent 0 replays the current best node
 (verification), the others replay picked nodes' actions exactly from the wave start and branch (library move chains,
@@ -118,14 +122,16 @@ from game.level import Level, box_base, box_ids, hazard_boxes, identify_level, H
 from mpc.candidates import ACTIONS                                       # noqa: E402
 from mpc.future import FutureWorld                                       # noqa: E402
 from plan import safety as S                                             # noqa: E402
-from plan.commit import Committer, REPLAN_DEFAULT, TUBE_DEFAULT, kind_of  # noqa: E402
+from plan.commit import Committer, MIN_TUBE, REPLAN_DEFAULT, TUBE_DEFAULT, kind_of  # noqa: E402
+from levels_smb import a_plus_time                                       # noqa: E402
 from plan.moves import LIBRARY                                           # noqa: E402
-from plan.planner import (EXPLORE_EVERY, HYSTERESIS_FRAMES, MoveMemory, Planner, future_inputs,   # noqa: E402
-                          state_row)
+from plan.planner import (EXPLORE_EVERY, HYSTERESIS_FRAMES, TRIAL_GAIN, MoveMemory, Planner,   # noqa: E402
+                          future_inputs, state_row)
 from plan.progress import ProgressField                                  # noqa: E402
 from shutdown import Shutdown, bounded                                   # noqa: E402
 from viz import telemetry as T                                           # noqa: E402
 from wm.rollout import next_held                                         # noqa: E402
+from wm.protocol import feature_usage                                  # noqa: E402
 
 JS = os.path.join(HERE, "realgame.js")
 GAME_EXE = "SuperMeatBoy.exe"
@@ -343,6 +349,8 @@ class BestTimes:
         self.data, self.ok = self._load()
 
     def _load(self):
+        if self.path is None:                 # isolated evaluation: no persistent best-time reads or writes
+            return {}, True
         if not os.path.exists(self.path):
             return {}, True
         try:
@@ -366,7 +374,7 @@ class BestTimes:
 
     def offer(self, level: str, source: str, rec: dict) -> bool:
         """rec becomes the level's best for source if it is faster; True when it did (and was saved)."""
-        if not self.ok:
+        if self.path is None or not self.ok:
             return False
         d, self.ok = self._load()
         if not self.ok:
@@ -426,9 +434,15 @@ def best_text(seconds, best: dict | None, new_best: bool, lock) -> str:
 
 class Runner:
     def __init__(self, args, telemetry=None):
+        from plan.first_eval import validate_args
+        validate_args(args)
         self.args = args
         self.run_dir = os.path.join(HERE, "runs", args.name)
+        first = bool(getattr(args, "eval_first", None))
+        if first and os.path.exists(self.run_dir) and os.listdir(self.run_dir):
+            raise SystemExit("--eval-first needs a new empty run folder (existing evidence is never appended)")
         os.makedirs(self.run_dir, exist_ok=True)
+        self.evaluation = None
         self.demo = getattr(args, "demo_play", None)       # plan.demos.DemoPlay (--demo / --demo-level)
         self.demo_fin, self.demo_trail = None, []
         if self.demo is not None:
@@ -459,7 +473,14 @@ class Runner:
             from wm.model import WorldModel
             torch.set_num_threads(max(1, int(args.threads)))
             path = args.model if os.path.exists(args.model) else os.path.join(HERE, args.model)
-            self.model = WorldModel.load(path).eval()
+            if first:
+                from plan.first_eval import load_checkpoint, FirstEvaluation
+                from wm.buffer import eval_levels
+                self.model, identity = load_checkpoint(path)
+                self.evaluation = FirstEvaluation(self.run_dir, args, identity,
+                                                  args.eval_first in eval_levels(), HERE)
+            else:
+                self.model = WorldModel.load(path).eval()
             self.model_path = path
         self.learn = bool(getattr(args, "learn", False)) and self.model is not None
         self.learner = None                     # --learn: the wm.learner child process
@@ -467,16 +488,16 @@ class Runner:
         self.commit = Committer(self.replan, args.tube, args.triggers == "on",
                                 step=getattr(self.model, "step", 1) if self.model is not None else 1)
         self.deaths_path = args.death_memory
-        self.deaths = S.DeathMemory.load(self.deaths_path)
+        self.deaths = S.DeathMemory() if first else S.DeathMemory.load(self.deaths_path)
         mm = getattr(args, "move_memory", DEFAULT_MOVES)
-        self.moves = None if mm is None or str(mm).lower() == "none" else MoveMemory.load(mm)
+        self.moves = None if first or mm is None or str(mm).lower() == "none" else MoveMemory.load(mm)
         self.f_plans = open(os.path.join(self.run_dir, "plans.jsonl"), "a", encoding="utf-8")
         self.f_events = open(os.path.join(self.run_dir, "events.jsonl"), "a", encoding="utf-8")
         self.f_states = open(os.path.join(self.run_dir, "states.jsonl"), "a", encoding="utf-8")
         self.f_times = open(os.path.join(self.run_dir, "times.jsonl"), "a", encoding="utf-8")
         self.f_search = open(os.path.join(self.run_dir, "search.jsonl"), "a", encoding="utf-8") \
             if self.search is not None else None
-        self.best = BestTimes(args.best_times)
+        self.best = BestTimes(None if first else args.best_times)
         self.find_save = locate_save            # S: where the game's save is (tests replace it)
         self.backup_root = BACKUPS
         self.save_backup = None                 # the folder the save was copied to (once per run), None not yet
@@ -579,10 +600,16 @@ class Runner:
 
     def on_info(self, info: dict, tiles: bytes):
         if info["W"] * info["H"] == 0 or len(tiles or b"") != info["W"] * info["H"] * 4:
+            if self.evaluation is not None:
+                self.evaluation.invalidate("invalid level data")
+                self.stopping = True
             print(f"[level] ignoring invalid level data {info['W']}x{info['H']}", flush=True)
             return
         if info["name"] in (None, "unknown"):
             info["name"] = identify_level(info, tiles) or "unknown"
+        if self.evaluation is not None and not self.evaluation.info(info["name"], info["agents"]):
+            self.stopping = True
+            return
         if self.demo is not None and info["name"] != self.demo.demo["level"]:
             print(f"[demo] refused: the game has level {info['name']} loaded, the demo is for "
                   f"{self.demo.demo['level']} (enter {self.demo.demo['level']} and start again); stopping", flush=True)
@@ -592,7 +619,7 @@ class Runner:
         self.level = lv = Level(info, tiles)
         self.cost.reset()
         from wm.buffer import eval_levels
-        self.protected = info["name"] in eval_levels()
+        self.protected = self.evaluation is not None or info["name"] in eval_levels()
         if self.wm and not self.protected:
             self.wm.level(lv, info)
         self.fw.new_level()
@@ -608,10 +635,13 @@ class Runner:
               + (f"agent best {float(best['seconds']):.2f} s; " if best and best.get("seconds") is not None
                  else "no agent best yet; ")
               + (f"kill box x {kb[0]:.0f}..{kb[1]:.0f}, y {kb[2]:.0f}..{kb[3]:.0f}" if kb else "no kill box")
-              + (" - held-out evaluation level: no world-model data, no death memory" if self.protected else ""),
+              + (" - first-life evaluation: no training or persistent memories" if self.evaluation is not None else
+                 (" - held-out evaluation level: no world-model data, no death memory" if self.protected else "")),
               flush=True)
         self.event("level", None, name=lv.name, W=lv.W, H=lv.H, kill_box=list(kb) if kb else None,
                    protected=self.protected, agents=info["agents"],
+                   features=feature_usage(self.model.info)
+                            if self.model is not None else None,
                    tube=self.commit.tube.summary() if self.commit.on else None,
                    model=self.model_path if self.model is not None else ("none (search)" if self.search else None))
         if self.search is not None:
@@ -679,7 +709,10 @@ class Runner:
             if self.planner is None:
                 self.planner = Planner(self.model, lv, field, budget_ms=self.args.budget_ms,
                                        hysteresis=self.args.hysteresis, moves=self.moves,
-                                       modes=self.args.modes == "on")
+                                       modes=self.args.modes == "on",
+                                       route_trial_gain=getattr(self.args, "route_trial_gain", TRIAL_GAIN))
+                cm = self.commit                    # route trials: deviation = the surprise trigger's tube
+                self.planner.trial_tube = lambda k: max(cm.tube_factor * cm.tube.at(k), MIN_TUBE)
             elif self.planner_level is not lv:
                 self.planner.set_level(lv, field)
             else:
@@ -705,6 +738,12 @@ class Runner:
     def on_frame(self, m: dict, data=None) -> dict:
         lv, states = self.level, m["s"]
         n = len(states)
+        if self.evaluation is not None:
+            if self.stopping or lv is None or not self.evaluation.observe(m, lv.spawn, self.lock):
+                if lv is None and self.evaluation.result is None:
+                    self.evaluation.invalidate("frame arrived without the target level")
+                self.stopping = True
+                return {"a": [NOOP] * n, "leader": 0, "stop": True}
         if lv is None:
             return {"a": [NOOP] * n, "leader": 0}
         frame = int(m["frame"])
@@ -747,7 +786,8 @@ class Runner:
             pl = self.planner
         dt = float(m.get("dt") or 16.667)
         self.dt_ms = dt
-        self.fw.observe(frame, m.get("hz", []), m.get("pf"), m.get("sh", []), lv.hz_keep, lv.fans, dt)
+        self.fw.observe(frame, m.get("hz", []), m.get("pf"), m.get("sh", []), lv.hz_keep, lv.fans, dt,
+                        terrain=pl.terrain if pl is not None else None)     # live tiles: where shots stop
         if self.wm and not self.protected:
             C.go("wm_data")
             self.wm.frame(m, list(lv.hz_ids), list(lv.hz_keep))
@@ -821,10 +861,17 @@ class Runner:
                         import traceback
                         traceback.print_exc()
                     self.event("plan error", frame, agent=i, error=f"{type(e).__name__}: {e}")
+                    if self.evaluation is not None:
+                        self.evaluation.invalidate(f"planner error: {type(e).__name__}: {e}")
+                        self.stopping = True
+                        return {"a": [NOOP] * n, "leader": 0, "stop": True}
                     continue
                 self.cur_plan[i] = plan
                 self.commit.decided(i, plan, frame, fboxes, pl)
                 self.on_plan(plan, s, trig)
+                ev = getattr(plan, "route_trial", None)
+                if ev:                                  # RouteTrials: a better plan than the best route, tried once
+                    self.event(ev["kind"], frame, **{a: b for a, b in ev.items() if a not in ("kind", "frame")})
         for i in live_plan:
             p = self.cur_plan.get(i)
             k = frame - p.frame if p is not None else -1
@@ -1004,6 +1051,9 @@ class Runner:
                 self.event("best route", int(finish_frame), agent=int(i), frames=frames, seconds=seconds)
             if r["failures_cleared"]:
                 self.event("forgiven", int(finish_frame), agent=int(i), failures=r["failures_cleared"])
+            ev = r.get("route_trial")
+            if ev:
+                self.event(ev["kind"], int(finish_frame), **{a: b for a, b in ev.items() if a not in ("kind", "frame")})
         new = False
         if self.lock is True and lv is not None and self.demo is None:
             new = self.best.offer(lv, source, {"seconds": seconds, "frames": frames, "run": self.args.name,
@@ -1015,9 +1065,13 @@ class Runner:
                 if self.learn and self.wm is not None and not self.protected:
                     self.add_self_demo(i, int(finish_frame), lv, seconds)
             best = self.best.best(lv, "planned") if lv is not None else None
+            par = a_plus_time(lv)                      # the game's A+ time: the target (levels_smb)
             self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds,
                        dt_ms=rec["dt_ms"], lock=self.lock, best=float(best["seconds"]) if best else None,
-                       new_best=new)
+                       new_best=new, a_plus_seconds=par, a_plus=None if par is None else seconds <= par)
+            if par is not None:
+                print(f"[finish] {lv} wave {self.wave_no}: {seconds:.2f} s, A+ {par:g} s: "
+                      f"{'yes' if seconds <= par else f'no (+{seconds - par:.2f} s)'}", flush=True)
         elif search:
             best = self.best.best(lv, "search") if lv is not None else None
             self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds,
@@ -1119,7 +1173,7 @@ class Runner:
     def on_wave_end(self, m: dict):
         lv = self.level
         if self.wm and not self.protected:
-            self.wm.wave_end(m["wave"], m)
+            self.wm.wave_end(m["wave"], m, held=list(self.held))
         self.wave_no = int(m.get("wave", self.wave_no))
         status = m.get("status", [])
         frame = int(m.get("frame", 0))
@@ -1231,7 +1285,8 @@ class Runner:
             self.demo.wave_done()
         if cost is not None:
             print(self.cost.text(cost), flush=True)
-        fut = self.fw.new_wave()                     # the hazard recording: what this wave used and added
+        fut = self.fw.new_wave() if self.evaluation is None else {
+            "frames": len(self.fw.cur), "recording": 0, "trusted": None, "mismatch": None, "extended": 0}
         self.event("wave", frame, **(cost or {}), why=m.get("why"), frames=frame, future=fut,
                    **{k: v for k, v in st.items() if k not in ("ms", "gaps", "check_s")},
                    ms_median=float(np.median(ms)) if ms is not None else None,
@@ -1241,6 +1296,14 @@ class Runner:
                    new_best=self.new_best, lock=self.lock,
                    **({"replay_route": bool(srec.get("replay")), "search_finish_s": min(self.fin["search"])
                        if self.fin["search"] else None} if srec is not None else {}))
+        if self.evaluation is not None:
+            self.evaluation.finish(m, self.lock, metrics={"decisions": st["decisions"],
+                                   "planning_ms_median": float(np.median(ms)) if ms is not None else None,
+                                   "planning_ms_95": float(np.percentile(ms, 95)) if ms is not None else None,
+                                   "cost": cost})
+            self.stopping = True
+            self.flush()
+            return                              # never promote this life's recording or start another plan
         if self.moves is not None and self.moves.dirty:
             try:
                 self.moves.save()
@@ -1249,7 +1312,9 @@ class Runner:
         if self.planner is not None:
             if self.commit.on:
                 self.commit.tube.add(self.planner.surprise.err)     # the run's followed errors, for the tube
-            self.planner.new_wave()                 # also clears the surprise check's predictions and errors
+            for ev in self.planner.new_wave():      # also clears the surprise check's predictions and errors
+                self.event(ev["kind"], ev.get("end_frame", ev.get("frame")),
+                           **{a: b for a, b in ev.items() if a not in ("kind", "frame")})
         if lv is not None and self.field_dirty and self.rebuilds < FIELD_REBUILDS:
             self.rebuilds += 1
             self.build_field(f"rebuild {self.rebuilds}/{FIELD_REBUILDS}: moving hazards / kill box / platforms")
@@ -1263,6 +1328,9 @@ class Runner:
     # ---- frida -------------------------------------------------------------------------------------------------
     def on_message(self, msg, data):
         if msg["type"] == "error":
+            if self.evaluation is not None:
+                self.evaluation.invalidate("game script error: " + str(msg.get("description")))
+                self.stopping = True
             print("[script error]", msg.get("description"), msg.get("stack", ""), flush=True)
             return
         p = msg["payload"]
@@ -1278,6 +1346,9 @@ class Runner:
             elif ev == "wave_end":
                 self.on_wave_end(p)
             elif ev == "level":
+                if self.evaluation is not None and self.evaluation.info_seen:
+                    self.evaluation.interrupt("level changed before the attempt completed")
+                    self.stopping = True
                 print(f"[game] level {p['name']}", flush=True)
                 if self.wm is not None:
                     self.wm.cut("level change")     # the wave in progress is kept as a partial shard
@@ -1287,10 +1358,17 @@ class Runner:
                 if self.search is not None:
                     self.search.abort_wave()
             elif ev == "save":
-                self.on_save(p.get("level"))
+                if self.evaluation is not None:
+                    self.evaluation.interrupt("manual level finish requested")
+                    self.stopping = True
+                else:
+                    self.on_save(p.get("level"))
             elif ev == "stopped":
                 self.stopped.set()
             elif ev == "error":
+                if self.evaluation is not None:
+                    self.evaluation.invalidate("game error: " + str(p.get("msg")))
+                    self.stopping = True
                 print(f"[game error] {p.get('msg')}", flush=True)
                 if "time step lock" in str(p.get("msg", "")):
                     print("the time step could not be locked: the planner needs it (it assumes every future step is "
@@ -1311,6 +1389,9 @@ class Runner:
         except Exception:  # never leave the game waiting
             import traceback
             traceback.print_exc()
+            if self.evaluation is not None:
+                self.evaluation.invalidate("runner failed while handling " + str(ev))
+                self.stopping = True
             reply = None
         if ev in ("info", "wave_end"):          # the game waits for this between waves / at the level start
             go = {"agents": self.n_total}
@@ -1382,6 +1463,9 @@ class Runner:
             mt = os.path.getmtime(p)
             from wm.model import WorldModel
             m = WorldModel.load(p).eval()
+            if getattr(self.args, "dataset_manifest", None):
+                from wm.dataset import Dataset
+                Dataset.load(self.args.dataset_manifest).require_model(m)
         except (OSError, RuntimeError, KeyError, ValueError) as e:
             print(f"[learn] could not load {p}: {e}", flush=True)
             return
@@ -1389,6 +1473,16 @@ class Runner:
         if m.step != self.model.step or len(m.members) != len(self.model.members):
             print(f"[learn] {p}: step {m.step} / {len(m.members)} members, the planner has {self.model.step} / "
                   f"{len(self.model.members)}: not loaded", flush=True)
+            return
+        from wm.features import model_layout
+        try:
+            same_inputs = model_layout(m) == model_layout(self.model)     # the planner's tile encoding stays
+        except ValueError as e:
+            print(f"[learn] {p}: {e}: not loaded", flush=True)
+            return
+        if not same_inputs:
+            print(f"[learn] {p}: feature protocol {model_layout(m).protocol}, the planner uses "
+                  f"{model_layout(self.model).protocol}: not loaded", flush=True)
             return
         info = (m.info or {}).get("learner", {})
         old = (info.get("parent_errors") or {}).get("16", [None])[0]
@@ -1402,14 +1496,19 @@ class Runner:
     def start_learner(self):
         """wm.learner as a child (below-normal priority), from the default model unless --live-dir has a newer one."""
         import subprocess
+        validate_learning_args(self.args)
         live = os.path.join(self.args.live_dir, "wm_model.pt")
         newer = os.path.exists(live) and os.path.getmtime(live) > os.path.getmtime(self.model_path)
         init = live if newer else self.model_path
+        if self.args.dataset_manifest:
+            from wm.dataset import Dataset, load_model
+            Dataset.load(self.args.dataset_manifest).require_model(load_model(init)[0])
         os.makedirs(self.args.live_dir, exist_ok=True)
         out = open(os.path.join(self.args.live_dir, "learner_output.txt"), "a", encoding="utf-8")
         flags = 0x4000 if sys.platform == "win32" else 0          # BELOW_NORMAL_PRIORITY_CLASS
+        split = ["--manifest", self.args.dataset_manifest] if self.args.dataset_manifest else ["--legacy-split"]
         self.learner = subprocess.Popen([sys.executable, "-m", "wm.learner", "--init", init, "--out",
-                                         self.args.live_dir, "--self-demos", self.args.self_demos],
+                                         self.args.live_dir, "--self-demos", self.args.self_demos, *split],
                                         cwd=HERE, stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
         out.close()
         print(f"[learn] learner started (pid {self.learner.pid}, from {init}; log "
@@ -1431,6 +1530,8 @@ class Runner:
 
     def close(self):
         self.stop_learner()
+        if self.evaluation is not None:
+            self.evaluation.interrupt("run stopped before the first life completed")
         if self.wm is not None:
             try:
                 self.wm.cut("stop")                 # Ctrl+C / STOP: the wave in progress is kept (partial)
@@ -1449,6 +1550,10 @@ class Runner:
             self.tel.close()
 
     def run(self):
+        validate_learning_args(self.args)
+        if self.learn and self.args.dataset_manifest:
+            from wm.dataset import Dataset
+            Dataset.load(self.args.dataset_manifest).require_model(self.model)
         import frida
         other = other_runners()
         if other:
@@ -1516,6 +1621,9 @@ def clean_stop(script, session, stopped: threading.Event, close, wait_s: float =
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--eval-first", metavar="LEVEL", default=None,
+                    help="one frozen-model life on this level, with no persistent memories, training or replay; "
+                         "auto-stops after success/death/timeout; writes run.json and evaluation.json")
     ap.add_argument("--agents", type=int, default=1, help="planned agents (default 1)")
     ap.add_argument("--explore", type=int, default=0,
                     help="extra agents with sticky random actions and random library move chains (world-model data)")
@@ -1532,6 +1640,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="keep the committed plan unless another's estimated frames to the goal are lower by more "
                          "than this (frames; successes: 3 frames earlier at the goal); 0 = always the best score "
                          f"(default {HYSTERESIS_FRAMES:g})")
+    ap.add_argument("--route-trial-gain", type=float, default=TRIAL_GAIN,
+                    help="where the run's best route would be played, an unvetoed plan whose estimate is better by "
+                         "more than this many frames is played once with its exact actions (one agent per wave, "
+                         "never the same plan from the same state again; plan.planner.RouteTrials); 0 = never "
+                         f"(default {TRIAL_GAIN:g})")
     ap.add_argument("--triggers", choices=("on", "off"), default="on",
                     help="replan on triggers (start, interval, move end, surprise, support, danger, short, missed: "
                          "plan/commit.py) or only every --replan frames (off) (default on)")
@@ -1549,6 +1662,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--learn", action="store_true",
                     help="train mode: wm.learner in the background (published models loaded between waves), new "
                          "best times recorded as self-demos; turns on --wm-collect")
+    split = ap.add_mutually_exclusive_group()
+    split.add_argument("--dataset-manifest", help="--learn: immutable world-model dataset snapshot")
+    split.add_argument("--legacy-split", action="store_true", help="--learn: explicit old global-modulo compatibility")
     ap.add_argument("--live-dir", default=LIVE_DIR, help="--learn: the learner's folder (default runs/wm_live)")
     ap.add_argument("--self-demos", default=SELF_DEMOS, help="--learn: self-demo list (default runs/demos/self.json)")
     ap.add_argument("--no-overlay", action="store_true", help="do not draw the plan in the game")
@@ -1598,8 +1714,17 @@ def setup_demo(args, entries=None):
     return args
 
 
+def validate_learning_args(args):
+    if getattr(args, "learn", False) and not (getattr(args, "dataset_manifest", None) or
+                                             getattr(args, "legacy_split", False)):
+        raise SystemExit("--learn requires --dataset-manifest FILE or explicit --legacy-split before attaching")
+
+
 def main():
     args = build_parser().parse_args()
+    from plan.first_eval import validate_args
+    validate_args(args)
+    validate_learning_args(args)
     if args.no_lock_step:
         raise SystemExit("the planner needs the game's time step locked (it assumes every future step is the game's "
                          "fixed step): run without --no-lock-step")
@@ -1615,7 +1740,7 @@ def main():
         args.name = args.name or time.strftime("search_%Y%m%d-%H%M%S")
     if args.learn:
         args.wm_collect = True                      # the learner trains on this run's shards too
-    args.name = args.name or time.strftime("plan_%Y%m%d-%H%M%S")
+    args.name = args.name or time.strftime("first_%Y%m%d-%H%M%S" if args.eval_first else "plan_%Y%m%d-%H%M%S")
     Runner(args).run()
 
 

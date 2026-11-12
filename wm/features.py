@@ -2,21 +2,29 @@
 
 Everything is relative to the agent, so the model learns how Meat Boy moves, not where a level's walls are:
 the level is looked up (tiles around the agent, nearby hazards and platforms, wind), never memorised.
+Tile patches apply the row's current private key mask through the shared domain lock context, without
+mutating the level. This does not predict future key pickup. The tile encoding is a feature protocol
+(wm.protocol): a checkpoint's recorded protocol selects its layout (model_layout), never the data; fresh
+training uses FEATURE_PROTOCOL unless it explicitly asks for another.
 
-Input (FEAT_DIM floats):
+Input (layout(protocol).feat_dim floats; FEAT_DIM = 291 for per-agent-key-tiles-v1, 389 for tile-shapes-v1):
   own state   vx/400, vy/600, time step / 33 ms, jump held / 20, position inside its tile (x, y; -0.5..0.5),
               wind here (/2000, the game's formula)                                                    8
   flags       the character's 32 flag bits (+0x7b4: airborne, on a wall, facing, input bits ...)     32
   state       movement state (+0x7b0) one-hot                                                         24
   action      one-hot (realgame.ACTIONS)                                                              10
-  tiles       7x7 cells around the agent, 4 channels: full block, half block, slope ((open corner+1)/4),
-              special (crumble / lock / switch), rows bottom-up                                       196
+  tiles       7x7 cells around the agent, rows bottom-up, channels by protocol (realpath.tile_shape kinds):
+              per-agent-key-tiles-v1: full block, half block, slope ((open corner+1)/4), special
+              (crumble / lock / switch)                                                     4 x 49 = 196
+              tile-shapes-v1: full, half, slope, special, open x, open y (the open side of a half
+              block, the open corner of a slope: -1 / 0 / +1 each)                          6 x 49 = 294
   hazards     the 3 nearest (box edge distance): dx, dy, distance (/100), half w, half h (/50)         15
   platform    the nearest: dx, dy (/100), upright, vx, vy (/300), present                              6
 
 Targets: the next flag bits that change during play (FLAG_BITS), events, and position change and new
-velocity as the correction to plain physics (`prior`: the same velocity
-with gravity in the air, moved by velocity x time step), scaled by RES_SCALE; next flags (airborne, on a wall, facing);
+velocity as the correction to plain physics (`prior`, a versioned protocol (wm.protocol.prior_protocol): the
+same velocity with gravity in the air, moved by velocity x time step; gravity-fan-wind-v1 adds the measured
+fan wind force in the air, fan_force), scaled by RES_SCALE; next flags (airborne, on a wall, facing);
 death, finish; landing (airborne -> not); blocked (horizontal speed cut by a wall); next movement state;
 reward of the step (/5).
 """
@@ -24,10 +32,14 @@ from __future__ import annotations
 
 import math
 import os
+from dataclasses import dataclass
 
 import numpy as np
 
-from realpath import tile_classes, slope_open_corner, box_distance
+from realpath import SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE, SHAPE_SPECIAL, box_distance, tile_shape
+from game.level import LockContext
+from wm.protocol import (FAN_WIND_PRIOR, FEATURE_PROTOCOL, GRAVITY_PRIOR, KEY_TILES_PROTOCOL, PRIOR_PROTOCOL,
+                         PRIOR_PROTOCOLS, TILE_SHAPES_PROTOCOL, input_protocol, prior_protocol)
 from wm.buffer import transitions, chains, load_level, load_shards
 
 TILE = 20.0
@@ -37,7 +49,65 @@ N_ACTIONS = 10
 N_HAZ = 3
 AIR, WALL, FACE = 0x2, 0x200, 0x1
 CONT_NAMES = ["vx", "vy", "dt", "held", "in-tile x", "in-tile y", "wind x", "wind y"]
-FEAT_DIM = len(CONT_NAMES) + 32 + N_STATES + N_ACTIONS + 4 * (2 * P + 1) ** 2 + 5 * N_HAZ + 6
+TILE_CHANNELS = {KEY_TILES_PROTOCOL: 4, TILE_SHAPES_PROTOCOL: 6}
+
+
+@dataclass(frozen=True)
+class Layout:
+    """One feature protocol's input columns: [continuous, flags, state, action, tile patch, hazards, platform]."""
+    protocol: str
+    channels: int                                  # tile channels per patch cell
+
+    @property
+    def patch(self) -> int:
+        return len(CONT_NAMES) + 32 + N_STATES + N_ACTIONS
+
+    @property
+    def haz(self) -> int:
+        return self.patch + self.channels * (2 * P + 1) ** 2
+
+    @property
+    def plat(self) -> int:
+        return self.haz + 5 * N_HAZ
+
+    @property
+    def feat_dim(self) -> int:
+        return self.plat + 6
+
+    def n_in(self, step: int = 1) -> int:
+        """A step-k model's input count (featurize_k: k - 1 extra one-hot actions after feat_dim)."""
+        return self.feat_dim + (int(step) - 1) * N_ACTIONS
+
+
+LAYOUTS = {p: Layout(p, c) for p, c in TILE_CHANNELS.items()}
+
+
+def layout(protocol: str) -> Layout:
+    if protocol not in LAYOUTS:
+        raise ValueError(f"no feature layout for protocol {protocol!r}")
+    return LAYOUTS[protocol]
+
+
+def model_layout(model) -> Layout:
+    """The layout a checkpoint's inputs use (wm.protocol.input_protocol of its info), checked against its input
+    count: a mismatch is an error, never a guess."""
+    lay = layout(input_protocol(getattr(model, "info", None)))
+    n_in, step = int(model.mu.numel()), int(getattr(model, "step", 1))
+    if n_in != lay.n_in(step):
+        raise ValueError(f"checkpoint has {n_in} inputs; {lay.protocol} step {step} needs {lay.n_in(step)}")
+    return lay
+
+
+def require_geom(model, geom) -> Layout:
+    """The model's layout, which the level geometry geom must build (else an error)."""
+    lay = model_layout(model)
+    if geom.layout != lay:
+        raise ValueError(f"tile features {geom.layout.protocol} do not match the model's {lay.protocol}")
+    return lay
+
+
+# the default protocol's width (per-agent-key-tiles-v1: every checkpoint trained before tile shapes)
+FEAT_DIM = LAYOUTS[FEATURE_PROTOCOL].feat_dim
 # the flag bits that change during play (measured on real data), predicted so rollouts can carry them on
 FLAG_BITS = [0x2, 0x200, 0x1, 0x4, 0x20, 0x800, 0x2000, 0x8000000]
 BIN_NAMES = ["airborne", "on wall", "facing", "flag 0x4", "flag 0x20", "flag 0x800", "flag 0x2000", "flag 0x8000000",
@@ -49,30 +119,39 @@ GRAVITY = 550.0
 
 
 class LevelGeom:
-    """A level's tiles as 4 channels (padded with solid outside the map), kept up to date with tile changes."""
+    """A level's tiles as its protocol's channels (padded with solid outside the map), kept up to date with tile
+    changes. protocol: the feature protocol (wm.protocol) whose tile encoding to build: a model's is
+    model_layout(model).protocol."""
 
-    def __init__(self, words: np.ndarray, meta: dict):
+    def __init__(self, words: np.ndarray, meta: dict, protocol: str = FEATURE_PROTOCOL):
+        self.layout = layout(protocol)
         self.ox, self.oy = float(meta["ox"]), float(meta["oy"])
         self.words0 = words.astype(np.uint32)
         self.H, self.W = self.words0.shape
         self.words = self.words0.copy()
-        k = tile_classes(self.words0)
-        self.special0 = k["crumble"] | k["lock"] | k["switch"] | k["other"]
+        self.lock_context = LockContext(self.words0, meta)
+        self.special0 = tile_shape(self.words0).kind == SHAPE_SPECIAL
         self.ch = self._channels(self.words0)
         self.pad = np.pad(self.ch, ((0, 0), (P, P), (P, P)))
         self.pad[0, :, :P] = self.pad[0, :, -P:] = 1.0     # outside the map: solid
         self.pad[0, :P, :] = self.pad[0, -P:, :] = 1.0
         self._table = None                                 # every padded cell's patch, built on first use
 
-    @staticmethod
-    def _channels(words):
-        k = tile_classes(words)
-        so = slope_open_corner(words)
-        ch = np.zeros((4,) + words.shape, np.float32)
-        ch[0] = k["full"]
-        ch[1] = k["half"]
-        ch[2] = np.where(k["slope"], (so + 1) / 4.0, 0.0)
-        ch[3] = k["crumble"] | k["lock"] | k["switch"] | k["other"]
+    def _channels(self, words):
+        """The protocol's tile channels of these words, from realpath.tile_shape (the one shape owner)."""
+        t = tile_shape(words)
+        slope = t.kind == SHAPE_SLOPE
+        ch = np.zeros((self.layout.channels,) + words.shape, np.float32)
+        ch[0] = t.kind == SHAPE_FULL
+        ch[1] = t.kind == SHAPE_HALF
+        ch[3] = t.kind == SHAPE_SPECIAL
+        if self.layout.protocol == KEY_TILES_PROTOCOL:     # the open corner as one ordinal, as it was trained
+            corner = (t.ox > 0).astype(np.int8) + 2 * (t.oy > 0).astype(np.int8)    # realpath.CORNER_SIGN index
+            ch[2] = np.where(slope, (corner + 1) / 4.0, 0.0)
+        else:
+            ch[2] = slope
+            ch[4] = t.ox
+            ch[5] = t.oy
         return ch
 
     def reset(self):
@@ -86,7 +165,8 @@ class LevelGeom:
             return
         self.words[r, c] = word
         if self.special0[r, c]:                # a crumble / lock / switch block: gone once its word changed
-            v = self.ch[:, r, c] if int(word) == int(self.words0[r, c]) else np.zeros(4, np.float32)
+            v = self.ch[:, r, c] if int(word) == int(self.words0[r, c]) else \
+                np.zeros(self.layout.channels, np.float32)
         else:
             v = self._channels(np.array([[word]], np.uint32))[:, 0, 0]
         self.pad[:, r + P, c + P] = v
@@ -94,15 +174,25 @@ class LevelGeom:
             rr, cc = np.mgrid[r:r + 2 * P + 1, c:c + 2 * P + 1]
             self._table[rr, cc] = self._gather(rr.ravel(), cc.ravel()).reshape(rr.shape + (-1,))
 
-    def patches(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        """The 4 x (2P+1) x (2P+1) tile patch around each point (channel, then row, then column), flattened: one
+    def patches(self, x: np.ndarray, y: np.ndarray, keys=None) -> np.ndarray:
+        """The channels x (2P+1) x (2P+1) tile patch around each point (channel, then row, then column), flattened: one
         lookup in a table of every padded cell's patch (built once, kept up to date by set_tile / reset)."""
         c = np.clip(np.floor((x - self.ox) / TILE).astype(int), -P, self.W + P - 1) + P
         r = np.clip(np.floor((y - self.oy) / TILE).astype(int), -P, self.H + P - 1) + P
         if self._table is None:
             rr, cc = np.mgrid[0:self.H + 2 * P, 0:self.W + 2 * P]
             self._table = self._gather(rr.ravel(), cc.ravel()).reshape(rr.shape + (-1,))
-        return self._table[r, c]
+        out = self._table[r, c]              # advanced indexing: a private copy, never the shared table
+        if keys is not None:
+            keys = np.broadcast_to(np.asarray(keys), r.shape)
+            patch = out.reshape(len(r), self.layout.channels, 2 * P + 1, 2 * P + 1)
+            for mask in np.unique(keys):
+                idx = np.nonzero(keys == mask)[0]
+                for lr, lc in self.lock_context.opened_cells(mask):
+                    pr, pc = lr - (r[idx] - P) + P, lc - (c[idx] - P) + P
+                    within = (pr >= 0) & (pr <= 2 * P) & (pc >= 0) & (pc <= 2 * P)
+                    patch[idx[within], :, pr[within], pc[within]] = 0
+        return out
 
     def _gather(self, r: np.ndarray, c: np.ndarray) -> np.ndarray:
         """Patches of padded cells (r, c) from the padded channels (edge cells repeat the outermost padding)."""
@@ -179,7 +269,10 @@ def platform_features(x, y, pf, pf_prev, dt_prev_s) -> np.ndarray:
 
 
 def wind(x, y, fans) -> tuple[np.ndarray, np.ndarray]:
-    """The game's wind force (FUN_004c40e0), as realgame.Level.wind_at."""
+    """The wind INPUT columns' formula (as game.level.Level.wind_at), frozen with the feature protocols: an
+    approximation of FUN_004c40e0's force (columns |lateral| <= half width + 6, strength by the distance along
+    the fan's axis). The force the game applies is fan_force (measured); the inputs keep this formula so every
+    checkpoint's features stay byte-identical."""
     fx, fy = np.zeros(len(x)), np.zeros(len(x))
     for fxp, fyp, ux, uy, hw, rng, st in fans or []:
         if rng <= 0:
@@ -194,21 +287,42 @@ def wind(x, y, fans) -> tuple[np.ndarray, np.ndarray]:
     return fx, fy
 
 
+def fan_force(x, y, fans) -> tuple[np.ndarray, np.ndarray]:
+    """The fan wind force (game units / s^2) the game adds to an airborne character's velocity each frame, at
+    its recorded position, as measured (runs/experiments/wind_prior_v1/wind_law_*.json): inside a fan's column
+    (along its up axis 0..range, |lateral| <= half width), strength st x c along the axis, c = 1 - (Euclidean
+    distance from the fan point) / range (x5 where c >= 0.5; nothing where c < 0). Measured on vertical fans
+    (2-10, 2-4) only: the x part (the axis' x component) has never been observed."""
+    fx, fy = np.zeros(len(x)), np.zeros(len(x))
+    for fxp, fyp, ux, uy, hw, rng, st in fans or []:
+        if rng <= 0:
+            continue
+        along = (x - fxp) * ux + (y - fyp) * uy
+        lat = (x - fxp) * uy - (y - fyp) * ux
+        c = 1.0 - np.hypot(along, lat) / rng
+        inside = (along >= 0) & (np.abs(lat) <= hw) & (c >= 0)
+        c = np.where(c >= 0.5, c * 5.0, c)
+        fx += np.where(inside, ux * st * c, 0.0)
+        fy += np.where(inside, uy * st * c, 0.0)
+    return fx, fy
+
+
 _SHIFTS = np.arange(32, dtype=np.uint64)
 _C_FLAGS = len(CONT_NAMES)
 _C_ST = _C_FLAGS + 32
 _C_ACT = _C_ST + N_STATES
-_C_PATCH = _C_ACT + N_ACTIONS
-_C_HAZ = _C_PATCH + 4 * (2 * P + 1) ** 2
-_C_PLAT = _C_HAZ + 5 * N_HAZ
+_C_PATCH = _C_ACT + N_ACTIONS                      # = Layout.patch (every protocol)
+_C_HAZ = LAYOUTS[FEATURE_PROTOCOL].haz             # the default protocol's; featurize uses geom.layout's
+_C_PLAT = LAYOUTS[FEATURE_PROTOCOL].plat
 
 
 def featurize(s, a, dt_ms, geom: LevelGeom, boxes, pf, pf_prev, dt_prev_s, fans, out=None) -> np.ndarray:
-    """Inputs for agent rows s (wm.buffer.ROW) taking actions a with this frame's step and level state. out: an
-    (n, FEAT_DIM) float32 array to write them into (the planner's per-step buffer; the same values as a new
-    array), returned."""
+    """Inputs for agent rows s (wm.buffer.ROW) taking actions a with this frame's step and level state, in the
+    layout of geom's protocol (geom.layout). out: an (n, geom.layout.feat_dim) float32 array to write them into
+    (the planner's per-step buffer; the same values as a new array), returned."""
     n = len(s)
-    X = np.empty((n, FEAT_DIM), np.float32) if out is None else out
+    lay = geom.layout
+    X = np.empty((n, lay.feat_dim), np.float32) if out is None else out
     x, y = s["x"].astype(np.float64), s["y"].astype(np.float64)
     tx, ty = geom.in_tile(x, y)
     wx, wy = wind(x, y, fans)
@@ -219,16 +333,25 @@ def featurize(s, a, dt_ms, geom: LevelGeom, boxes, pf, pf_prev, dt_prev_s, fans,
     r = np.arange(n)
     X[r, _C_ST + np.clip(s["state"], 0, N_STATES - 1)] = 1.0
     X[r, _C_ACT + np.clip(a, 0, N_ACTIONS - 1)] = 1.0
-    X[:, _C_PATCH:_C_HAZ] = geom.patches(x, y)
-    X[:, _C_HAZ:_C_PLAT] = hazard_features(x, y, boxes)
-    X[:, _C_PLAT:] = platform_features(x, y, pf, pf_prev, dt_prev_s)
+    X[:, _C_PATCH:lay.haz] = geom.patches(x, y, s["keys"])
+    X[:, lay.haz:lay.plat] = hazard_features(x, y, boxes)
+    X[:, lay.plat:] = platform_features(x, y, pf, pf_prev, dt_prev_s)
     return X
 
 
-def prior(s, dt_ms, sub: int = 1) -> np.ndarray:
-    """Plain physics [dx, dy, vx', vy'] (game units): the same velocity, gravity in the air, moved by the new
-    velocity x the time step. The model predicts only the correction to this (input, collisions, walls).
-    sub: the step is `sub` frames of dt_ms / sub each (a step-k model: gravity and movement per frame)."""
+def prior(s, dt_ms, sub: int = 1, fans=None, protocol: str = PRIOR_PROTOCOL) -> np.ndarray:
+    """Plain physics [dx, dy, vx', vy'] (game units) of prior protocol `protocol` (wm.protocol; a model's is
+    model_prior(model)). gravity-v1: the same velocity, gravity in the air, moved by the new velocity x the time
+    step. gravity-fan-wind-v1: per frame, airborne rows also gain fan_force at their prior position x the frame
+    time (fans: this step's fans, required; [] for none). The model predicts only the correction to this
+    (input, collisions, walls). sub: the step is `sub` frames of dt_ms / sub each (a step-k model: gravity and
+    movement per frame)."""
+    if protocol == FAN_WIND_PRIOR:
+        if fans is None:
+            raise ValueError("the gravity-fan-wind-v1 prior needs the step's fans ([] for none)")
+        return _fan_wind_prior(s, dt_ms, sub, fans)
+    if protocol != GRAVITY_PRIOR:
+        raise ValueError(f"unknown prior protocol {protocol!r}")
     vx, vy = s["vx"].astype(np.float64), s["vy"].astype(np.float64)
     air = (s["flags"] & AIR) != 0
     if sub == 1:
@@ -243,24 +366,49 @@ def prior(s, dt_ms, sub: int = 1) -> np.ndarray:
     return np.stack([vx * h * sub, dy, vx, vy], 1).astype(np.float32)
 
 
+def _fan_wind_prior(s, dt_ms, sub, fans) -> np.ndarray:
+    """gravity-fan-wind-v1 (prior): each of the sub frames, airborne rows' velocity += (fan force - gravity) x
+    the frame time (the force at the frame's start position), then position += the new velocity x the frame time
+    (the measured order). Grounded rows keep their velocity (grounded wind was never observed)."""
+    h = np.asarray(dt_ms, np.float64) / 1000.0 / sub
+    x0, y0 = s["x"].astype(np.float64), s["y"].astype(np.float64)
+    x, y = x0.copy(), y0.copy()
+    vx, vy = s["vx"].astype(np.float64), s["vy"].astype(np.float64)
+    air = (s["flags"] & AIR) != 0
+    for _ in range(sub):
+        wx, wy = fan_force(x, y, fans)
+        vx = np.where(air, vx + wx * h, vx)
+        vy = np.where(air, vy + (wy - GRAVITY) * h, vy)
+        x, y = x + vx * h, y + vy * h
+    return np.stack([x - x0, y - y0, vx, vy], 1).astype(np.float32)
+
+
+def model_prior(model) -> str:
+    """The prior protocol a checkpoint's outputs correct (wm.protocol.prior_protocol of its info)."""
+    return prior_protocol(getattr(model, "info", None))
+
+
 def featurize_k(s, acts, dt_ms, geom: LevelGeom, boxes, pf, pf_prev, dt_prev_s, fans) -> np.ndarray:
     """Inputs of a step-k model (wm.model): featurize with the first of the k actions acts (n, k) and the whole
     step's dt, then the other k - 1 actions one-hot (N_ACTIONS each) after all other inputs."""
     n, k = acts.shape
-    X = np.zeros((n, FEAT_DIM + (k - 1) * N_ACTIONS), np.float32)
-    featurize(s, acts[:, 0], dt_ms, geom, boxes, pf, pf_prev, dt_prev_s, fans, out=X[:, :FEAT_DIM])
+    fd = geom.layout.feat_dim
+    X = np.zeros((n, geom.layout.n_in(k)), np.float32)
+    featurize(s, acts[:, 0], dt_ms, geom, boxes, pf, pf_prev, dt_prev_s, fans, out=X[:, :fd])
     actions_into(X, acts)
     return X
 
 
 def actions_into(X, acts):
-    """The extra one-hot actions 2..k of a step-k model's inputs (columns after FEAT_DIM), in place."""
+    """The extra one-hot actions 2..k of a step-k model's inputs (its last (k - 1) x N_ACTIONS columns, after
+    the layout's feat_dim), in place."""
     n, k = acts.shape
     if k > 1:
-        X[:, FEAT_DIM:] = 0.0
+        fd = X.shape[1] - (k - 1) * N_ACTIONS
+        X[:, fd:] = 0.0
         r = np.arange(n)
         for j in range(1, k):
-            X[r, FEAT_DIM + (j - 1) * N_ACTIONS + np.clip(acts[:, j], 0, N_ACTIONS - 1)] = 1.0
+            X[r, fd + (j - 1) * N_ACTIONS + np.clip(acts[:, j], 0, N_ACTIONS - 1)] = 1.0
 
 
 def targets(s, s2, r, pri):
@@ -302,7 +450,8 @@ def demo_key(d: str) -> str:
 
 
 def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=None, exclude=(), step: int = 1,
-          demos: dict | None = None) -> dict:
+          demos: dict | None = None, dataset=None, provenance: bool = False,
+          protocol: str = FEATURE_PROTOCOL, prior_protocol: str = PRIOR_PROTOCOL) -> dict:
     """Features, targets and baselines of every transition in these wm_data folders. frac: keep this share of
     each wave's transitions (all deaths and finishes) before the inputs are built, for runs too long to
     featurize whole. exclude: levels left out (the held-out ones). step k > 1: samples of a step-k model
@@ -310,21 +459,34 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
     death / finish cut the chain short; the targets' continuous part in game units minus the prior, / RES_SCALE
     as for step 1: wm.train rescales it to the model's res_scale). demos: {normalized folder (demo_key):
     {shard index: [(agent, first frame, last frame)]}}: those agents' transitions are marked in "demo" and kept by
-    frac and max_samples (wm.train --demos)."""
+    frac and max_samples (wm.train --demos). protocol: the feature protocol whose layout X has (the model's
+    model_layout, or the one fresh training chose). prior_protocol: the physics prior the targets correct
+    (wm.protocol; the model's model_prior, or the one fresh training chose)."""
+    layout(protocol)
+    if prior_protocol not in PRIOR_PROTOCOLS:
+        raise ValueError(f"unknown prior protocol {prior_protocol!r}")
+    if provenance and dataset is None:
+        raise ValueError("feature provenance requires a manifest owner")
+    ORIGIN = []
     rng_f = np.random.default_rng(seed + 1)
     X, YC, YB, YS, YR, G, SH, LV, BC, BG, RAW, PR, FU, DM = [], [], [], [], [], [], [], [], [], [], [], [], [], []
     shard_no = 0
+    VALID = []
+    if dataset is not None:
+        dirs = dataset.source_list(dirs)
+        exclude = set(exclude) | dataset.excluded
     for d in dirs:
         geoms = {}
         dem = (demos or {}).get(demo_key(d), {})
-        for meta, rows, world in load_shards(d):
+        for meta, rows, world in (dataset.iter_shards(d) if dataset is not None else load_shards(d)):
             lv = meta.get("level")
             shard_no += 1
             if (levels and lv not in levels) or lv in exclude:
                 continue
             if lv not in geoms:
                 try:
-                    geoms[lv] = LevelGeom(*load_level(d, lv))
+                    geoms[lv] = LevelGeom(*(dataset.level(d, lv) if dataset is not None else load_level(d, lv)),
+                                          protocol=protocol)
                 except (OSError, KeyError):
                     log(f"[wm] no level data for {lv}, skipped")
                     geoms[lv] = None
@@ -341,7 +503,8 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
                 s, s2, a, r = tr["s"], tr["s2"], tr["a"], tr["r"]
                 ext = None
             is_demo = np.zeros(len(s), bool)
-            for ag, f0, f1 in (dem.get(int(rows["wave"][0]), []) if len(rows) else []):
+            demo_index = meta["_dataset_local_index"] if dataset is not None else int(rows["wave"][0]) if len(rows) else -1
+            for ag, f0, f1 in dem.get(demo_index, []):
                 is_demo |= (s["agent"] == ag) & (s["frame"] >= f0) & (s["frame"] <= f1)
             if frac is not None and frac < 1.0 and len(s):
                 k = (s2["status"] != 0) | (rng_f.random(len(s)) < frac) | is_demo
@@ -369,13 +532,13 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
                 if ext is None:
                     X.append(featurize(s[m], a[m], dt, geom, hazard_boxes(w.get("hz", []), keep), w.get("pf"),
                                        pw.get("pf"), (pw.get("dt") or DT_DEFAULT) / 1000.0, fans).astype(np.float16))
-                    pri = prior(s[m], dt)
+                    pri = prior(s[m], dt, 1, fans, prior_protocol)
                     yc, yb, ys_, yr = targets(s[m], s2[m], r[m], pri)
                 else:
                     dt = sum((wf.get(int(f) + j, {}).get("dt") or dt) for j in range(step))
                     X.append(featurize_k(s[m], a[m], dt, geom, hazard_boxes(w.get("hz", []), keep), w.get("pf"),
                                          pw.get("pf"), (pw.get("dt") or DT_DEFAULT) / 1000.0, fans).astype(np.float16))
-                    pri = prior(s[m], dt, step)
+                    pri = prior(s[m], dt, step, fans, prior_protocol)
                     yc, yb, ys_, yr = targets(s[m], s2[m], r[m], pri)
                     yb[:, EVENTS["landing"]] = ext["landing"][m]
                     yb[:, EVENTS["blocked"]] = ext["blocked"][m]
@@ -385,6 +548,11 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
                 G.append(group_of(s[m]))
                 SH.append(np.full(len(m), shard_no, np.int32))
                 DM.append(is_demo[m])
+                if dataset is not None:
+                    VALID.append(dataset.validation_mask(meta, s[m]))
+                if provenance:
+                    ORIGIN.append(np.column_stack([np.full(len(m), meta["_dataset_index"], np.int64),
+                                                   s["agent"][m], s["frame"][m], s["keys"][m]]).astype(np.int64))
                 LV.append(np.array([lv] * len(m)))
                 bc, bg = baselines(s[m], dt)
                 BC.append(bc.astype(np.float32)); BG.append(bg.astype(np.float32))
@@ -398,6 +566,11 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
            "raw": np.concatenate(RAW).astype(np.float32), "prior": np.concatenate(PR)}
     out["full"] = np.concatenate(FU) if FU else np.ones(len(out["X"]), bool)
     out["demo"] = np.concatenate(DM)
+    if dataset is not None:
+        out["validation"] = np.concatenate(VALID)
+    if provenance:
+        # Columns: immutable manifest entry index, agent id, start frame, current key mask.
+        out["origin"] = np.concatenate(ORIGIN)
     n = len(out["X"])
     if max_samples and n > max_samples:        # keep every rare event (deaths, finishes), sample the rest
         rng = np.random.default_rng(seed)

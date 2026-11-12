@@ -112,13 +112,18 @@ class _Terrain:
 
 
 def _stub_planner():
-    return SimpleNamespace(terrain=_Terrain(), lv=SimpleNamespace(plats=[]), bounds=None)
+    terrain = _Terrain()
+    def support(x, y, vy=None, keys=0):
+        g, side = terrain.support(x, y)
+        return g | (side != 0), g, side
+    return SimpleNamespace(terrain=terrain, lv=SimpleNamespace(plats=[]), bounds=None,
+                           support=support, key_pickup=False)
 
 
 def _stub_plan(frame=100, n=48, first=12, path=None, goal=None, keys=()):
     path = path if path is not None else [[2.0 * k, 0.0] for k in range(n + 1)]      # runs right on the ground
     return SimpleNamespace(frame=frame, actions=[2] * n, path=path, first_move_frames=first, goal_touch=goal,
-                           key_touches=list(keys))
+                           key_touches=list(keys), state={"keys": 0})
 
 
 def _boxes(n, box=None, at=()):

@@ -58,6 +58,8 @@ def main():
     ap.add_argument("--level", required=True)
     ap.add_argument("--model", default=None)
     ap.add_argument("--policy", default=None, help="PPO model.pt: its first actions and critic value are used")
+    ap.add_argument("--shape-inputs", action="store_true",
+                    help="the policy was trained with realgame.py --shape-inputs (its observation has the tile maps)")
     ap.add_argument("--decisions", type=int, default=20)
     ap.add_argument("--candidates", type=int, default=32)
     ap.add_argument("--horizon", type=int, default=16)
@@ -76,7 +78,7 @@ def main():
     print(f"{args.level}: route {route.length / rg.TILE:.0f} tiles" if route else f"{args.level}: no route")
     policy = None
     if args.policy:
-        policy = rg.Policy()
+        policy = rg.Policy(rg.obs_size(args.shape_inputs))
         rg.load_policy(policy, args.policy)
     mpc = MPC(args.model or default_model(), args.candidates, args.horizon, weights=Weights(value=args.value))
     print(f"model {mpc.model_path}")
@@ -111,7 +113,7 @@ def main():
             def obs_of(x, y, vx, vy, flags, state, held):
                 prog = route.value(x, y, ()) or 0.0
                 return rg.observe(lv, grid, [x, y, vx, vy, flags, state, 0, 0], route, prog, route.offset(x, y),
-                                  None, (), (0.0, 0.0), held)
+                                  None, (), (0.0, 0.0), held, args.shape_inputs)
             o = obs_of(*s[:6], int(r["held"]))
             with torch.no_grad():
                 probs = policy.dist(torch.as_tensor(o[None])).probs[0].numpy()

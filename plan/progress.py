@@ -377,7 +377,7 @@ class ProgressField:
         """stack[which] (stack: tables x n_legs x H x W) at points (game units), on leg `leg` (an int or one per point;
         clamped to the last leg). A point inside a wall takes its best open neighbour of the 3 x 3 around it (not
         diagonally through a wall corner) plus the distance to that cell's centre (tiles x per_tile). A point in
-        the OPEN half of a half-block cell (a wall cell of the field; orientation as plan.geometry.half_normal
+        the OPEN half of a half-block cell (a wall cell of the field; orientation as realpath.half_normal
         decodes it) takes only the neighbours on its open side: the cell that side faces and the two diagonal
         ones beside it (not through a wall corner), plus the distance; never a neighbour across the solid half (a
         body standing on a floor of half blocks is not valued by the cell below the floor). +inf outside the
@@ -432,9 +432,9 @@ class ProgressField:
 
     @property
     def _half_n(self):
-        """plan.geometry.half_normal of the level's tile words, once."""
+        """realpath.half_normal of the level's tile words, once."""
         if getattr(self, "_half_n_cache", None) is None:
-            from plan.geometry import half_normal
+            from realpath import half_normal
             self._half_n_cache = tuple(a.astype(np.int64) for a in half_normal(self.pl.words))
         return self._half_n_cache
 
