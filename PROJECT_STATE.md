@@ -1,5 +1,30 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## human_v1: the first model trained with the user's own play (2026-11-14; offline, not run in the game)
+
+**Data** (`runs/experiments/human_v1/prepare.py`):
+- `runs/human_01` (agent.py --human): 805 waves on 17 levels (1-1..1-13, 2-1..2-4), every frame locked, 271 finishes, 233 under A+ with no duplicate route.
+- Manifest: wide_v1 (200 PPO-era shards) plus 644 human shards. Every 5th human shard (161) is held out (`eval_waves.json`).
+- Demos: the 188 human A+ finishes of the training shards (`aplus_train.json`), oversampled to 19.8% of the training samples (`--demos ... --demo-share 0.2`).
+- `--sample-frac 0.4` (RAM; demos kept whole): 1,390,570 transitions. Otherwise the epoch_48 settings (tile-shapes-v1, step 4, 3x256, seed 0, 48 epochs, 2912 s).
+- Model: `runs/experiments/human_v1/epoch_48/model/wm_model.pt`. Its held-out loss was 0.022 at epoch 36 and 0.024 at 48.
+
+**Held-out human play** (`compare.py --human`, `compare_human.json`): the new model is better on every level, mostly by a factor of 2-5 at +32/+48. Median at +48, epoch_48 -> human_v1:
+
+| 1-1 | 1-9 | 1-11 | 1-12 | 1-13 | 2-1 | 2-2 | 2-3 | 2-4 |
+|---|---|---|---|---|---|---|---|---|
+| 12.4 -> 2.3 | 6.3 -> 0.9 | 10.3 -> 1.8 | 7.1 -> 4.3 | 19.8 -> 5.4 | 14.6 -> 3.3 | 17.8 -> 7.1 | 6.6 -> 2.0 | 50.6 -> 10.3 |
+
+- The 90% values fall too, with two exceptions: 1-6 +48 (28.9 -> 39.3, 2 waves) and 2-3 +48 (31.3 -> 34.3).
+- The held-out waves are other attempts on the same levels as the training waves: this measures your routes on known levels, not unseen ones.
+
+**The 1-14..1-17 recordings** (`compare_new_runs.json`, no human data on these levels): about even.
+- Better up to +16 frames on all four levels, and on 1-16 and 1-17 at +48.
+- Worse at +48 on 1-14 (median 21.8 -> 24.1) and 1-15 (10.6 -> 11.1), and some 90% values at +32 (1-14 44.5 -> 47.6, 1-15 46.3 -> 50.4).
+- This arm also sampled each wave at 0.4 instead of 1.0, so the human data's effect here is not isolated.
+
+It loads and plans in agent.py (simulate.py, 1-14, 0.73x).
+
 ## Bolder risk rules, your own play as data, A+ examples (2026-11-13)
 
 **Risk rules** (`747d8d4`; the golden planner cases re-recorded after it):
