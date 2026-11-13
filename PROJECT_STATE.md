@@ -17,7 +17,19 @@
 
 - epoch_12 is better at nearly every horizon on all four levels (2-14 has one wave: no conclusion). Both are still 1-2 tiles off at +48 frames (median), 3-6 tiles at the 90th percentile: long plans are guesses in both.
 - `wm.compare_steps --legacy-split` refuses the strict checkpoint, so compare.py calls `roll_wave` directly on waves recorded after both trainings.
-- A 24-epoch arm with the same manifest and settings was started (`model_compare_v1/epoch_24`); see below for its result when it is filled in.
+- **24 epochs** (`runs/experiments/model_compare_v1/epoch_24/model/wm_model.pt`; same manifest, tile-shapes-v1, seed 0 and settings as the 12-epoch arm, 4 threads, 1718 s; never run in the game). Same waves, `three_models.json`:
+
+| Level | Model | +4 | +8 | +16 | +32 | +48 |
+|---|---|---|---|---|---|---|
+| 1-14 | epoch_24 | 0.3 / 1.9 | 1.2 / 4.7 | 3.9 / 19.1 | 12.9 / 51.1 | 26.3 / 73.2 |
+| 1-15 | epoch_24 | 0.3 / 2.5 | 1.2 / 6.0 | 2.9 / 14.1 | 8.9 / 48.6 | 16.1 / 95.6 |
+| 1-16 | epoch_24 | 0.3 / 1.8 | 1.1 / 5.9 | 3.4 / 24.7 | 15.2 / 63.4 | 27.2 / 94.0 |
+| 1-17 | epoch_24 | 0.4 / 3.2 | 1.1 / 10.2 | 2.9 / 21.6 | 8.8 / 48.6 | 17.9 / 68.2 |
+
+  - Better than epoch_12 at every horizon's median on all four levels; three 90% values on 1-16 (+16, +32, +48; n 64) are slightly worse than epoch_12's. Against wm_step4 the median error is roughly halved up to +32 (1-17: +16 8.9 -> 2.9, +48 30.5 -> 17.9).
+  - Held-out loss was still falling slowly at the end (0.024 -> 0.023 over the last three epochs): more epochs alone will give little more.
+  - Decision time is about the same for the three models (offline closed loop on 1-14, median 145 / 151 / 154 ms).
+  - It loads and plans in agent.py (simulate.py with `MODEL=`); the wind prior is not in it (gravity-v1).
 
 **The 1-17 stall does not reproduce offline** (`model_compare_v1/stall_1-17.py`, `stall_1-17.json`): from the stalled agent's recorded state (frame 208 of a 1200-frame wave, recorded hazards), with runs/wm_locked standing in for the game, the planner goes from T 187 to 71 (wm_step4) or 81 (epoch_12) in 500 frames and stays alive. So the stall is not a property of the planner's rules alone; in the game the plans there come out lower and shorter than predicted (the largest surprises: predicted y 17-22 units above the real one, x 18 beyond). They are not concentrated at slope or half tiles (13 of 69 surprises within 30 units of one). The cause in the game is not pinned down.
 
