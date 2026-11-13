@@ -266,7 +266,7 @@ def test_future_follows_the_kill_shapes_not_the_piece():
     fw.observe(1, [_saw_row(98.0)], None, [], [True], None, 16.667)
     worlds, check, recorded = fw.worlds(1, 3, 16.667)
     assert recorded == 3 and fw.trusted
-    b, r, ids = check[0]                                 # frame 2: the recorded circle, as its bounding square
+    b, r, ids, _ = check[0]                                 # frame 2: the recorded circle, as its bounding square
     assert tuple(b[0]) == (0.0, 96.0, 20.0, 20.0, 0.0) and r[0] == REC_RADIUS and ids == ["h0"]
     assert tuple(worlds[0].boxes[0][:2]) == (0.0, 100.0)  # the model inputs keep the piece's own box
     fw.observe(2, [_saw_row(80.0)], None, [], [True], None, 16.667)   # the piece is where recorded, its shape not

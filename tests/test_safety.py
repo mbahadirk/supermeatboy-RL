@@ -151,14 +151,18 @@ def test_kill_shapes_decide_what_kills():
 def test_kill_shape_boxes_and_ids():
     from game.level import box_base, box_ids, hazard_boxes, shape_box
     assert shape_box([1, 5.0, 6.0, 20.0, 20.0, 0]) == (5.0, 6.0, 20.0, 20.0, 0.0)
-    assert shape_box([2, 0.0, 0.0, 10.0, 4.0, 0.0]) == (0.0, 0.0, 10.0, 4.0, 0.0)
+    # a box: what the game's box-box test reaches (box_reach), far beyond the box grown by BODY
+    from game.level import box_reach
+    ra, rb = box_reach(10.0, 4.0)
+    assert ra + 6.0 >= 10.0 + 6.0 + math.sqrt(2 * 10.0 * 6.0) - 0.01 and rb + 6.0 >= 4.0 + 6.0 + math.sqrt(2 * 4.0 * 6.0) - 0.01
+    assert shape_box([2, 0.0, 0.0, 10.0, 4.0, 0.0]) == (0.0, 0.0, ra, rb, 0.0)
     b = shape_box([2, 0.0, 0.0, 10.0, 4.0, math.pi / 4])   # the body's box reaches 6 sqrt 2 along a 45 degree box's axes
-    assert b[2] == pytest.approx(10.0 + 6.0 * math.sqrt(2) - 6.0) and b[3] == pytest.approx(4.0 + 6.0 * math.sqrt(2) - 6.0)
+    assert b[2] == pytest.approx(ra + 6.0 * math.sqrt(2) - 6.0) and b[3] == pytest.approx(rb + 6.0 * math.sqrt(2) - 6.0)
     hz = [[0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, [[1, 1.0, 1.0, 7.0, 7.0, 0], [2, 9.0, 9.0, 2.0, 3.0, 0.0]]],
           [5.0, 5.0, 1.0, 1.0, 1.0, 1.0, 0.0, []],
           [8.0, 8.0, 4.0, 2.0, 1.0, 1.0, 0.0, [[1, 8.0, 8.0, 3.0, 3.0, 0]]]]
     boxes, kept = hazard_boxes(hz)
-    assert kept == [0, 0, 2] and boxes[1] == (9.0, 9.0, 2.0, 3.0, 0.0)
+    assert kept == [0, 0, 2] and boxes[1] == (9.0, 9.0) + box_reach(2.0, 3.0) + (0.0,)
     ids = box_ids(kept, ["a", "b", "c"])
     assert ids == ["a", "a#1", "c"] and [box_base(i) for i in ids] == ["a", "a", "c"]
     assert box_ids(kept) == ["h0", "h0#1", "h2"]
@@ -188,3 +192,21 @@ def test_first_contact_goal_and_key_boxes():
     ys = np.array([[[100.0, 50.0, 0.0]], [[100.0, 90.0, 0.0]]])
     f, _ = S.first_contact(xs, ys, [(0.0, 0.0, 1.0, 1.0, 0.0)], first=np.array([[1], [3]]))
     assert f[:, 0].tolist() == [2, -1]
+
+
+def test_box_reach_covers_the_games_box_box_test():
+    """Every point the game's test (d^2 >= D1^2 + D2^2) kills from lies in the covering box, and the box is tight
+    along the axes (a + BODY + sqrt(2 a BODY))."""
+    from game.level import box_reach
+    a, b, body = 7.88, 5.66, 6.0
+    ra, rb = box_reach(a, b)
+
+    def kills(x, y):
+        eu, ev = max(abs(x) - a, 0), max(abs(y) - b, 0)
+        fx, fy = max(abs(x) - body, 0), max(abs(y) - body, 0)
+        return x * x + y * y >= eu * eu + ev * ev + fx * fx + fy * fy
+    g = np.linspace(-45, 45, 181)
+    pts = [(x, y) for x in g for y in g if kills(x, y)]
+    assert max(abs(x) for x, _ in pts) <= ra + body + 0.6 and max(abs(y) for _, y in pts) <= rb + body + 0.6
+    assert ra + body == pytest.approx(max(a + body + math.sqrt(2 * a * body), ra + body), abs=0.05)
+    assert kills(a + body + math.sqrt(2 * a * body) - 0.1, 0) and not kills(a + body + math.sqrt(2 * a * body) + 0.1, 0)

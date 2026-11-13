@@ -1410,15 +1410,14 @@ class Runner:
                    "vx": float(s[2]), "vy": float(s[3]), "status": int(s[6]), "flags": int(s[4]) & 0xffffffff,
                    "state": int(s[5]), "keys": int(s[7]) if len(s) > 7 else 0, "action": int(act_idx[i])}
                   for i, s in enumerate(states)]
-        now = T.box_rows(boxes, S.KIND_HAZARD)
-        sh = m.get("sh", [])
-        if sh:
-            now += T.box_rows([(x, y, r, r, 0.0) for _, x, y, r in sh], S.KIND_SHOT)
+        fb_now = S.frame_boxes(m.get("hz", []), lv.hz_keep, m.get("sh", []))   # the game's own shapes
+        now = T.box_rows(fb_now.boxes, fb_now.kind, fb_now.shapes())
         future = {}
         try:
             if fboxes is None or len(fboxes) <= max(T.FUTURE_AT):
                 fboxes = future_inputs(self.fw, frame, max(T.FUTURE_AT), dt, lv.name, self.deaths)[1]
-            future = {str(k): T.box_rows(fboxes[k].boxes, fboxes[k].kind) for k in T.FUTURE_AT}
+            future = {str(k): T.box_rows(fboxes[k].boxes, fboxes[k].kind, fboxes[k].shapes(), fboxes[k].grows())
+                      for k in T.FUTURE_AT}
         except Exception:
             future = {}
         mem = self.deaths.boxes(lv.name, frame)

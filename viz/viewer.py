@@ -374,7 +374,7 @@ class Scene:
     wave: int = 0
     frame: int = 0
     agents: list = field(default_factory=list)   # [{i, role, x, y, vx, vy, status}]
-    hazards: list = field(default_factory=list)  # telemetry boxes [x, y, hw, hh, a, kind]
+    hazards: list = field(default_factory=list)  # telemetry shapes [x, y, hw, hh, a, kind, shape, grow]
     future: dict = field(default_factory=dict)   # {"8": boxes, "16": boxes}
     future_note: str = "predicted"
     memory: list = field(default_factory=list)
@@ -872,7 +872,7 @@ class ReplaySource:
                 from plan.safety import record_boxes
                 rec, keep = recs[frame]
                 fb = record_boxes(rec, keep if keep is not None else lv.hz_keep)
-                out = T.box_rows(fb.boxes, fb.kind)
+                out = T.box_rows(fb.boxes, fb.kind, fb.shapes())
         if len(self._boxes_cache) > 4000:
             self._boxes_cache.clear()
         self._boxes_cache[key] = out
@@ -1191,6 +1191,45 @@ class Renderer:
             self.pg.draw.polygon(s, col + (alpha,), [(x - x0, y - y0) for x, y in pts], width)
             surf.blit(s, (x0, y0))
 
+    def shape(self, surf, m, b, col, fill_alpha=None, outline_alpha=None, danger=True):
+        """A deadly shape as the game has it (telemetry row [x, y, hw, hh, angle, kind, shape, grow]): a circle as a
+        circle, a box as its turned box; a game box also with the outline of where a centre dies (its region,
+        game.level.kill_outline, faint); a future's grow drawn as a dashed-looking second outline. Rows without a
+        shape type (older runs) are boxes."""
+        sh = int(b[6]) if len(b) > 6 else 0
+        grow = float(b[7]) if len(b) > 7 else 0.0
+        if sh == 1:
+            c = m.pt(b[0], b[1])
+            r = max(1, int(round(float(b[2]) * m.sc)))
+            for rad, alpha, width in ((r, fill_alpha, 0), (r, outline_alpha, 1),
+                                      (int(round((float(b[2]) + grow) * m.sc)) if grow > 0.5 else 0, 70, 1)):
+                if rad <= 0 or (alpha is None and width == 0):
+                    continue
+                if rad > 4000:
+                    continue
+                s = self.pg.Surface((2 * rad + 4, 2 * rad + 4), self.pg.SRCALPHA)
+                self.pg.draw.circle(s, col + (alpha if alpha is not None else 255,), (rad + 2, rad + 2), rad, width)
+                surf.blit(s, (c[0] - rad - 2, c[1] - rad - 2))
+            return
+        if fill_alpha is not None:
+            self.poly(surf, m, b, col, 0, fill_alpha)
+        self.poly(surf, m, b, col, 1, outline_alpha)
+        if sh == 2 and danger:
+            from game.level import kill_outline
+            pts = [m.pt(x, y) for x, y in kill_outline(b[:5], 2, grow)]
+            if len(pts) > 2:
+                self.lines_alpha(surf, col, pts, 50)
+
+    def lines_alpha(self, surf, col, pts, alpha):
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        x0, y0 = int(min(xs)) - 2, int(min(ys)) - 2
+        w, h = int(max(xs)) - x0 + 3, int(max(ys)) - y0 + 3
+        if w <= 0 or h <= 0 or w > 4000 or h > 4000:
+            return
+        s = self.pg.Surface((w, h), self.pg.SRCALPHA)
+        self.pg.draw.lines(s, col + (alpha,), True, [(x - x0, y - y0) for x, y in pts], 1)
+        surf.blit(s, (x0, y0))
+
     def draw_map(self, surf, scene: Scene, m: Mapper, rect):
         pg = self.pg
         lv = scene.level
@@ -1223,11 +1262,10 @@ class Renderer:
                 for b in scene.future.get(key) or []:
                     kind = b[5] if len(b) > 5 else KIND_HAZARD
                     col = MEMORY if kind == KIND_MEMORY else SHOT if kind == KIND_SHOT else HAZ
-                    self.poly(surf, m, b, col, 1, alpha)
+                    self.shape(surf, m, b, col, None, alpha, danger=False)
         for b in scene.hazards:
             col = SHOT if len(b) > 5 and b[5] == KIND_SHOT else HAZ
-            self.poly(surf, m, b, col, 0, 120)
-            self.poly(surf, m, b, col, 1)
+            self.shape(surf, m, b, col, 120, None)
         for b in scene.memory:
             self.poly(surf, m, b, MEMORY, 0, 90)
             self.poly(surf, m, b, MEMORY, 1)

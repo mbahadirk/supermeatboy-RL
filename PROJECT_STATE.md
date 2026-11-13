@@ -1,5 +1,26 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Kill shapes exactly as the game tests them (2026-11-14; offline-checked on recordings, not yet run live)
+
+**Finding: the game's box test is not an overlap test.** Needle and salt pieces (kill shape kind 2) killed agents 8-17 units outside the box + BODY we used, so the agent thought the gaps were safe.
+- The character's hazard box is char+0x71c: an OBB of half size char+0x874 (props 0x21d = 6), built at 0x5218bf. So BODY = 6 was right.
+- Two type-0 bounds go through FUN_00476720 at 0x476744. With d the distance between the centres, D1 the distance from the character's centre to the kill box and D2 from the kill box's centre to the character's box (FUN_004765f0, point-to-box), the character dies when d^2 >= D1^2 + D2^2.
+- That reaches a + 6 + sqrt(12 a) along the box's axes: 23.6 / 19.9 units for a 7.88 x 5.66 needle, against 13.9 / 11.7 for box + BODY. It reaches furthest on the diagonals (30.7).
+- On all recorded Hospital play (runs/experiments/needle_shape_v1/exact.py): of 3284 death frames next to a box shape, this test explains 95.4%, box + BODY 1.9%. Of 247,193 alive frames, 0.4% contradict it.
+- Circles (kind 1: saws, enemies, shots) are tested exactly (closest point of the character's box within r). Our bounding square was too big at its corners.
+
+**Change** (`game/level.py`, `plan/safety.py`, `mpc/future.py`, `plan/planner.py`, `plan/commit.py`, `viz/`):
+- Every deadly shape keeps the game's geometry and a type: SHAPE_BOX (remembered deaths, rows without measured shapes), SHAPE_CIRCLE, SHAPE_GAMEBOX.
+- `game.level.kill_clearance` is the one rule. Circles exact. Game boxes: a star-shaped region traced on 144 rays (`game_box_profile`, cached per (a, b, angle)), interpolated (5-9 sign mismatches in 20,000 random points). Beyond 30 units past the furthest radius, r - that radius is used.
+- `FrameBoxes` carries `shape` and `grow` (a future's uncertainty radius, no longer added to the half sizes); `take`, `clearance`, `reach`.
+- `hazard_boxes` (the progress field, grids, PPO) keeps the contact convention, with game boxes as `box_reach`, the box covering the region.
+- Telemetry rows are `[x, y, hw, hh, a, kind, shape, grow]`. The viewer draws circles as circles, boxes as their turned boxes, and the game-box death region as a faint outline (`kill_outline`).
+
+**Effect on recorded deaths** (`explain_again.py`; runs logged them all "unexplained"): now explained 3-1 6/7, 3-2 5/7, 2-14 7/7, 2-12 3/3, 2-9 6/8, 4-1 2/2.
+- Left unexplained: 2-16 4, 2-17 3, 2-18 1 (lasers / other, not read yet), and 2-13 / 2-15 in human_v1_check01 (enemies; that run predates the enemy reader).
+
+**Cost.** Offline decision median, plain boxes -> exact shapes: 3-2 168 -> 203 ms, 2-14 207 -> 254 ms, 1-14 148 -> 142 ms.
+
 ## Enemies the agent could not see: SMBAnimal crawlers and fliers (2026-11-14; code-read, not yet checked live)
 
 **Finding** (human_v1_check01 on 2-9, 2-12..2-15: every death "none", unexplained):

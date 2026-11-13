@@ -10,6 +10,7 @@ import os
 import sys
 import json
 from collections import deque
+from functools import lru_cache
 
 import numpy as np
 
@@ -613,18 +614,51 @@ class Level:
         return g
 
 
+@lru_cache(maxsize=4096)
+def box_reach(a: float, b: float, body: float = BODY) -> tuple[float, float]:
+    """Half sizes (in the contact convention: grown by body) of the box that covers where the game kills around a
+    kill box of half sizes a, b.
+
+    The game tests two boxes (FUN_00476720, both bounds type 0, 0x476744) not by overlap: with d the distance between
+    the centres, D1 the distance from the character's centre to the kill box and D2 from the kill box's centre to
+    the character's box (FUN_004765f0, both point-to-box), it kills when d^2 >= D1^2 + D2^2. That reaches far beyond
+    the box: a + body + sqrt(2 a body) along its own axes (7.88 x 5.66 needles: 23.7 / 20.0 units from the centre,
+    not 13.9 / 11.7) and furthest on the diagonals (30.8). On recorded Hospital play it is true for 95% of the deaths
+    next to a box shape, the box grown by body for 2% (runs/experiments/needle_shape_v1). The region is traced on 37
+    rays (every 2.5 degrees, bisection) in the box's frame with the character's box turned with it; the covering
+    box keeps the planner's single shape (it is larger than the region off the diagonals by a few units)."""
+    hw = hh = 0.0
+    for k in range(37):
+        th = math.radians(2.5 * k)
+        c, s = math.cos(th), math.sin(th)
+        lo, hi = 0.0, 4.0 * (a + b + body) + 10.0
+        for _ in range(32):
+            m = 0.5 * (lo + hi)
+            x, y = m * c, m * s
+            eu, ev = max(x - a, 0.0), max(y - b, 0.0)
+            fx, fy = max(x - body, 0.0), max(y - body, 0.0)
+            if x * x + y * y >= eu * eu + ev * ev + fx * fx + fy * fy:
+                lo = m
+            else:
+                hi = m
+        hw, hh = max(hw, lo * c), max(hh, lo * s)
+    return hw - body, hh - body
+
+
 def shape_box(s) -> tuple:
     """One kill shape of a piece as the game tests it (realgame.js killShapes: [1, x, y, r, r, 0] a circle,
     [2, x, y, half w, half h, angle] a turned box, both against Meat Boy's axis-aligned box of half size BODY) as
     a box in the contact convention (x, y, half w, half h, angle): the centre dies within BODY of it.
-    A circle: its bounding square (covers the circle grown by the body's box for r >= BODY). A turned box: its
-    half sizes grow by how much further the body's box reaches along the box's axes than BODY
-    (BODY (|cos| + |sin|) - BODY: 0 when upright, 2.5 units at 45 degrees), so its sides are exact."""
+    A circle (tested exactly: the closest point of the character's box within r): its bounding square (covers the
+    circle grown by the body's box for r >= BODY). A turned box: box_reach, the box covering the game's box-box test
+    (far larger than the box), its half sizes then grown by how much further the body's box reaches along the box's
+    axes than BODY (BODY (|cos| + |sin|) - BODY: 0 when upright, 2.5 units at 45 degrees)."""
     kind, x, y, a, b, ang = s[:6]
     if int(kind) == 1:
         return (float(x), float(y), float(a), float(a), 0.0)
     e = BODY * (abs(math.cos(ang)) + abs(math.sin(ang))) - BODY
-    return (float(x), float(y), float(a) + e, float(b) + e, float(ang))
+    ra, rb = box_reach(round(abs(float(a)), 2), round(abs(float(b)), 2))
+    return (float(x), float(y), ra + e, rb + e, float(ang))
 
 
 def hazard_boxes(hz: list, keep=None) -> tuple[list, list]:
@@ -651,6 +685,226 @@ def hazard_boxes(hz: list, keep=None) -> tuple[list, list]:
         out.append((x, y, 0.5 * w * sx, 0.5 * hgt * sy, ang))
         kept.append(k)
     return out, kept
+
+
+# ---- kill shapes as the game tests them (exact) ---------------------------------------------------------------
+# A deadly shape's type, next to its (x, y, half w, half h, angle) geometry:
+#   SHAPE_BOX: a box in the contact convention (the centre dies within BODY of it): remembered deaths, rows without
+#              measured shapes (their size box), goal / key boxes;
+#   SHAPE_CIRCLE: a circle (x, y, r, r, 0): the game finds the closest point of the character's box (an axis-aligned
+#              box of half size BODY round its centre, FUN_004763d0) and kills within r (FUN_00476720 0x4767f4);
+#              realgame.js killShapes kind 1, enemies, flying shots;
+#   SHAPE_GAMEBOX: a turned box (x, y, a, b, angle), realgame.js killShapes kind 2, killing by the game's box-box test
+#              (box_reach's docstring): far beyond the box, furthest on its diagonals.
+SHAPE_BOX, SHAPE_CIRCLE, SHAPE_GAMEBOX = 0, 1, 2
+PROFILE_RAYS = 144                 # game boxes: the kill region's radius every 2.5 degrees (world frame)
+
+
+def game_box_kills(px, py, a: float, b: float, ang: float, body: float = BODY) -> np.ndarray:
+    """The game's box-box test for character centres at (px, py) relative to a kill box's centre (world frame):
+    with D1 from the centre to the kill box (its own frame) and D2 from the kill box's centre to the character's
+    axis-aligned box (half size body), it kills when px^2 + py^2 >= D1^2 + D2^2."""
+    px, py = np.asarray(px, np.float64), np.asarray(py, np.float64)
+    c, s = math.cos(ang), math.sin(ang)
+    u, v = px * c + py * s, -px * s + py * c
+    d1 = np.maximum(np.abs(u) - a, 0.0) ** 2 + np.maximum(np.abs(v) - b, 0.0) ** 2
+    d2 = np.maximum(np.abs(px) - body, 0.0) ** 2 + np.maximum(np.abs(py) - body, 0.0) ** 2
+    return px * px + py * py >= d1 + d2
+
+
+@lru_cache(maxsize=4096)
+def game_box_profile(a: float, b: float, ang: float, body: float = BODY) -> np.ndarray:
+    """(PROFILE_RAYS,) the radius at which the game's box-box test stops killing, on rays from the kill box's
+    centre at world angles 2 pi k / PROFILE_RAYS (bisection, 0.001 units). The region is star-shaped round the
+    centre (every ray kills from 0 up to one radius), so a point kills iff it is within its ray's radius."""
+    th = 2.0 * math.pi * np.arange(PROFILE_RAYS) / PROFILE_RAYS
+    c, s = np.cos(th), np.sin(th)
+    lo, hi = np.zeros(PROFILE_RAYS), np.full(PROFILE_RAYS, 4.0 * (a + b + body) + 10.0)
+    for _ in range(36):
+        m = 0.5 * (lo + hi)
+        k = game_box_kills(m * c, m * s, a, b, ang, body)
+        lo, hi = np.where(k, m, lo), np.where(k, hi, m)
+    out = lo
+    out.setflags(write=False)
+    return out
+
+
+def _profile(b) -> np.ndarray:
+    return game_box_profile(round(abs(float(b[2])), 2), round(abs(float(b[3])), 2), round(float(b[4]), 3))
+
+
+def _profiles(b) -> np.ndarray:
+    """(G, rays) profiles of game boxes b (G, 5), one game_box_profile call per distinct (a, b, angle)."""
+    key = np.column_stack([np.round(np.abs(b[:, 2]), 2), np.round(np.abs(b[:, 3]), 2), np.round(b[:, 4], 3)])
+    uniq, inv = np.unique(key, axis=0, return_inverse=True)
+    table = np.stack([game_box_profile(float(u[0]), float(u[1]), float(u[2])) for u in uniq])
+    return table[inv.reshape(-1)]
+
+
+def kill_clearance(px, py, boxes, shape=None, grow=None, body: float = BODY) -> np.ndarray:
+    """(n points, M shapes): how far the character centres (px, py) are from being killed by each shape (negative:
+    killed), per its type (SHAPE_*; None: all SHAPE_BOX), less grow (M,) (a future's uncertainty radius).
+    SHAPE_BOX: distance to the box less body; SHAPE_CIRCLE: distance from its centre to the character's box less r
+    (exact); SHAPE_GAMEBOX: distance to the kill region's boundary along the ray from its centre (exact on the
+    profile's rays, interpolated between them)."""
+    px, py = np.asarray(px, np.float64).ravel(), np.asarray(py, np.float64).ravel()
+    b = np.asarray(boxes, np.float64).reshape(-1, 5)
+    M = len(b)
+    out = np.empty((len(px), M))
+    if not M:
+        return out
+    shape = np.zeros(M, np.int8) if shape is None else np.asarray(shape, np.int8)
+    grow = np.zeros(M) if grow is None else np.asarray(grow, np.float64)
+    dx, dy = px[:, None] - b[None, :, 0], py[:, None] - b[None, :, 1]
+    j = np.nonzero(shape == SHAPE_BOX)[0]
+    if len(j):
+        c, s = np.cos(b[j, 4]), np.sin(b[j, 4])
+        u, v = dx[:, j] * c + dy[:, j] * s, -dx[:, j] * s + dy[:, j] * c
+        out[:, j] = np.hypot(np.maximum(np.abs(u) - b[j, 2], 0.0), np.maximum(np.abs(v) - b[j, 3], 0.0)) - body
+    j = np.nonzero(shape == SHAPE_CIRCLE)[0]
+    if len(j):
+        out[:, j] = np.hypot(np.maximum(np.abs(dx[:, j]) - body, 0.0), np.maximum(np.abs(dy[:, j]) - body, 0.0)) - b[j, 2]
+    j = np.nonzero(shape == SHAPE_GAMEBOX)[0]
+    if len(j):
+        out[:, j] = _gamebox_clearance(dx[:, j], dy[:, j], b[j])
+    return out - grow[None, :]
+
+
+EXACT_WITHIN = 30.0     # units: beyond the region's furthest radius by more, a game box's clearance is r - that radius
+
+
+def _gamebox_clearance(dx, dy, b) -> np.ndarray:
+    """(n, G) offsets from G game boxes' centres -> clearance to their kill regions (kill_clearance). Points further
+    than EXACT_WITHIN beyond a region's furthest radius get r - that radius (a lower bound; nothing that far counts
+    as near: the soft-risk margin is 13.9 units at most), the others the profile's radius on their ray."""
+    profs = _profiles(b)                                             # (G, rays)
+    rmax = profs.max(1)
+    r = np.hypot(dx, dy)
+    out = r - rmax[None, :]
+    near = np.nonzero(out < EXACT_WITHIN)
+    if len(near[0]):
+        ddx, ddy, g = dx[near], dy[near], near[1]
+        f = (np.arctan2(ddy, ddx) % (2 * math.pi)) * (PROFILE_RAYS / (2 * math.pi))
+        fl = np.floor(f)
+        i0 = fl.astype(np.int64) % PROFILE_RAYS
+        w = f - fl
+        out[near] = r[near] - (profs[g, i0] * (1 - w) + profs[g, (i0 + 1) % PROFILE_RAYS] * w)
+    return out
+
+
+def kill_clearance_paired(PX, PY, boxes, shape=None, grow=None, body: float = BODY) -> np.ndarray:
+    """kill_clearance with its own points per shape: PX, PY (M, n) -> (M, n), row m against shape m only."""
+    PX, PY = np.asarray(PX, np.float64), np.asarray(PY, np.float64)
+    b = np.asarray(boxes, np.float64).reshape(-1, 5)
+    M = len(b)
+    out = np.empty(PX.shape)
+    if not M:
+        return out
+    shape = np.zeros(M, np.int8) if shape is None else np.asarray(shape, np.int8)
+    grow = np.zeros(M) if grow is None else np.asarray(grow, np.float64)
+    dx, dy = PX - b[:, 0:1], PY - b[:, 1:2]
+    j = np.nonzero(shape == SHAPE_BOX)[0]
+    if len(j):
+        c, s = np.cos(b[j, 4])[:, None], np.sin(b[j, 4])[:, None]
+        u, v = dx[j] * c + dy[j] * s, -dx[j] * s + dy[j] * c
+        out[j] = np.hypot(np.maximum(np.abs(u) - b[j, 2:3], 0.0), np.maximum(np.abs(v) - b[j, 3:4], 0.0)) - body
+    j = np.nonzero(shape == SHAPE_CIRCLE)[0]
+    if len(j):
+        out[j] = np.hypot(np.maximum(np.abs(dx[j]) - body, 0.0), np.maximum(np.abs(dy[j]) - body, 0.0)) - b[j, 2:3]
+    j = np.nonzero(shape == SHAPE_GAMEBOX)[0]
+    if len(j):
+        out[j] = _paired_gamebox(dx[j], dy[j], b[j])
+    return out - grow[:, None]
+
+
+def _paired_gamebox(dx, dy, b) -> np.ndarray:
+    """(G, n) offsets, row g from game box g -> clearance (as _gamebox_clearance, each row its own box)."""
+    profs = _profiles(b)
+    rmax = profs.max(1)
+    r = np.hypot(dx, dy)
+    out = r - rmax[:, None]
+    near = np.nonzero(out < EXACT_WITHIN)
+    if len(near[0]):
+        g = near[0]
+        f = (np.arctan2(dy[near], dx[near]) % (2 * math.pi)) * (PROFILE_RAYS / (2 * math.pi))
+        fl = np.floor(f)
+        i0 = fl.astype(np.int64) % PROFILE_RAYS
+        w = f - fl
+        out[near] = r[near] - (profs[g, i0] * (1 - w) + profs[g, (i0 + 1) % PROFILE_RAYS] * w)
+    return out
+
+
+def kill_reach(boxes, shape=None, grow=None, body: float = BODY) -> np.ndarray:
+    """(M,): the furthest a character centre can be from each shape's centre and still be killed (plus grow): what
+    the cheap distance filters use."""
+    b = np.asarray(boxes, np.float64).reshape(-1, 5)
+    M = len(b)
+    shape = np.zeros(M, np.int8) if shape is None else np.asarray(shape, np.int8)
+    grow = np.zeros(M) if grow is None else np.asarray(grow, np.float64)
+    out = np.hypot(b[:, 2], b[:, 3]) + body
+    j = shape == SHAPE_CIRCLE
+    out[j] = b[j, 2] + body * SQRT2_
+    j = np.nonzero(shape == SHAPE_GAMEBOX)[0]
+    if len(j):
+        out[j] = _profiles(b[j]).max(1)
+    return out + grow
+
+
+def kill_outline(box, shape: int, grow: float = 0.0, n: int = 48) -> list:
+    """The boundary of where a character centre dies, as a polygon [(x, y)] (the viewer's danger outline):
+    SHAPE_BOX the box grown by body (its corners rounded), SHAPE_CIRCLE r + the body's reach, SHAPE_GAMEBOX its
+    profile; all grown by grow."""
+    x, y, hw, hh, ang = (float(v) for v in box[:5])
+    if shape == SHAPE_GAMEBOX:
+        prof = _profile(box)
+        th = 2.0 * math.pi * np.arange(PROFILE_RAYS) / PROFILE_RAYS
+        r = prof + grow
+        return list(zip((x + r * np.cos(th)).tolist(), (y + r * np.sin(th)).tolist()))
+    th = 2.0 * math.pi * np.arange(n) / n
+    c, s = np.cos(th), np.sin(th)
+    if shape == SHAPE_CIRCLE:               # where the body's box reaches the circle: rounded square
+        ex = hw + grow
+        pts = [(x + BODY * np.sign(ci) + ex * ci, y + BODY * np.sign(si) + ex * si) for ci, si in zip(c, s)]
+        return [(float(a), float(b)) for a, b in pts]
+    e = BODY + grow                         # box grown by e, corners rounded, turned
+    ca, sa = math.cos(ang), math.sin(ang)
+    out = []
+    for ci, si in zip(c, s):
+        u, v = hw * np.sign(ci) + e * ci, hh * np.sign(si) + e * si
+        out.append((x + u * ca - v * sa, y + u * sa + v * ca))
+    return out
+
+
+SQRT2_ = math.sqrt(2.0)
+
+
+def hazard_shapes(hz: list, keep=None) -> tuple[list, list, list]:
+    """hazard_boxes with the game's own geometry: (boxes, kept, shape types). A measured kill shape keeps its exact
+    geometry and type (kind 1 a SHAPE_CIRCLE (x, y, r, r, 0), kind 2 a SHAPE_GAMEBOX (x, y, a, b, angle)); a row
+    without measured shapes keeps its size box as SHAPE_BOX (as hazard_boxes)."""
+    out, kept, shape = [], [], []
+    for k, h in enumerate(hz):
+        if len(h) > 7 and h[7] is not None:
+            for s in h[7]:
+                kind, x, y, a, b, ang = s[:6]
+                if int(kind) == 1:
+                    out.append((float(x), float(y), float(a), float(a), 0.0))
+                    shape.append(SHAPE_CIRCLE)
+                else:
+                    out.append((float(x), float(y), abs(float(a)), abs(float(b)), float(ang)))
+                    shape.append(SHAPE_GAMEBOX)
+                kept.append(k)
+            continue
+        if keep is not None and k < len(keep) and not keep[k]:
+            continue
+        x, y, w, hgt, sx, sy, ang = h[:7]
+        sx, sy = abs(sx or 1.0), abs(sy or 1.0)
+        if w <= 0 and hgt <= 0:
+            w = hgt = 24.0
+        out.append((x, y, 0.5 * w * sx, 0.5 * hgt * sy, ang))
+        kept.append(k)
+        shape.append(SHAPE_BOX)
+    return out, kept, shape
 
 
 def box_ids(kept: list, names=None, prefix: str = "h") -> list[str]:

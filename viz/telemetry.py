@@ -20,12 +20,13 @@ Coordinates and units (all messages)
   row 0 is the BOTTOM row.
 - Speeds in units per second. Frames are the game's wave frames (60 per second, the time step is locked),
   counted from 0 at each wave start. Angles in radians.
-- A box is [x, y, hw, hh, angle, kind]: centre, half width, half height (a kill shape the game's narrow phase
-  tests, game.level.shape_box, and for future boxes grown by the future's uncertainty radius), the
-  rotation (a point p is inside when |u| <= hw and |v| <= hh with u = dx cos a + dy sin a,
-  v = -dx sin a + dy cos a, d = p - centre), and what it is: 0 lethal piece, 1 flying shot, 3 remembered death
-  (plan/safety.py DeathMemory). The agent's centre dies when it comes within BODY = 6 units of a box
-  (realpath.BODY), and when it leaves the level's alive box.
+- A deadly shape is [x, y, hw, hh, angle, kind, shape, grow]: centre, half width, half height, rotation (a point p is
+  inside the box when |u| <= hw and |v| <= hh with u = dx cos a + dy sin a, v = -dx sin a + dy cos a, d = p - centre),
+  what it is (0 lethal piece, 1 flying shot, 3 remembered death: plan/safety.py DeathMemory), how the game tests it
+  (game.level SHAPE_*: 0 a box the agent's centre dies within BODY = 6 units of; 1 a circle of radius hw, killing
+  when the agent's box (half size BODY) reaches it; 2 a box killing by the game's box-box test, far beyond the
+  box: game.level.kill_clearance) and grow (a future's uncertainty radius, 0 now). Older senders have 6 fields
+  (shape 0, grow 0). The agent also dies when it leaves the level's alive box.
 - Every message has "t" (type), "time" (sender's wall clock, seconds since the epoch, float), "level" (level
   name, e.g. "1-13") and "wave" (the game's wave number on this level, from 1; 0 before the first wave).
 
@@ -166,12 +167,16 @@ def _pack(a: np.ndarray) -> str:
     return base64.b64encode(zlib.compress(np.ascontiguousarray(a).tobytes(), 6)).decode("ascii")
 
 
-def box_rows(boxes, kind) -> list:
-    """(M, 5) boxes and their kinds -> [[x, y, hw, hh, angle, kind], ...] rounded."""
+def box_rows(boxes, kind, shape=None, grow=None) -> list:
+    """(M, 5) shapes, their kinds, shape types (game.level SHAPE_*: 0 box in the contact convention, 1 circle, 2 the
+    game's box test; None: 0) and grow (a future's uncertainty radius; None: 0) -> [[x, y, hw, hh, angle, kind,
+    shape, grow], ...] rounded."""
     b = np.asarray(boxes, np.float64).reshape(-1, 5)
     k = np.broadcast_to(np.asarray(kind, np.int64), (len(b),))
+    sh = np.zeros(len(b), np.int64) if shape is None else np.broadcast_to(np.asarray(shape, np.int64), (len(b),))
+    gr = np.zeros(len(b)) if grow is None else np.broadcast_to(np.asarray(grow, np.float64), (len(b),))
     return [[round(float(r[0]), 1), round(float(r[1]), 1), round(float(r[2]), 1), round(float(r[3]), 1),
-             round(float(r[4]), 3), int(kk)] for r, kk in zip(b, k)]
+             round(float(r[4]), 3), int(kk), int(ss), round(float(g), 1)] for r, kk, ss, g in zip(b, k, sh, gr)]
 
 
 # ---- message builders (the schema above) --------------------------------------------------------------

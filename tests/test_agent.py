@@ -241,7 +241,7 @@ def test_runner_plays_a_recorded_wave(tmp_path):
     assert len(frames) == N_FRAMES
     fm = frames[-1]
     assert len(fm["agents"]) == 2 and set(fm["future"]) == {"8", "16"}
-    assert all(len(b) == 6 for b in fm["hazards"])
+    assert all(len(b) == 8 for b in fm["hazards"])                      # [x, y, hw, hh, a, kind, shape, grow]
     after = [m for m in frames if m["frame"] > died_frame]
     assert all(m["memory"] for m in after)
     assert any(b[5] == S.KIND_MEMORY for m in after for b in m["future"]["8"])

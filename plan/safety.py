@@ -27,6 +27,8 @@ import numpy as np
 
 from realpath import BODY
 from game.level import OUT_BOTTOM, OUT_SIDE, alive_box, box_ids, hazard_boxes   # noqa: F401 (OUT_*: fallback rule)
+from game.level import (SHAPE_BOX, SHAPE_CIRCLE, SHAPE_GAMEBOX, hazard_shapes, kill_clearance,   # noqa: F401
+                        kill_clearance_paired, kill_reach)
 from wm.features import box_distances
 
 VETO_FRAMES = 16            # contact in frames 1..VETO_FRAMES vetoes the candidate
@@ -63,34 +65,58 @@ def contact_id(kind, ids, box):
 # ---- hazards of one frame -------------------------------------------------------------------------------
 @dataclass
 class FrameBoxes:
-    """The deadly boxes of one frame: (M, 5) rotated boxes (x, y, half w, half h, angle), what each is
-    (KIND_HAZARD / KIND_SHOT / KIND_MEMORY) and a stable id (hazard index in the frame's list, shot id, or the
-    remembered death's position)."""
+    """The deadly shapes of one frame: (M, 5) geometry (x, y, half w, half h, angle), what each is (KIND_HAZARD /
+    KIND_SHOT / KIND_MEMORY), a stable id (hazard index in the frame's list, shot id, or the remembered death's
+    position), its shape type (game.level SHAPE_*: how the game tests it; None: all SHAPE_BOX, the contact
+    convention) and grow (M,), a future's uncertainty radius (None: 0). game.level.kill_clearance is the rule."""
     boxes: np.ndarray
     kind: np.ndarray
     ids: list
+    shape: np.ndarray | None = None
+    grow: np.ndarray | None = None
 
     def __len__(self):
         return len(self.ids)
+
+    def shapes(self) -> np.ndarray:
+        return np.zeros(len(self.ids), np.int8) if self.shape is None else np.asarray(self.shape, np.int8)
+
+    def grows(self) -> np.ndarray:
+        return np.zeros(len(self.ids)) if self.grow is None else np.asarray(self.grow, np.float64)
+
+    def take(self, idx) -> "FrameBoxes":
+        idx = np.asarray(idx, np.int64)
+        return FrameBoxes(self.boxes[idx], self.kind[idx], [self.ids[i] for i in idx], self.shapes()[idx],
+                          self.grows()[idx])
+
+    def clearance(self, px, py) -> np.ndarray:
+        """(n points, M): game.level.kill_clearance of character centres against these shapes."""
+        return kill_clearance(px, py, self.boxes, self.shape, self.grow)
+
+    def reach(self) -> np.ndarray:
+        return kill_reach(self.boxes, self.shape, self.grow)
 
 
 def frame_boxes(hz, keep=None, sh=(), memory=None, hz_ids=None) -> FrameBoxes:
     """One frame's deadly boxes: lethal pieces hz (realgame.js rows: their kill shapes, game.level.hazard_boxes;
     keep only for rows without shapes), flying shots sh [sid, x, y, rad], and remembered deaths `memory` (M, 5)
     (DeathMemory.boxes). hz_ids: names of the hz rows (default "h<index>"; game.level.box_ids)."""
-    boxes, kept = hazard_boxes(hz or [], keep)
+    boxes, kept, shape = hazard_shapes(hz or [], keep)
     kind = [KIND_HAZARD] * len(boxes)
     ids = box_ids(kept, hz_ids)
-    for sid, x, y, rad in sh or ():
+    for sid, x, y, rad in sh or ():                  # flying shots: circles (FUN_004cd350)
         boxes.append((x, y, rad, rad, 0.0))
         kind.append(KIND_SHOT)
         ids.append(f"shot{sid}")
+        shape.append(SHAPE_CIRCLE)
     if memory is not None:
         for x, y, hw, hh, ang in np.asarray(memory, np.float64).reshape(-1, 5):
             boxes.append((x, y, hw, hh, ang))
             kind.append(KIND_MEMORY)
             ids.append(f"death@{x:.0f},{y:.0f}")
-    return FrameBoxes(np.asarray(boxes, np.float64).reshape(-1, 5), np.asarray(kind, np.int8), ids)
+            shape.append(SHAPE_BOX)
+    return FrameBoxes(np.asarray(boxes, np.float64).reshape(-1, 5), np.asarray(kind, np.int8), ids,
+                      np.asarray(shape, np.int8))
 
 
 def record_boxes(rec: dict, keep=None, memory=None) -> FrameBoxes:
@@ -123,8 +149,9 @@ def out_of_level(lv, x, y) -> np.ndarray:
 # ---- one step: movement segments against one frame's boxes ----------------------------------------------
 def segment_clearance(x0, y0, x1, y1, fb: FrameBoxes, bounds=None, sub: float = SUB_STEP):
     """Segments (x0, y0) -> (x1, y1) (same shapes, P after flattening) sampled at t in (0, 1] at most `sub`
-    units apart. Returns the smallest clearance (distance - BODY) to each box over the segment (P, M) and the
-    smallest out-of-level clearance (P,) (+inf without bounds). Negative = contact."""
+    units apart. Returns the smallest clearance (game.level.kill_clearance: per shape type, as the game tests it)
+    to each shape over the segment (P, M) and the smallest out-of-level clearance (P,) (+inf without bounds).
+    Negative = contact."""
     x0, y0, x1, y1 = (np.asarray(a, np.float64).ravel() for a in (x0, y0, x1, y1))
     P = len(x0)
     seg = np.hypot(x1 - x0, y1 - y0)
@@ -134,7 +161,7 @@ def segment_clearance(x0, y0, x1, y1, fb: FrameBoxes, bounds=None, sub: float = 
     py = y0[:, None] + (y1 - y0)[:, None] * t
     M = len(fb)
     if M:
-        clear = (box_distances(px.ravel(), py.ravel(), fb.boxes) - BODY).reshape(P, S, M).min(1)
+        clear = fb.clearance(px.ravel(), py.ravel()).reshape(P, S, M).min(1)
     else:
         clear = np.zeros((P, 0))
     oc = out_clearance(bounds, px, py).min(1) if bounds is not None else np.full(P, np.inf)
@@ -285,7 +312,7 @@ def first_contact(xs, ys, boxes, first=None, upto=None, step: int = 1):
     if not near.any():
         return frame, which
     idx = np.nonzero(near)[0]
-    fb = FrameBoxes(b[idx], np.zeros(len(idx), np.int8), [str(i) for i in idx])
+    fb = FrameBoxes(b[idx], np.zeros(len(idx), np.int8), [str(i) for i in idx])   # goal / key: SHAPE_BOX
     P = E * n
     X, Y = xs.reshape(P, K1), ys.reshape(P, K1)
     def lim(v, default):

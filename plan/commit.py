@@ -140,20 +140,17 @@ def path_check(xs, ys, frames, bounds=None):
     parts = [(k, fb) for k in range(1, K + 1) for fb in (frames[k],) if fb is not None and len(fb)]
     if parts:
         B = np.concatenate([fb.boxes for _, fb in parts])
+        SH = np.concatenate([fb.shapes() for _, fb in parts])
+        GR = np.concatenate([fb.grows() for _, fb in parts])
         fk = np.concatenate([np.full(len(fb), k) for k, fb in parts])
         ids = [i for _, fb in parts for i in fb.ids]
         x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
-        reach = np.hypot(B[:, 2], B[:, 3]) + S.BODY + SOFT_REACH
+        reach = S.kill_reach(B, SH, GR) + SOFT_REACH
         near = np.nonzero((B[:, 0] >= x0 - reach) & (B[:, 0] <= x1 + reach) & (B[:, 1] >= y0 - reach)
                           & (B[:, 1] <= y1 + reach))[0]
         if len(near):
-            B, fk = B[near], fk[near]
-            c, s = np.cos(B[:, 4])[:, None], np.sin(B[:, 4])[:, None]
-            dx = px[fk - 1] - B[:, 0:1]
-            dy = py[fk - 1] - B[:, 1:2]
-            u, v = dx * c + dy * s, -dx * s + dy * c
-            clear = (np.hypot(np.maximum(np.abs(u) - B[:, 2:3], 0.0),
-                              np.maximum(np.abs(v) - B[:, 3:4], 0.0)) - S.BODY).min(1)
+            B, fk, SH, GR = B[near], fk[near], SH[near], GR[near]
+            clear = S.kill_clearance_paired(px[fk - 1], py[fk - 1], B, SH, GR).min(1)   # each against its frame
             np.minimum.at(step, fk - 1, clear)
             for j in np.nonzero(clear < 0)[0]:
                 k = int(fk[j]) - 1

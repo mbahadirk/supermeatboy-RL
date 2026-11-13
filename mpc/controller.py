@@ -105,7 +105,7 @@ class MPC:
         worlds, check, recorded = self.future.worlds(frame, H, dt)
         x0, y0 = float(s[0]), float(s[1])
         reach = REACH * H * dt / 1000.0
-        check = [(b[_near(b, x0, y0, reach)], r[_near(b, x0, y0, reach)]) for b, r, _ in check]
+        check = [(b[_near(b, x0, y0, reach)], r[_near(b, x0, y0, reach)]) for b, r, *_ in check]
         # the model sees the 3 nearest hazards and anything 300+ units away as "far" (wm.features): hazards
         # that cannot come that close during the plan are left out of its inputs (the 3 nearest always stay)
         worlds = [replace(w, boxes=w.boxes[_relevant(w.boxes, x0, y0, reach + HAZ_FAR)]) for w in worlds]

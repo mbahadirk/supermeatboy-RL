@@ -30,7 +30,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from game.level import box_ids, hazard_boxes as kill_boxes
+from game.level import SHAPE_CIRCLE, box_ids, hazard_shapes
 from wm.features import hazard_boxes
 from wm.rollout import World
 
@@ -121,7 +121,7 @@ class FutureWorld:
         if ref is not None and self.shots_trusted and _shot_offset(ref[2], rec[2]) > MATCH_TOL:
             self.shots_trusted = False
         self._shots_seen(frame, rec[2])
-        kb, kept = _kill(rec[0], self.keep)
+        kb, kept, ksh = _kill(rec[0], self.keep)
         ids = box_ids(kept)
         runs = self.runs
         for j, i in enumerate(ids):
@@ -129,6 +129,7 @@ class FutureWorld:
             if run is None or not run.add(frame, kb[j]):
                 runs[i] = _BoxRun(frame, kb[j])
         self.kill_now = (frame, kb, kept, ids)
+        self.kill_shape = dict(zip(ids, ksh.tolist()))   # each kill box's shape type (game.level SHAPE_*)
         self.periodic = None                  # this frame's periodic boxes (worlds), once
         self.prev, self.last = self.last, (frame, rec[0], rec[1], rec[2], dt_ms)
 
@@ -241,7 +242,7 @@ class FutureWorld:
             b1 = boxes0 if deadly_only else hazard_boxes(self.prev[1], self.keep)
             if len(b1) == len(boxes0):
                 vel = (boxes0[:, :2] - b1[:, :2]) / dt_s
-            k1, kept1 = _kill(self.prev[1], self.keep)
+            k1, kept1, _ = _kill(self.prev[1], self.keep)
             if kept1 == kept0:                # the same shapes of the same pieces: their own motion
                 kvel = (kill0[:, :2] - k1[:, :2]) / dt_s
             if len(self.prev[2]) == len(pf0) and len(pf0):
@@ -270,7 +271,7 @@ class FutureWorld:
                 kb = (kill0, np.zeros(len(kill0)), ids0)
             elif rec is not None:
                 b, p = (None, None) if deadly_only else (hazard_boxes(rec[0], self.keep), rec[1])
-                kr, kept_r = _kill(rec[0], self.keep)
+                kr, kept_r, _ = _kill(rec[0], self.keep)
                 kb = (kr, np.full(len(kr), REC_RADIUS), box_ids(kept_r))
                 recorded += 1
             else:
@@ -308,11 +309,13 @@ class FutureWorld:
             else:
                 live = [(sid, rad, c[k - 1], m[k - 1]) for sid, rad, c, m, alive in shots if k <= alive]
                 live += [(lid, rad, c[k - 1], m[k - 1]) for lid, rad, c, m, k0, k1 in launch if k0 <= k <= k1]
+            shape = np.array([self.kill_shape.get(i, 0) for i in ids], np.int8)
             if live:
                 sb = np.array([(c[0], c[1], rad, rad, 0.0) for _, rad, c, _ in live])
                 b, r = np.concatenate([b, sb]), np.concatenate([r, [m for *_, m in live]])
                 ids = list(ids) + [f"shot{sid}" for sid, *_ in live]
-            check.append((b, r, list(ids)))
+                shape = np.concatenate([shape, np.full(len(live), SHAPE_CIRCLE, np.int8)])
+            check.append((b, r, list(ids), shape))
         return worlds, check, recorded
 
 
@@ -467,9 +470,10 @@ def shot_alive(centre: np.ndarray, margin: np.ndarray, terrain) -> int:
 
 
 def _kill(hz: list, keep):
-    """The boxes that kill (game.level.hazard_boxes) as an (M, 5) array, and their pieces' indices."""
-    b, kept = kill_boxes(hz, keep)
-    return np.asarray(b, np.float64).reshape(-1, 5), kept
+    """The shapes that kill (game.level.hazard_shapes: the game's own geometry) as an (M, 5) array, their pieces'
+    indices and their shape types (M,)."""
+    b, kept, shape = hazard_shapes(hz, keep)
+    return np.asarray(b, np.float64).reshape(-1, 5), kept, np.asarray(shape, np.int8)
 
 
 def _offset(a: list, b: list) -> float:
@@ -481,7 +485,7 @@ def _offset(a: list, b: list) -> float:
         return 0.0
     pa, pb = np.array([h[:2] for h in a], float), np.array([h[:2] for h in b], float)
     off = float(np.max(np.hypot(pa[:, 0] - pb[:, 0], pa[:, 1] - pb[:, 1])))
-    (ka, ia), (kb, ib) = _kill(a, None), _kill(b, None)
+    (ka, ia, _), (kb, ib, _) = _kill(a, None), _kill(b, None)
     if ia != ib:
         return float("inf")
     if len(ka):

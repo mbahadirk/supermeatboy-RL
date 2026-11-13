@@ -61,14 +61,14 @@ def test_shot_stops_where_it_would_be_inside_a_wall():
     fw = FutureWorld()                                               # the planner's boxes drop it from then on
     feed(fw, 3, path, terrain=ter)
     _, check, _ = fw.worlds(7, 20, DT)
-    with_shot = [k for k, (_, _, ids) in enumerate(check, 1) if "shot3" in ids]
+    with_shot = [k for k, (_, _, ids, _) in enumerate(check, 1) if "shot3" in ids]
     assert with_shot == list(range(1, alive + 1))
-    b, r, ids = check[0]
+    b, r, ids, _ = check[0]
     j = ids.index("shot3")
     assert tuple(b[j][2:]) == (9.44, 9.44, 0.0) and r[j] == pytest.approx(margin[0])
     fw2 = FutureWorld()                                              # no terrain known: never stopped
     feed(fw2, 3, path)
-    assert all("shot3" in ids for _, _, ids in fw2.worlds(7, 20, DT)[1])
+    assert all("shot3" in ids for _, _, ids, _ in fw2.worlds(7, 20, DT)[1])
 
 
 def test_respawned_shot_reusing_its_id_starts_a_new_flight():
@@ -124,11 +124,11 @@ def test_moving_piece_repeating_in_this_wave_is_looked_up_one_period_back():
         fw.observe(f, [_saw(_ping_pong(f)), still], None, [], [True, True], None, DT)
         if f == 200:                                  # under two periods seen: the linear guess, growing
             _, check, recorded = fw.worlds(f, 48, DT)
-            b, r, ids = check[47]
+            b, r, ids, _ = check[47]
             assert recorded == 0 and r[0] > 2.0 and r[1] == 0.0
     _, check, _ = fw.worlds(299, 48, DT)
     for k in (8, 16, 32, 48):
-        b, r, ids = check[k - 1]
+        b, r, ids, _ = check[k - 1]
         assert ids[:2] == ["h0", "h1"] and r[0] == F.REC_RADIUS and r[1] == 0.0
         assert abs(b[0][0] - _ping_pong(299 + k)) <= 1e-9 and tuple(b[1][:2]) == (0.0, 300.0)
     assert fw.runs["h0"].P == 120 and fw.runs["h1"].period() is None   # a box at rest has no period
@@ -170,7 +170,7 @@ def test_trusted_recording_gives_the_recorded_shots_and_aimed_shots_are_not_trus
         fw.observe(f, [], [], _launcher_frame(f), None, None, 16.667)
     _, check, rec = fw.worlds(40, 48, 16.667)
     assert rec == 48
-    b, r, ids = check[20]                              # step 21, frame 61: the recorded shot fired at 60, age 1
+    b, r, ids, _ = check[20]                              # step 21, frame 61: the recorded shot fired at 60, age 1
     j = ids.index("shot7")
     assert b[j][:2].tolist() == [3.0, 0.0] and r[j] == F.REC_RADIUS
     fw.new_wave()

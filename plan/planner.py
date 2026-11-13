@@ -490,10 +490,10 @@ def future_inputs(future, frame: int, H: int, dt_ms: float, level_name: str | No
     model inputs (worlds None), the same deadly boxes (the per-frame danger check)."""
     worlds, check, recorded = future.worlds(frame, H, dt_ms, deadly_only=deadly_only)
     frames = [None]
-    for k, (b, r, ids) in enumerate(check, start=1):
-        b = np.asarray(b, np.float64).reshape(-1, 5).copy()
-        if len(b):
-            b[:, 2:4] += np.asarray(r, np.float64)[:, None]
+    for k, (b, r, ids, shape) in enumerate(check, start=1):
+        b = np.asarray(b, np.float64).reshape(-1, 5)
+        grow = np.asarray(r, np.float64).reshape(-1)
+        shape = np.asarray(shape, np.int8).reshape(-1)
         ids = list(ids)
         kind = [S.KIND_SHOT if i.startswith("shot") else S.KIND_HAZARD for i in ids]
         if deaths is not None and level_name is not None:
@@ -502,7 +502,9 @@ def future_inputs(future, frame: int, H: int, dt_ms: float, level_name: str | No
                 b = np.concatenate([b, mem])
                 kind += [S.KIND_MEMORY] * len(mem)
                 ids += [f"death@{x:.0f},{y:.0f}" for x, y in mem[:, :2]]
-        frames.append(S.FrameBoxes(b, np.asarray(kind, np.int8), ids))
+                grow = np.concatenate([grow, np.zeros(len(mem))])
+                shape = np.concatenate([shape, np.full(len(mem), S.SHAPE_BOX, np.int8)])
+        frames.append(S.FrameBoxes(b, np.asarray(kind, np.int8), ids, shape, grow))
     return worlds, frames, recorded
 
 
@@ -524,13 +526,12 @@ def _near_frames(frames, xs, ys, margin=BOX_MARGIN):
             out.append(fb)
             continue
         b = fb.boxes
-        reach = np.hypot(b[:, 2], b[:, 3]) + S.BODY + margin
+        reach = fb.reach() + margin
         k = (b[:, 0] >= x0 - reach) & (b[:, 0] <= x1 + reach) & (b[:, 1] >= y0 - reach) & (b[:, 1] <= y1 + reach)
         if k.all():
             out.append(fb)
         else:
-            idx = np.nonzero(k)[0]
-            out.append(S.FrameBoxes(b[idx], fb.kind[idx], [fb.ids[i] for i in idx]))
+            out.append(fb.take(np.nonzero(k)[0]))
     return out
 
 
