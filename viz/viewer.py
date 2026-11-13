@@ -38,7 +38,7 @@ the selected agent to the goal (cyan, ticks every 60 frames to go; through its r
 from the spawn (orange), second press also the heat map of frames to go (bright near the goal), third off. Live
 from the level message's "progress"; replay from runs/<name>/fields/<level>.npz (runs from now on).
 
-Keys: Tab next planned agent, H help, A alternatives, F future hazards, P progress field, Z zoom on the selected agent (mouse wheel or
+Keys: Tab next planned agent, H help, A alternatives, F future hazards, P progress field, K kill regions, Z zoom on the selected agent (mouse wheel or
 [ / ] zoom in / out), S screenshot (replay: into the run folder; live: the current folder), Esc / Q quit. Replay: Space play / pause, Left / Right one step, + / - speed,
 N next event, D next surprise or unexplained death, Home / End, click the timeline to seek.
 """
@@ -116,6 +116,7 @@ PROGRESS_LINE = (70, 230, 255)    # P: the progress field's line from the select
 PROGRESS_ROUTE = (255, 150, 40)   # the field's route from the spawn
 PROGRESS_NEAR, PROGRESS_FAR = (255, 230, 90), (40, 60, 150)    # heat map: few / many frames to go
 PROGRESS_ALPHA = 110
+DANGER_ALPHA = 120                # K: the outline of where a centre dies round a game box or a beam
 PROGRESS_TICK = 60                # frames to go between the line's ticks
 # the chosen path in its planning mode's colour (plan/planner.py MODES; agent.py MODE_COL in the game)
 MODE_COLORS = {"long-safe": (64, 128, 255), "normal": PLAN, "reflex": (255, 48, 48), "explore": (176, 64, 240),
@@ -978,6 +979,7 @@ class Renderer:
         self.show_future = True
         self.show_help = False
         self.show_progress = 0                  # P: 0 off, 1 the progress line, 2 the line and the field's heat map
+        self.show_danger = True                 # K: where an agent's centre dies round each game box / beam
         self._heat = None                       # (key, small heat surface) / (key, scaled visible part)
         self._heat_scaled = None
         self._descent = None                    # (key, line) of the last drawn agent
@@ -1217,18 +1219,18 @@ class Renderer:
             p1 = m.pt(x + hl * math.cos(a), y + hl * math.sin(a))
             self.lines_alpha(surf, col, [p0, p1], outline_alpha if outline_alpha is not None else 255, closed=False,
                              width=3)
-            if danger or grow > 0.5:
+            if (danger and self.show_danger) or grow > 0.5:
                 from game.level import kill_outline
-                self.lines_alpha(surf, col, [m.pt(px, py) for px, py in kill_outline(b[:5], 3, grow)], 60)
+                self.lines_alpha(surf, col, [m.pt(px, py) for px, py in kill_outline(b[:5], 3, grow)], DANGER_ALPHA)
             return
         if fill_alpha is not None:
             self.poly(surf, m, b, col, 0, fill_alpha)
         self.poly(surf, m, b, col, 1, outline_alpha)
-        if sh == 2 and danger:
+        if sh == 2 and danger and self.show_danger:
             from game.level import kill_outline
             pts = [m.pt(x, y) for x, y in kill_outline(b[:5], 2, grow)]
             if len(pts) > 2:
-                self.lines_alpha(surf, col, pts, 50)
+                self.lines_alpha(surf, col, pts, DANGER_ALPHA)
 
     def lines_alpha(self, surf, col, pts, alpha, closed=True, width=1):
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
@@ -1584,7 +1586,8 @@ class Renderer:
     def draw_help(self, surf, scene: Scene):
         lines = ["Keys", "Tab   next planned agent", "H     this help", "A     alternatives on / off",
                  "F     future hazards (+8 / +16) on / off",
-                 "P     progress field: line / line + heat map / off", "Z     zoom on the selected agent on / off",
+                 "P     progress field: line / line + heat map / off",
+                 "K     where a centre dies round game boxes and beams on / off", "Z     zoom on the selected agent on / off",
                  "wheel or [ ]  zoom in / out", "S     screenshot (PNG)", "Esc Q quit"]
         if scene.mode == "replay":
             lines += ["Space play / pause", "Left / Right  one step back / forward", "+ / -  speed",
@@ -1712,6 +1715,8 @@ class App:
             self.r.show_future = not self.r.show_future
         elif k == pg.K_p:
             self.r.show_progress = (self.r.show_progress + 1) % 3
+        elif k == pg.K_k:
+            self.r.show_danger = not self.r.show_danger
         elif k == pg.K_s:
             self.screenshot(surf)
         elif k == pg.K_z:
