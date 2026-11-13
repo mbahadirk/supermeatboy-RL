@@ -770,6 +770,7 @@ class Runner:
             if self.planner is None:
                 self.planner = Planner(self.model, lv, field, budget_ms=self.args.budget_ms,
                                        hysteresis=self.args.hysteresis, moves=self.moves,
+                                       veto_members=getattr(self.args, "veto_members", 1),
                                        modes=self.args.modes == "on",
                                        route_trial_gain=getattr(self.args, "route_trial_gain", TRIAL_GAIN))
                 cm = self.commit                    # route trials: deviation = the surprise trigger's tube
@@ -787,6 +788,7 @@ class Runner:
                 if not self.proc_ready:
                     mm = getattr(self.args, "move_memory", DEFAULT_MOVES)
                     opts = {"budget_ms": self.args.budget_ms, "hysteresis": self.args.hysteresis,
+                            "veto_members": getattr(self.args, "veto_members", 1),
                             "modes": self.args.modes == "on",
                             "route_trial_gain": getattr(self.args, "route_trial_gain", TRIAL_GAIN)}
                     self.proc.call("init", self.model_path, lv, field, opts,
@@ -1891,6 +1893,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "game plays, from the state the committed plan is imagined to reach; adopted when the real "
                          "state is within the surprise tube of it and no other trigger fired, else decided as before "
                          "(one planned agent, no explore agents, not with --eval-first / --search / --demo)")
+    ap.add_argument("--veto-members", type=int, default=1,
+                    help="world-model members that must touch a hazard within the first 16 frames for a plan to be "
+                         "vetoed (default 1: any of the 5; 3: a majority). With more than 1, a touch by fewer members "
+                         "is soft risk (their share). Bolder near hazards: tight passes are no longer forbidden")
     ap.add_argument("--async-wait", choices=("danger", "all"), default="danger",
                     help="--async-plan: danger (default) = the game waits only for a danger decision (and the first "
                          "one); any other trigger's decision is made in the background for --async-lead frames later "

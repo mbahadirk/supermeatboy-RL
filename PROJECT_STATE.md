@@ -1,5 +1,28 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Model comparison on new recordings, the 1-17 stall offline, --veto-members (2026-11-13)
+
+**Two models on recordings neither trained on** (`runs/experiments/model_compare_v1/compare.py`, results in `step4_vs_epoch12.json`): open-loop position error, median / 90%, game units (a tile is 20), with the agents' real actions and recorded hazards. `wm_step4` is the model in use; `epoch_12` is `runs/experiments/tile_shapes_epochs_v1/epoch_12/model/wm_model.pt` (tile-shapes-v1, 12 epochs, never run in the game).
+
+| Level (waves) | Model | +4 | +8 | +16 | +32 | +48 |
+|---|---|---|---|---|---|---|
+| 1-14 (26) | wm_step4 | 0.8 / 3.4 | 2.3 / 9.1 | 7.4 / 25.5 | 20.9 / 60.2 | 41.3 / 80.2 |
+| | epoch_12 | 0.7 / 3.0 | 2.0 / 7.7 | 5.0 / 22.6 | 16.4 / 59.0 | 34.8 / 82.8 |
+| 1-15 (31) | wm_step4 | 0.6 / 3.3 | 2.3 / 8.5 | 6.3 / 21.8 | 18.0 / 66.7 | 32.1 / 101.1 |
+| | epoch_12 | 0.5 / 3.2 | 1.9 / 7.6 | 4.7 / 19.7 | 12.4 / 63.4 | 20.4 / 99.9 |
+| 1-16 (8) | wm_step4 | 0.7 / 4.5 | 2.4 / 12.1 | 6.9 / 37.4 | 19.9 / 73.8 | 47.8 / 129.8 |
+| | epoch_12 | 0.5 / 2.6 | 1.5 / 8.0 | 4.7 / 22.4 | 19.1 / 60.6 | 40.3 / 92.0 |
+| 1-17 (25) | wm_step4 | 1.3 / 5.0 | 3.5 / 12.3 | 8.9 / 31.1 | 20.9 / 73.4 | 30.5 / 127.7 |
+| | epoch_12 | 0.6 / 3.7 | 1.8 / 10.8 | 6.1 / 23.9 | 15.5 / 60.3 | 29.0 / 83.9 |
+
+- epoch_12 is better at nearly every horizon on all four levels (2-14 has one wave: no conclusion). Both are still 1-2 tiles off at +48 frames (median), 3-6 tiles at the 90th percentile: long plans are guesses in both.
+- `wm.compare_steps --legacy-split` refuses the strict checkpoint, so compare.py calls `roll_wave` directly on waves recorded after both trainings.
+- A 24-epoch arm with the same manifest and settings was started (`model_compare_v1/epoch_24`); see below for its result when it is filled in.
+
+**The 1-17 stall does not reproduce offline** (`model_compare_v1/stall_1-17.py`, `stall_1-17.json`): from the stalled agent's recorded state (frame 208 of a 1200-frame wave, recorded hazards), with runs/wm_locked standing in for the game, the planner goes from T 187 to 71 (wm_step4) or 81 (epoch_12) in 500 frames and stays alive. So the stall is not a property of the planner's rules alone; in the game the plans there come out lower and shorter than predicted (the largest surprises: predicted y 17-22 units above the real one, x 18 beyond). They are not concentrated at slope or half tiles (13 of 69 surprises within 30 units of one). The cause in the game is not pinned down.
+
+**--veto-members N** (`plan.planner._verdict` quorum, `Planner.veto_members`, default 1 = unchanged): the members that must touch within the veto window for a veto; with more than 1, a touch by fewer members is soft risk (their share). In the offline stall replay 1 and 3 gave the same run (same end, 2 vs 1 vetoed chosen plans): it is not what holds the agent there. Kept as an option for tight passes; no evidence yet that it helps.
+
 ## Planning without making the game wait: --async-wait danger (2026-11-13; simulated, not run live)
 
 **Why.** In shots_1-15_check01 a decision took a median 86-119 ms and came every 6 frames: 16-21 ms of planning per frame against the game's own 12.6 ms, so 0.41-0.50x. --async-plan alone did not help on 1-17 (0.41x): any trigger other than a timed one dropped the plan made ahead and waited for a new one (2298 dropped, 489 used).
