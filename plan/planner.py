@@ -29,7 +29,7 @@ library and the golden tests). The 5 members are copies of the same physics pred
   below; the switch rule is unchanged (the reflex plan is not a switch candidate). Plan.mode records the mode
   that produced the chosen plan (a kept previous plan keeps its mode); counts["modes"], timing long_safe / reflex.
 - EXPLORE (members 3 and 4, purple; Planner.explore, agent.py's --explore agents every EXPLORE_EVERY = 16
-  frames): stage 1 only (73 moves padded to 48 frames) with members 3 and 4; among the plans without a veto the
+  frames): stage 1 only (the library's moves padded to 48 frames) with members 3 and 4; among the plans without a veto the
   one whose two members' end positions disagree most, ties by estimate.
 
 Search, per decision (Planner.plan):
@@ -1220,14 +1220,14 @@ def state_row(x, y, vx, vy, flags, state, keys=0, held=0) -> np.ndarray:
 
 
 def continuations(a_last: int) -> list[tuple[str, int]]:
-    """The completion fan after a plan whose last action is a_last (no jump in any): keep its horizontal input
-    (and run), neutral, reverse. A plan ending without a horizontal input: neutral, left, right (keep and
-    reverse would both be neutral)."""
-    L, R, _, run = ACTIONS[int(a_last)]
+    """The completion fan after a plan whose last action is a_last: keep its horizontal input (and run, and a
+    held jump key: a "hold max" jump goes on rising), neutral, reverse (no jump). A plan ending without a
+    horizontal input: neutral (the jump key as held), left, right (keep and reverse would both be neutral)."""
+    L, R, j, run = ACTIONS[int(a_last)]
     d = int(R) - int(L)
     if d == 0:
-        return [("neutral", act(0)), ("left", act(-1)), ("right", act(1))]
-    return [("keep", act(d, run=bool(run))), ("neutral", act(0)), ("reverse", act(-d, run=bool(run)))]
+        return [("neutral", act(0, bool(j))), ("left", act(-1)), ("right", act(1))]
+    return [("keep", act(d, bool(j), bool(run))), ("neutral", act(0)), ("reverse", act(-d, run=bool(run)))]
 
 
 class _Floor:
@@ -1878,6 +1878,8 @@ class Planner:
         score2 = np.where(succ2, success_total(tg2, pen2), score2)
         pick = np.argsort(-score2, kind="stable")[:self.S]
         final = [cands[c] for c in pick]
+        self.last_stage2 = {"names": [[nm for nm, *_ in segs if nm != "pad"] for segs, _ in cands], "estimate": est2,
+                            "t_end": tend2, "soft": soft2, "veto": veto2, "frames": up2}     # offline checks
         counts["stage2"] = {"candidates": n2, "steps": int(steps2), "of_steps": int(-(-K2 // f)),
                             "complete": int((up2 >= H).sum()), "vetoed": int(veto2.sum()),
                             "second_moves": [sm.name for sm in seconds], "goal": int(succ2.sum()),

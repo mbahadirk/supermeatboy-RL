@@ -1,5 +1,50 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## 3-1: the full jump, and the crumble wall (2026-11-14)
+
+**Live run** (`runs/human_v2_check02`, after the corner and shot fixes; 0 of 24 waves finished):
+- From wave 2 on, no wave died in the pit.
+- Every wave stood at the pit's edge (x 145-175) for about 130 frames, waiting and jumping in place, before crossing.
+- Most waves then stood at (160, -34) above the saw floor until the time ran out (560 frames).
+- 4 waves died in the saw h6 at the crumble wall's foot (354, -36): the agent slid down the wall at about 4 units/frame.
+
+**Why it waited** (`guard_side_v1/edge_wait.py`, `human_jump.py`):
+- The library's longest jump held the key 22 frames (and released it in the padding).
+- The user holds it 30-66 frames at the pit (median about 47; 26 waves).
+- The world model, rolled with the user's own actions from x 120, flies the pit with every member (x 440: real -199, members -201..-210).
+- Held 22 frames it is 35 units lower at x 400 and falls into the salt. 30 is close; 36 and more are the same (the jump stops rising).
+- So every crossing the planner could try died, and waiting (369 frames) won over jumping (440-480).
+- The live alternatives at the edge: "hits h10" 662 times.
+
+**Full jump** (`plan/moves.py`, 73 -> 82 moves):
+- New moves: `jump up hold max`, `jump L/R hold max`, `run-jump L/R hold max` (also after 4f / 8f). The key is held to the move's end (24 frames).
+- `padded` keeps a held key through the padding.
+- The completion's "keep" continuation keeps it too.
+- `run-jump L/R hold max` is in CORE_SECOND, so "run, then the full jump" is searched as a second move.
+- Offline (MARGIN_HORIZON unchanged at 16):
+  - From the user's state at x 101 / 120: `run-jump R hold max`, risk 0, estimate 296 / 307 (waiting is 369).
+  - From the agent's own state at x 73: `run-jump R hold max after 4f`, estimate 338 (it chose `walk R 8f`, 364).
+  - At (160, -34): `run-jump R hold max`, risk 0, T 93 -> 47 (it waited).
+- Stage 1 evaluates 12% more moves.
+- `Planner.last_stage2` (offline checks).
+- A cap of 8 on the margin's horizon was tried. With the full jump it is not needed for these decisions, so it was not changed.
+
+**Offline harness fix** (`plan.offline.closed_loop`):
+- The current wave's frames before START are now fed to the future world, as the live agent saw them.
+- Before, a flying shot had a one-frame track and looked 641 units wide after the recording. Every completion "hit shot0".
+
+**The crumble wall** (x 360, y -40..40, tile id 100; the only way to the goal at (529, -33)). From the user's wave 2:
+- The body touches it at f398.
+- The touched tiles change at f428 (30 frames later): 0x3000164 -> 0x3400164 / 0x3800164 (cracking) -> 0x100 (gone), 2-8 frames apart, spreading to the neighbours.
+- The user slides about 12 frames, wall-jumps away, comes back and passes at f451.
+- 2 of the user's waves also died sliding into h6.
+
+**Crumble wall: not done (needs a decision):**
+- `realpath.CRUMBLE_COST` = 1 frame per crumble cell (the field thinks the wall is nearly free).
+- The planner's world keeps the wall solid until it breaks.
+- The completion stops at the first wall contact (support), so a slide into a saw right below is not seen.
+- `solid_now` counts a cracking tile (any changed word) as open; whether the game does is unknown.
+
 ## 3-1 with human_v2: the corner of the salt pit (2026-11-13)
 
 **Live run** (`runs/human_v2_check01`, the user's two runs: `--risk-members second`, then `mean`; 0 of 11 waves finished):

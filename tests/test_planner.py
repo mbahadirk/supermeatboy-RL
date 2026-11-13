@@ -25,14 +25,17 @@ T = 20.0
 # ---- move library -------------------------------------------------------------------------------------------
 def test_library_names_unique_and_sequences_valid():
     names = [m.name for m in LIBRARY]
-    assert len(names) == len(set(names)) and 60 <= len(names) <= 80
+    assert len(names) == len(set(names)) and 60 <= len(names) <= 90
     assert all(c in BY_NAME for c in CORE_SECOND)
     for m in LIBRARY:
         a = m.array
         assert MIN_LEN <= len(a) <= MAX_LEN, m.name
         assert ((a >= 0) & (a < len(ACTIONS))).all(), m.name
         jump = np.array([ACTIONS[k][2] for k in a], bool)
-        if jump.any():                         # the jump key is released at least 2 frames before the end
+        if "hold max" in m.name:               # the full jump: held to the end (and through the padding)
+            assert jump[-1] and jump[np.argmax(jump):].all(), m.name
+            assert ACTIONS[padded(a, 48)[-1]][2], m.name
+        elif jump.any():                       # the jump key is released at least 2 frames before the end
             assert not jump[-2:].any(), m.name
             assert "jump" in m.name or "climb" in m.name, m.name
         else:

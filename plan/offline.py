@@ -37,6 +37,7 @@ from mpc.future import FutureWorld                                        # noqa
 from shutdown import immediate                                            # noqa: E402
 from plan.measure_progress import level_from_data, planner_inputs          # noqa: E402
 from plan.planner import HYSTERESIS_FRAMES, Planner, future_inputs, state_row   # noqa: E402
+from plan.moves import LIBRARY                                     # noqa: E402
 from plan.progress import ProgressField                                    # noqa: E402
 
 DEFAULT_MODEL = os.path.join(HERE, "runs", "wm_step4", "wm_model.pt")
@@ -119,6 +120,8 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
         raise SystemExit(f"{level}: no alive recorded agent at frame {start}")
     r0 = min(here, key=lambda r: int(r["agent"]))
     s = state_row(r0["x"], r0["y"], r0["vx"], r0["vy"], r0["flags"], r0["state"], r0["keys"], r0["held"])
+    for g in sorted(k for k in wf if k < start):    # the wave before the start, as the live agent saw it (flying
+        feed(wf[g])                                 # shots' tracks, launchers, the hazards' runs)
     goal_boxes = np.asarray(lv.goal_boxes(), np.float64).reshape(-1, 5)
     key_boxes = list(lv.key_boxes())
     plans, played, plan_ms, check_s, events = [], {}, 0.0, 0.0, []
@@ -336,7 +339,7 @@ def main():
     if ms:
         st = np.array(stats, np.float64)
         print(f"{len(ms)} decisions: {np.median(ms):.1f} ms median, {np.percentile(ms, 95):.1f} ms 95%, max {max(ms):.1f}; "
-              f"mean evaluated: stage 1 {st[:, 0].mean():.1f} steps ({st[:, 1].mean():.1f} of 73 moves complete), "
+              f"mean evaluated: stage 1 {st[:, 0].mean():.1f} steps ({st[:, 1].mean():.1f} of {len(LIBRARY)} moves complete), "
               f"stage 2 {st[:, 2].mean():.0f} candidates x {st[:, 3].mean():.1f} steps ({st[:, 4].mean():.0f} complete), "
               f"final {st[:, 5].mean():.1f} candidates x 48 steps x all members")
 

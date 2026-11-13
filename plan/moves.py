@@ -1,7 +1,7 @@
 """The planner's move library: named primitives, each a short sequence of realgame ACTIONS indices (one per
 frame; the (left, right, jump, run) table in mpc.candidates.ACTIONS).
 
-Families (73 moves, 8 to 24 frames):
+Families (82 moves, 8 to 24 frames):
 - wait 8f / 16f: no input;
 - walk / run L / R for 8, 16, 24 frames;
 - jump up hold H: jump straight up, the key held H frames (3, 6, 10, 15, 22), then released;
@@ -14,10 +14,15 @@ Families (73 moves, 8 to 24 frames):
 - wall-climb L / R hold H: the same press TOWARD the wall (L = a wall on the left): the short climbing hop of
   wall-jump chains (hold 6, 10, 15);
 - fall drift L / R 12f: no jump, run in that direction (leave a ledge or a wall, steer while falling);
-- jump L / R hold H turn: jump that way, then steer back the other way once the key is released (hold 6, 12).
+- jump L / R hold H turn: jump that way, then steer back the other way once the key is released (hold 6, 12);
+- jump up / jump L / R / run-jump L / R hold max (run-jump also after 4f, 8f): the key held to the move's end
+  and on through its padding: the full jump. A jump rises while the key is held for up to ~36 frames (the world
+  model on the user's 3-1 pit jump: held 22 frames it is 35 units lower at x 400 and falls into the salt, 30 is
+  close, 36 and more the same); the user holds it 30-66 frames there. A 24-frame move cannot hold it longer, so
+  the padding does.
 
-Every jump move ends with at least 2 frames without the jump key, so a following move's press is a new press,
-and the move is padded (its last action held) to the planner's horizon with no jump held.
+Every other jump move ends with at least 2 frames without the jump key, so a following move's press is a new
+press, and the move is padded (its last action held) to the planner's horizon with no jump held.
 """
 from __future__ import annotations
 
@@ -89,24 +94,35 @@ def library() -> list[Move]:
         out.append(Move(f"fall drift {s} 12f", (act(d, run=True),) * 12, "fall"))
         for h in (6, 12):
             out.append(Move(f"jump {s} hold {h} turn", _jump(d, h, after=-d), "turn"))
+    out.append(Move("jump up hold max", (act(0, True),) * MAX_LEN, "jump up"))
+    for d in (-1, 1):
+        s = _side(d)
+        out.append(Move(f"jump {s} hold max", (act(d, True),) * MAX_LEN, "jump"))
+        for delay in (0, 4, 8):
+            out.append(Move(f"run-jump {s} hold max" + (f" after {delay}f" if delay else ""),
+                            (act(d, run=True),) * delay + (act(d, True, True),) * (MAX_LEN - delay), "run-jump"))
     return out
 
 
 LIBRARY = library()
 BY_NAME = {m.name: m for m in LIBRARY}
-# stage 2's fixed core of second moves (the rest of its 16 are the best-scoring first moves of the decision)
+# stage 2's fixed core of second moves (the rest of its 16 are the best-scoring first moves of the decision). The
+# full running jump is in it: a first move that runs on to the take-off point (3-1's pit, from x 73 at full speed)
+# needs it second, while as a first move from there it falls short and does not rank.
 CORE_SECOND = ("wait 8f", "run L 16f", "run R 16f", "run-jump L hold 15", "run-jump R hold 15",
-               "wall-jump L hold 8", "wall-jump R hold 8", "jump up hold 15")
+               "run-jump L hold max", "run-jump R hold max", "wall-jump L hold 8", "wall-jump R hold 8",
+               "jump up hold 15")
 
 
 def padded(actions, n: int) -> np.ndarray:
-    """Actions trimmed / padded to n frames (the last action held; a held jump is released in the padding)."""
+    """Actions trimmed / padded to n frames (the last action held, the jump key too: only a "hold max" move ends
+    with it held, every other jump move releases it first)."""
     a = np.asarray(actions, np.int64)
     if len(a) >= n:
         return a[:n].copy()
     last = int(a[-1]) if len(a) else act(0)
     l, r, j, run = ACTIONS[last]
-    fill = act(r - l, False, run)
+    fill = act(r - l, bool(j), run)
     return np.concatenate([a, np.full(n - len(a), fill, np.int64)])
 
 
