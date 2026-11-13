@@ -675,6 +675,9 @@ class Runner:
             self.stopping = True
             return
         self.level = lv = Level(info, tiles)
+        if self.n_total == 1 and lv.keys:      # one agent: the game's own locks (they dissolve in their time)
+            lv.use_native_locks()
+            print(f"[keys] {lv.name}: one agent, so the game opens the locks itself (no per-agent locks)", flush=True)
         self.cost.reset()
         from wm.buffer import eval_levels
         self.protected = self.evaluation is not None or info["name"] in eval_levels()

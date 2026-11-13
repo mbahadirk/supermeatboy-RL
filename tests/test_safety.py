@@ -210,3 +210,15 @@ def test_box_reach_covers_the_games_box_box_test():
     assert max(abs(x) for x, _ in pts) <= ra + body + 0.6 and max(abs(y) for _, y in pts) <= rb + body + 0.6
     assert ra + body == pytest.approx(max(a + body + math.sqrt(2 * a * body), ra + body), abs=0.05)
     assert kills(a + body + math.sqrt(2 * a * body) - 0.1, 0) and not kills(a + body + math.sqrt(2 * a * body) + 0.1, 0)
+
+
+def test_laser_beam_kills_where_it_crosses_the_body_box():
+    """A beam [3, x0, y0, x1, y1, 0] (realgame.js laserRows) kills when it crosses the character's box (half size
+    BODY): its clearance is the Chebyshev distance to the segment less BODY."""
+    from game.level import hazard_shapes, kill_clearance, SHAPE_SEGMENT
+    boxes, kept, shape = hazard_shapes([[0, 0, 100, 0, 1, 1, 1.5708, [[3, 0.0, 0.0, 0.0, 100.0, 0]]],
+                                        [5, 5, 100, 0, 1, 1, 0, []]])                # a beam that is off
+    assert kept == [0] and shape == [SHAPE_SEGMENT]
+    c = kill_clearance(np.array([6.0, 6.5, 5.9, 0.0, 6.0]), np.array([50.0, 50.0, 105.9, 107.0, -6.0]), boxes, shape)[:, 0]
+    assert c[0] == pytest.approx(0.0, abs=1e-6) and c[1] > 0 and c[2] < 0 and c[3] > 0
+    assert c[4] == pytest.approx(0.0, abs=1e-6)                   # the box's corner just reaches the beam's end

@@ -263,6 +263,7 @@ function sendLevelInfo() {
   spawnX = sp.readFloat(); spawnY = sp.add(4).readFloat();
   buildLethal(w);
   enemyProbe = 3;                                    // log the enemies' fields on the first 3 frames
+  laserProbe = 3;
   kb = null; kbPending = null;
   const k = rd(() => updateKillBox('info'));
   if (!k && !kbShown) { kbShown = true; send({ ev: 'debug', msg: 'level kill box: none (no camera bounds or unreadable): map edges +10 / -60 rule' }); }
@@ -306,6 +307,7 @@ function buildLethal(w) {
   lethalSize = lethal.map(pc => old.get(pc.toString()) || pieceSize(w, pc));
   rd(() => Memory.copy(KILL_SHAPE, w.add(0x70).readPointer(), 0xa0));   // this level's animation library (+0x20)
   buildEnemies(w);
+  buildLasers(w);
 }
 
 // ---- kill regions: what the game's narrow phase really tests ----------------------------------------
@@ -387,8 +389,9 @@ let pieceSig = '';
 function sig(all) { return all.length + ':' + (all.length ? all[0] + ',' + all[all.length - 1] : ''); }
 function lethalInfo() {   // types and ids (addresses) of the lethal pieces, in the order hazards() lists them;
                           // then the enemies (ENEMY_TYPE + their kind, id "enemy<address>")
-  return { types: lethal.map(pc => pc.add(0x10).readU16() & 0xff).concat(enemies.map(e => ENEMY_TYPE + e.kind)),
-           ids: lethal.map(pc => pc.toString()).concat(enemies.map(e => 'enemy' + e.a)) };
+  return { types: lethal.map(pc => pc.add(0x10).readU16() & 0xff).concat(enemies.map(e => ENEMY_TYPE + e.kind))
+                  .concat(lasers.map(() => LASER_TYPE)),
+           ids: lethal.map(pc => pc.toString()).concat(enemies.map(e => 'enemy' + e.a)).concat(lasers.map(l => 'laser' + l.a)) };
 }
 // per lethal piece, now: [x, y, size w, size h, scale x, scale y, angle, kill shapes] (the piece itself, size
 // from FUN_004ca860 at scale 1: the world model's inputs; then what kills: killShapes, [] = nothing now); then one
@@ -396,7 +399,7 @@ function lethalInfo() {   // types and ids (addresses) of the lethal pieces, in 
 function hazards() {
   return lethal.map((pc, k) => [pc.add(0x14).readFloat(), pc.add(0x18).readFloat(), lethalSize[k][0],
                                 lethalSize[k][1], pc.add(0x24).readFloat(), pc.add(0x28).readFloat(),
-                                pc.add(0x2c).readFloat(), killShapes(pc)]).concat(enemyRows());
+                                pc.add(0x2c).readFloat(), killShapes(pc)]).concat(enemyRows()).concat(laserRows());
 }
 
 // ---- enemies: the crawlers and fliers (Hospital and later) are not pieces --------------------------------
@@ -437,6 +440,44 @@ function enemyRows() {
     const on = st !== 5 && fl !== null && (fl & 0xf) === 1;
     return [r2(x), r2(y), r2(2 * r), r2(2 * r), 1, 1, 0, on ? [[1, r2(x), r2(y), r2(r), r2(r), 0]] : []];
   });
+}
+// ---- lasers: the beams are not pieces either --------------------------------------------------------------
+// The level build (FUN_004c8c10 at 0x4c96ec) puts every laser piece (world type ids lazeron +0x2fc4, lazeroff
+// +0x2fc8, lazerwait +0x2fcc; homing ones +0x2fd4..) into the world's array at +0x2ce8 (u16 count +0x2d00, u16
+// capacity +0x2d02, pointer +0x2d10, 0x24 bytes each: +0 its piece, +8 1 while the beam kills). The pieces check
+// FUN_004cd350 tests every entry with +8 == 1 by FUN_004cbd40(char, char box, entry): the beam is the segment from
+// +0x14/+0x18 to +0x1c/+0x20 and it kills when it crosses the character's box (half size 6). Read, never written.
+const LASER_TYPE = 2000;                             // lethal type id of a laser beam (not a piece type)
+let lasers = [];                                     // [{a: entry address, piece}] of this level
+function buildLasers(w) {
+  lasers = [];
+  const n = rd(() => w.add(0x2d00).readU16()) || 0, arr = rd(() => w.add(0x2d10).readPointer());
+  if (!arr || arr.isNull() || n > 256) return;
+  for (let i = 0; i < n; i++) lasers.push({ a: arr.add(0x24 * i), piece: rd(() => arr.add(0x24 * i).readPointer()) });
+}
+// per laser, now: [mid x, mid y, length, 0, 1, 1, angle, kill shapes]: the beam as the piece box (the world
+// model's inputs), and [[3, x0, y0, x1, y1, 0]] (a segment) while it kills (+8 == 1), else []
+function laserRows() {
+  return lasers.map(l => {
+    const f = o => rd(() => l.a.add(o).readFloat());
+    const x0 = f(0x14), y0 = f(0x18), x1 = f(0x1c), y1 = f(0x20), on = rd(() => l.a.add(8).readS32());
+    if (x0 === null || y0 === null || x1 === null || y1 === null) return [0, 0, 0, 0, 1, 1, 0, null];
+    const len = Math.hypot(x1 - x0, y1 - y0), ang = Math.atan2(y1 - y0, x1 - x0);
+    return [r2((x0 + x1) / 2), r2((y0 + y1) / 2), r2(len), 0, 1, 1, Math.round(ang * 1000) / 1000,
+            on === 1 && len > 0 ? [[3, r2(x0), r2(y0), r2(x1), r2(y1), 0]] : []];
+  });
+}
+let laserProbe = 0, laserLast = '';
+function probeLasers() {                             // the raw entries on the first frames and whenever they change
+  if (!lasers.length) return;
+  const raw = lasers.map(l => [0x4, 0x8, 0xc, 0x10].map(o => rd(() => l.a.add(o).readS32()))
+    .concat([0x14, 0x18, 0x1c, 0x20].map(o => rd(() => r2(l.a.add(o).readFloat())))));
+  const key = JSON.stringify(raw.map(r => r.slice(0, 4)));
+  if (laserProbe > 0 || (key !== laserLast && laserProbe > -40)) {
+    laserProbe--;
+    laserLast = key;
+    send({ ev: 'debug', msg: `lasers frame ${frame}: ` + JSON.stringify(raw) });
+  }
 }
 // the first frames of a level: everything read about each enemy (to check the layout above against the game)
 let enemyProbe = 0;
@@ -667,6 +708,7 @@ function exchange(w, gap) {                         // lockstep: send states, wa
   if (pf && pf.length) msg.pf = pf;                  // moving platforms: every frame
   if (changed) msg.lt = lethalInfo();
   probeEnemies();
+  probeLasers();
   if (kbPending) { msg.kb = kbPending; kbPending = null; }   // the kill box moved (rare)
   const tc = tileChanges();
   if (tc) msg.tc = tc;

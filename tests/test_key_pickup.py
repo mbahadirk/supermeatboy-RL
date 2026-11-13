@@ -260,3 +260,22 @@ def test_legacy_unknown_route_keys_fall_back_only_on_key_maps():
     pl.lv.keys = []
     real, why = pl._route_real(0, 0., 0., 0., 0, frames, 2, 0, 0)
     assert real is not None and why is None
+
+
+def test_native_locks_open_nothing_for_the_key_holder():
+    """One agent (agent.py): the game dissolves the locks itself, so a key opens no lock tile at once."""
+    import numpy as np
+    from game.level import Level
+    H, W = 10, 12
+    w = np.zeros((H, W), np.uint32)
+    w[0, :] = 1
+    w[1:5, 6] = 0x100 | 99                                        # a lock column
+    info = {"name": "test-native-locks", "W": W, "H": H, "ox": 0.0, "oy": 0.0, "spawn": [30.0, 30.0],
+            "goals": [[200.0, 30.0]], "objs": [[25, 50.0, 30.0, 0x44]], "lethalTypes": []}
+    lv = Level(info, w.astype("<u4").tobytes())
+    assert lv.keys and lv.opened_cells(1)                          # per-agent: the key opens the column at once
+    lv.use_native_locks()
+    assert lv.opened_cells(1) == [] and lv.lock_groups == [[]]
+    meta = lv.wm_geometry_metadata()
+    from game.level import LockContext
+    assert LockContext(lv.words0, meta).opened_cells(1) == []      # the world model sees the live tiles

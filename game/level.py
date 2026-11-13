@@ -498,6 +498,16 @@ class Level:
         each group is opened by the key nearest to it."""
         return key_lock_groups(self.words0, self.ox, self.oy, self.keys)
 
+    def use_native_locks(self):
+        """The game opens the locks itself (one agent in the game: agent.py): a key opens no lock tile for its
+        holder at once. In the game a key picked up starts its locks dissolving one tile after another (2-11: the
+        first 11 frames after the pickup, then one every 7 frames, recorded in human_v1_check01); the live tile
+        changes ("tc") show each one as it goes, and realgame.js neither opens them early (setLocks) nor closes
+        them again (its per-agent locks get no cells). Per-agent locks (every key holder alone sees its locks
+        open at once) are for several agents at a time (PPO)."""
+        self.lock_groups = [[] for _ in self.keys]
+        self.native_locks = True
+
     def opened_cells(self, mask: int) -> list[tuple[int, int]]:
         """Lock tiles open for an agent holding keys `mask` (bit k = key k)."""
         return opened_lock_cells(self.lock_groups, mask, self.W)
@@ -656,6 +666,11 @@ def shape_box(s) -> tuple:
     kind, x, y, a, b, ang = s[:6]
     if int(kind) == 1:
         return (float(x), float(y), float(a), float(a), 0.0)
+    if int(kind) == 3:                      # a laser beam: a box of no width along it, the body's corners added
+        x0, y0, x1, y1 = float(x), float(y), float(a), float(b)
+        th = math.atan2(y1 - y0, x1 - x0)
+        e = BODY * (abs(math.cos(th)) + abs(math.sin(th))) - BODY
+        return (0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * math.hypot(x1 - x0, y1 - y0) + e, e, th)
     e = BODY * (abs(math.cos(ang)) + abs(math.sin(ang))) - BODY
     ra, rb = box_reach(round(abs(float(a)), 2), round(abs(float(b)), 2))
     return (float(x), float(y), ra + e, rb + e, float(ang))
@@ -696,7 +711,10 @@ def hazard_boxes(hz: list, keep=None) -> tuple[list, list]:
 #              realgame.js killShapes kind 1, enemies, flying shots;
 #   SHAPE_GAMEBOX: a turned box (x, y, a, b, angle), realgame.js killShapes kind 2, killing by the game's box-box test
 #              (box_reach's docstring): far beyond the box, furthest on its diagonals.
-SHAPE_BOX, SHAPE_CIRCLE, SHAPE_GAMEBOX = 0, 1, 2
+#   SHAPE_SEGMENT: a laser beam (x, y, half length, 0, angle) from (x, y) - half length along the angle to + half length:
+#              it kills when it crosses the character's box (half size BODY, FUN_004cbd40), so the clearance is the
+#              Chebyshev distance to the segment less BODY (realgame.js laserRows: kill shape kind 3, x0 y0 x1 y1).
+SHAPE_BOX, SHAPE_CIRCLE, SHAPE_GAMEBOX, SHAPE_SEGMENT = 0, 1, 2, 3
 PROFILE_RAYS = 144                 # game boxes: the kill region's radius every 2.5 degrees (world frame)
 
 
@@ -741,6 +759,21 @@ def _profiles(b) -> np.ndarray:
     return table[inv.reshape(-1)]
 
 
+def segment_chebyshev(dx, dy, hl, ang) -> np.ndarray:
+    """Chebyshev distance (max(|ex|, |ey|)) from points at offsets (dx, dy) from a segment's middle to the segment of
+    half length hl at angle ang (broadcast arrays). f(t) = max(|a + t u|, |b + t v|) on t in [-1, 1] is convex and
+    piecewise linear: its minimum is at an end or where a piece changes (a term zero, or the two equal)."""
+    u, v = hl * np.cos(ang), hl * np.sin(ang)
+    a, b = -dx, -dy
+    best = np.full(np.broadcast(a, b, u).shape, np.inf)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for t in (np.full_like(best, -1.0), np.full_like(best, 1.0), -a / u, -b / v, (b - a) / (u - v),
+                  -(a + b) / (u + v)):
+            t = np.clip(np.nan_to_num(t, nan=0.0, posinf=1.0, neginf=-1.0), -1.0, 1.0)
+            best = np.minimum(best, np.maximum(np.abs(a + t * u), np.abs(b + t * v)))
+    return best
+
+
 def kill_clearance(px, py, boxes, shape=None, grow=None, body: float = BODY) -> np.ndarray:
     """(n points, M shapes): how far the character centres (px, py) are from being killed by each shape (negative:
     killed), per its type (SHAPE_*; None: all SHAPE_BOX), less grow (M,) (a future's uncertainty radius).
@@ -767,6 +800,9 @@ def kill_clearance(px, py, boxes, shape=None, grow=None, body: float = BODY) -> 
     j = np.nonzero(shape == SHAPE_GAMEBOX)[0]
     if len(j):
         out[:, j] = _gamebox_clearance(dx[:, j], dy[:, j], b[j])
+    j = np.nonzero(shape == SHAPE_SEGMENT)[0]
+    if len(j):
+        out[:, j] = segment_chebyshev(dx[:, j], dy[:, j], b[j, 2], b[j, 4]) - body
     return out - grow[None, :]
 
 
@@ -814,6 +850,9 @@ def kill_clearance_paired(PX, PY, boxes, shape=None, grow=None, body: float = BO
     j = np.nonzero(shape == SHAPE_GAMEBOX)[0]
     if len(j):
         out[j] = _paired_gamebox(dx[j], dy[j], b[j])
+    j = np.nonzero(shape == SHAPE_SEGMENT)[0]
+    if len(j):
+        out[j] = segment_chebyshev(dx[j], dy[j], b[j, 2:3], b[j, 4:5]) - body
     return out - grow[:, None]
 
 
@@ -847,6 +886,8 @@ def kill_reach(boxes, shape=None, grow=None, body: float = BODY) -> np.ndarray:
     j = np.nonzero(shape == SHAPE_GAMEBOX)[0]
     if len(j):
         out[j] = _profiles(b[j]).max(1)
+    j = shape == SHAPE_SEGMENT
+    out[j] = b[j, 2] + body * SQRT2_
     return out + grow
 
 
@@ -862,6 +903,23 @@ def kill_outline(box, shape: int, grow: float = 0.0, n: int = 48) -> list:
         return list(zip((x + r * np.cos(th)).tolist(), (y + r * np.sin(th)).tolist()))
     th = 2.0 * math.pi * np.arange(n) / n
     c, s = np.cos(th), np.sin(th)
+    if shape == SHAPE_SEGMENT:              # the beam swept by the body's square: a hexagon-like outline
+        ca, sa = math.cos(ang), math.sin(ang)
+        x0, y0, x1, y1 = x - hw * ca, y - hw * sa, x + hw * ca, y + hw * sa
+        e = BODY + grow
+        corners = [(-e, -e), (e, -e), (e, e), (-e, e)]
+        pts = sorted({(px + cx, py + cy) for px, py in ((x0, y0), (x1, y1)) for cx, cy in corners})
+
+        def half(points):                   # monotone chain: one side of the convex hull
+            h = []
+            for p in points:
+                while len(h) >= 2 and ((h[-1][0] - h[-2][0]) * (p[1] - h[-2][1])
+                                       - (h[-1][1] - h[-2][1]) * (p[0] - h[-2][0])) <= 0:
+                    h.pop()
+                h.append(p)
+            return h
+        lower, upper = half(pts), half(pts[::-1])
+        return lower[:-1] + upper[:-1]
     if shape == SHAPE_CIRCLE:               # where the body's box reaches the circle: rounded square
         ex = hw + grow
         pts = [(x + BODY * np.sign(ci) + ex * ci, y + BODY * np.sign(si) + ex * si) for ci, si in zip(c, s)]
@@ -890,6 +948,11 @@ def hazard_shapes(hz: list, keep=None) -> tuple[list, list, list]:
                 if int(kind) == 1:
                     out.append((float(x), float(y), float(a), float(a), 0.0))
                     shape.append(SHAPE_CIRCLE)
+                elif int(kind) == 3:              # a laser beam [3, x0, y0, x1, y1, 0]
+                    x0, y0, x1, y1 = float(x), float(y), float(a), float(b)
+                    out.append((0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * math.hypot(x1 - x0, y1 - y0), 0.0,
+                                math.atan2(y1 - y0, x1 - x0)))
+                    shape.append(SHAPE_SEGMENT)
                 else:
                     out.append((float(x), float(y), abs(float(a)), abs(float(b)), float(ang)))
                     shape.append(SHAPE_GAMEBOX)

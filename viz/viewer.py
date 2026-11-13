@@ -1211,6 +1211,16 @@ class Renderer:
                 self.pg.draw.circle(s, col + (alpha if alpha is not None else 255,), (rad + 2, rad + 2), rad, width)
                 surf.blit(s, (c[0] - rad - 2, c[1] - rad - 2))
             return
+        if sh == 3:                             # a laser beam: the segment, and where a centre dies round it
+            x, y, hl, _, a = (float(v) for v in b[:5])
+            p0 = m.pt(x - hl * math.cos(a), y - hl * math.sin(a))
+            p1 = m.pt(x + hl * math.cos(a), y + hl * math.sin(a))
+            self.lines_alpha(surf, col, [p0, p1], outline_alpha if outline_alpha is not None else 255, closed=False,
+                             width=3)
+            if danger or grow > 0.5:
+                from game.level import kill_outline
+                self.lines_alpha(surf, col, [m.pt(px, py) for px, py in kill_outline(b[:5], 3, grow)], 60)
+            return
         if fill_alpha is not None:
             self.poly(surf, m, b, col, 0, fill_alpha)
         self.poly(surf, m, b, col, 1, outline_alpha)
@@ -1220,14 +1230,14 @@ class Renderer:
             if len(pts) > 2:
                 self.lines_alpha(surf, col, pts, 50)
 
-    def lines_alpha(self, surf, col, pts, alpha):
+    def lines_alpha(self, surf, col, pts, alpha, closed=True, width=1):
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-        x0, y0 = int(min(xs)) - 2, int(min(ys)) - 2
-        w, h = int(max(xs)) - x0 + 3, int(max(ys)) - y0 + 3
+        x0, y0 = int(min(xs)) - 2 - width, int(min(ys)) - 2 - width
+        w, h = int(max(xs)) - x0 + 3 + width, int(max(ys)) - y0 + 3 + width
         if w <= 0 or h <= 0 or w > 4000 or h > 4000:
             return
         s = self.pg.Surface((w, h), self.pg.SRCALPHA)
-        self.pg.draw.lines(s, col + (alpha,), True, [(x - x0, y - y0) for x, y in pts], 1)
+        self.pg.draw.lines(s, col + (alpha,), closed, [(x - x0, y - y0) for x, y in pts], width)
         surf.blit(s, (x0, y0))
 
     def draw_map(self, surf, scene: Scene, m: Mapper, rect):

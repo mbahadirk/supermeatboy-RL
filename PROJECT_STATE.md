@@ -1,5 +1,22 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## 2-11 locks the game dissolves, and 2-16 laser beams (2026-11-14; code-read, not yet checked live)
+
+**2-11:**
+- After a key is picked up the game dissolves its lock tiles one after another: in the recording, 11 frames after the pickup, then one every 7 frames.
+- realgame.js put them back (closed) after every frame, and each key holder saw every lock open at once.
+- With one agent in the game (`agent.py`, `n_total == 1`), `Level.use_native_locks()` now gives every key an empty lock group. realgame.js then neither opens nor re-closes anything, so the game's own dissolving is what the agent meets, and the live tile changes (`tc`) show each tile go. The world model and the guard see the live tiles.
+- Per-agent locks stay for several agents (PPO).
+- The 2-11 stand-still itself (waiting at (43, -134), every move "no progress") is not explained by this and is not checked.
+
+**Lasers** (Hospital palette lazeron / lazeroff / lazerwait):
+- The level build (FUN_004c8c10, 0x4c96ec) puts each laser into the world array at +0x2ce8: u16 count +0x2d00, pointer +0x2d10, 0x24 bytes each, +0 the piece.
+- FUN_004cd350 tests every entry whose +8 is 1 with FUN_004cbd40. The beam is the segment +0x14/+0x18 -> +0x1c/+0x20, and it kills when it crosses the character's box (half 6).
+- `realgame.js` appends one hazard row per laser (lethal type 2000, id `laser<entry>`) with kill shape `[3, x0, y0, x1, y1, 0]` while +8 == 1.
+- `game.level` SHAPE_SEGMENT: clearance = Chebyshev distance to the segment - BODY (exact; checked against brute force).
+- All four 2-16 deaths in enemies_2-15_check01 lie on the beam line of the laser at (-208, 37).
+- Not known yet: that +8 is the "on" state for plain lasers (the level build writes the homing flag there first), and the end point's meaning. realgame.js logs the raw entries on the first frames and whenever +4..+0x10 change.
+
 ## Kill shapes exactly as the game tests them (2026-11-14; offline-checked on recordings, not yet run live)
 
 **Finding: the game's box test is not an overlap test.** Needle and salt pieces (kill shape kind 2) killed agents 8-17 units outside the box + BODY we used, so the agent thought the gaps were safe.
