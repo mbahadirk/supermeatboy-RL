@@ -125,7 +125,7 @@ from plan import safety as S                                             # noqa:
 from plan.commit import Committer, MIN_TUBE, REPLAN_DEFAULT, TUBE_DEFAULT, kind_of  # noqa: E402
 from levels_smb import a_plus_time                                       # noqa: E402
 from plan.moves import LIBRARY                                           # noqa: E402
-from plan.planner import (EXPLORE_EVERY, HYSTERESIS_FRAMES, TRIAL_GAIN, MoveMemory, Planner,   # noqa: E402
+from plan.planner import (DEATH_MIN_FRAMES, EXPLORE_EVERY, HYSTERESIS_FRAMES, TRIAL_GAIN, MoveMemory, Planner,   # noqa: E402
                           future_inputs, state_row)
 from plan.progress import ProgressField                                  # noqa: E402
 from shutdown import Shutdown, bounded                                   # noqa: E402
@@ -771,6 +771,7 @@ class Runner:
                 self.planner = Planner(self.model, lv, field, budget_ms=self.args.budget_ms,
                                        hysteresis=self.args.hysteresis, moves=self.moves,
                                        veto_members=getattr(self.args, "veto_members", 1),
+                                       death_min=getattr(self.args, "death_min", DEATH_MIN_FRAMES),
                                        modes=self.args.modes == "on",
                                        route_trial_gain=getattr(self.args, "route_trial_gain", TRIAL_GAIN))
                 cm = self.commit                    # route trials: deviation = the surprise trigger's tube
@@ -789,6 +790,7 @@ class Runner:
                     mm = getattr(self.args, "move_memory", DEFAULT_MOVES)
                     opts = {"budget_ms": self.args.budget_ms, "hysteresis": self.args.hysteresis,
                             "veto_members": getattr(self.args, "veto_members", 1),
+                            "death_min": getattr(self.args, "death_min", DEATH_MIN_FRAMES),
                             "modes": self.args.modes == "on",
                             "route_trial_gain": getattr(self.args, "route_trial_gain", TRIAL_GAIN)}
                     self.proc.call("init", self.model_path, lv, field, opts,
@@ -1893,6 +1895,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "game plays, from the state the committed plan is imagined to reach; adopted when the real "
                          "state is within the surprise tube of it and no other trigger fired, else decided as before "
                          "(one planned agent, no explore agents, not with --eval-first / --search / --demo)")
+    ap.add_argument("--death-min", type=float, default=DEATH_MIN_FRAMES,
+                    help="frames one death costs at least in a plan's estimate (it costs the progress it throws "
+                         f"away when that is more; default {DEATH_MIN_FRAMES:g}). Lower: bolder near hazards; 500 was "
+                         "the old value")
     ap.add_argument("--veto-members", type=int, default=1,
                     help="world-model members that must touch a hazard within the first 16 frames for a plan to be "
                          "vetoed (default 1: any of the 5; 3: a majority). With more than 1, a touch by fewer members "

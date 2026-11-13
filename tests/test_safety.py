@@ -84,9 +84,10 @@ def test_veto_before_frame_16_soft_risk_after():
     assert sf.veto.tolist() == [True, False, False]
     assert sf.veto_frame.tolist() == [10, -1, -1] and sf.veto_id[0] == "h0"
     assert sf.soft_risk[1] == 1.0 and sf.soft_frame[1] == 20
-    # clearance 5 from frame 20 on: the risk grows with the horizon's margin, highest at the last frame
+    # clearance 5 from frame 20 on: the margin is held from MARGIN_HORIZON on, so the risk is the same at every
+    # later frame and its frame is the first of them
     assert sf.soft_risk[2] == pytest.approx(1 - 5.0 / float(S.margin(K)))
-    assert sf.soft_frame[2] == K
+    assert sf.soft_frame[2] == 20
     assert sf.soft_risk[0] == 1.0                          # still inside the box after frame 16
     # the same contact at frame 16 is a veto, at 17 it is not
     for f, v in ((16, True), (17, False)):
@@ -100,8 +101,9 @@ def test_veto_before_frame_16_soft_risk_after():
 
 def test_margin_interpolates_the_measured_error():
     assert float(S.margin(16)) == pytest.approx(13.9)
-    assert float(S.margin(24)) == pytest.approx((13.9 + 38.1) / 2)
-    assert float(S.margin(60)) == pytest.approx(60.0)
+    assert float(S.margin(8)) == pytest.approx(5.0) and float(S.margin(12)) == pytest.approx((5.0 + 13.9) / 2)
+    assert float(S.margin(24)) == pytest.approx(13.9)     # held from MARGIN_HORIZON on (plans are corrected)
+    assert float(S.margin(60)) == pytest.approx(13.9)
 
 
 def test_death_memory_window_and_round_trip(tmp_path):

@@ -74,7 +74,7 @@ deadline.
 
 Score of a candidate: the estimated frames to reach the goal (lower is better; total = -estimate):
   estimate = frames used + T(end) + DEATH_FRAMES x (soft risk, or the point-of-no-return rate) + failure frames.
-  DEATH_FRAMES = max(T_support(spawn) - T(start), DEAD_END_FRAMES): one death costs the progress it throws away
+  DEATH_FRAMES = max(T_support(spawn) - T(start), DEATH_MIN_FRAMES): one death costs the progress it throws away
   (at least a dead end's charge), the same everywhere: soft risk, a completion where every continuation dies, and
   the point-of-no-return memory.
 - frames used: stage 1 the common end (24), stage 2 H, final H, or H + k with the airborne completion (below).
@@ -188,6 +188,10 @@ CANCEL = None          # a threading.Event set by the plan-ahead thread for its 
 DEAD_END = 100.0                             # the former weight (V units)
 DEAD_END_FRAMES = DEAD_END * FX_GROUND       # an end with T = +inf: T(start) + this
 DEAD_FAR = 1e4                               # frames: T of a dead end when the start is one too
+# what one death costs at least (frames), where it throws away less progress than this: the restart and its
+# lost run-up. It was DEAD_END_FRAMES (500): near the spawn a soft risk of 0.5 then cost 250 frames and the agent
+# waited instead of passing a hazard (2-1, 2026-11-13).
+DEATH_MIN_FRAMES = 120.0
 # wall contact is support (for scoring) only up to this downward speed (units / frame). Measured (plan/measure_time.py,
 # M2: 13,385 wall jump presses, runs/plan_2026110*): a press on a wall gives a wall jump in 93-100% of the cases in
 # every downward-speed bucket up to 10 u/f (8+ u/f: 16 presses only), so no bucket drops below 80%: inf (no cut)
@@ -1143,9 +1147,11 @@ class Planner:
                  member: int = 0, memory: FailureMemory | None = None, hysteresis: float = 0.0,
                  collide_tol: float | None = COLLIDE_TOL, moves: "MoveMemory | None | str" = "new",
                  complete_max: int = COMPLETE_MAX, modes: bool = False, key_pickup=True,
-                 route_trial_gain: float = TRIAL_GAIN, veto_members: int = 1):
+                 route_trial_gain: float = TRIAL_GAIN, veto_members: int = 1,
+                 death_min: float = DEATH_MIN_FRAMES):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.veto_members = max(1, int(veto_members))   # _verdict's quorum on the final stage's members
+        self.death_min = float(death_min)             # DEATH_FRAMES' floor (agent.py --death-min)
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms   # budget: reported only
         self.hysteresis = float(hysteresis)          # frames (switch rule); 0: the best total is chosen
         self.collide_tol = collide_tol               # the collision guard's tolerance; None: no guard
@@ -1630,7 +1636,7 @@ class Planner:
         v0 = float(self.value(np.array([x0]), np.array([y0]), keys, vy=vy0)[0][0])
         v0_ok = math.isfinite(v0)
         cell0 = self.cell(x0, y0)
-        scale = max(self.t_spawn - T0, DEAD_END_FRAMES) if T0_ok and math.isfinite(self.t_spawn) else DEAD_END_FRAMES
+        scale = max(self.t_spawn - T0, self.death_min) if T0_ok and math.isfinite(self.t_spawn) else self.death_min
         death_of = (lambda nm: self.moves.penalty(cell0, nm, scale)) if self.moves is not None else (lambda nm: 0.0)
         self.death_frames = scale                    # DEATH_FRAMES of this decision (module docstring)
         mem = slice(self.member, self.member + 1)

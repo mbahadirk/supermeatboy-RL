@@ -33,8 +33,15 @@ VETO_FRAMES = 16            # contact in frames 1..VETO_FRAMES vetoes the candid
 SUB_STEP = 3.0              # units: at most this far between the samples of one movement segment
 # world model's 90% position error (units) by horizon (frames): the soft-risk margin
 ERR90 = ((1, 0.43), (4, 2.0), (8, 5.0), (16, 13.9), (32, 38.1), (48, 60.0))
+# The margin stops growing after this many frames: a plan is corrected long before its far frames are played (a
+# decision every 8 frames, made 8 ahead), so the error that matters there is the one that builds up between two
+# corrections, not the open-loop error at +32 / +48 (38 and 60 units: with those every pass within 2-3 tiles of
+# a hazard was "risky" and waiting, which costs only its frames, always won: 2-1, 2026-11-13).
+MARGIN_HORIZON = 16
 NEAREST = 3                 # boxes per candidate in the clearance summary
 WINDOW = 30                 # frames: a remembered death is a hazard this long before and after its wave frame
+STATIC_NEAR = 16.0          # units: remembered deaths this close at wave frames more than WINDOW apart are one
+                            # place that always kills (DeathMemory)
 DEATH_HALF = 8.0            # half size of a remembered death's box (contact adds BODY)
 
 KIND_NONE, KIND_HAZARD, KIND_SHOT, KIND_OUT, KIND_MEMORY, KIND_FLOOR = -1, 0, 1, 2, 3, 4
@@ -315,9 +322,9 @@ def first_contact(xs, ys, boxes, first=None, upto=None, step: int = 1):
 # ---- decision rule --------------------------------------------------------------------------------------
 def margin(k) -> np.ndarray:
     """Soft-risk margin (units) at horizon k frames: the world model's 90% position error, interpolated
-    linearly in ERR90 and held at its ends."""
+    linearly in ERR90, held at its ends and from MARGIN_HORIZON frames on."""
     f, e = zip(*ERR90)
-    return np.interp(np.asarray(k, np.float64), f, e)
+    return np.interp(np.minimum(np.asarray(k, np.float64), MARGIN_HORIZON), f, e)
 
 
 @dataclass
@@ -395,7 +402,12 @@ class DeathMemory:
     The window stays short on purpose: repeated deaths at one place at other wave frames came from kill shapes
     moving inside a piece's animation (1-14's saws), which the hazard rows now carry for every frame; the wave
     reset restarts those animations, so a remembered death is a fact about its own wave frame only. A longer
-    window would block the place at times it is safe."""
+    window would block the place at times it is safe.
+
+    The exception: deaths within STATIC_NEAR units of each other at wave frames more than WINDOW apart. The agent
+    came back when the window had passed and died there again, so the place kills at any time (2-1: a pile whose
+    kill shape reaches further than the one read from the game; the agent died there once per wave, 48 frames
+    later each time). Those boxes are on at every frame (one per place)."""
 
     def __init__(self, entries=()):
         self.entries: list[tuple[str, int, float, float]] = []
@@ -415,8 +427,18 @@ class DeathMemory:
         a = self._by_level.get(level)
         if a is None:
             a = np.array([(f, x, y) for lvl, f, x, y in self.entries if lvl == level], np.float64).reshape(-1, 3)
+            always = np.zeros(len(a), bool)
+            if len(a) > 1:
+                near = np.hypot(a[:, None, 1] - a[None, :, 1], a[:, None, 2] - a[None, :, 2]) <= STATIC_NEAR
+                always = (near & (np.abs(a[:, None, 0] - a[None, :, 0]) > WINDOW)).any(1)
+                first = np.ones(len(a), bool)                     # one box per place: its first death
+                for i in np.nonzero(always)[0]:
+                    first[i] = not (near[i, :i] & always[:i]).any()
+                a = np.column_stack([a, always & first])[~always | first]
+            else:
+                a = np.column_stack([a, always])
             self._by_level[level] = a
-        on = a[np.abs(a[:, 0] - frame) <= WINDOW]
+        on = a[(a[:, 3] > 0) | (np.abs(a[:, 0] - frame) <= WINDOW)]
         out = np.zeros((len(on), 5))
         out[:, 0], out[:, 1] = on[:, 1], on[:, 2]
         out[:, 2] = out[:, 3] = DEATH_HALF
