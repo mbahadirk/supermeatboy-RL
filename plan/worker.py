@@ -98,7 +98,7 @@ def serve(conn, cancel, threads: int):
                 row, prefix, worlds, frames, d, target, dt, agent, rec = a
                 P.CANCEL = cancel
                 try:
-                    pred, spread = planner.predict_start(row, prefix, worlds[:d], dt)
+                    pred, spread = planner.predict_start(row, prefix, worlds[:d], dt, frame=int(target) - int(d))
                     plan = planner.plan(pred, target, worlds[d:], frames[d:], dt, agent=agent,
                                         recorded=None if rec is None else max(0, int(rec) - d), defer=True)
                 finally:

@@ -46,6 +46,7 @@ def synthetic(step=1, key_x=90):
                                   lock_groups=[[16]], opened_cells=geom.lock_context.opened_cells)
     pl.terrain, pl.guard = Terrain(words, 0, 0), Terrain(words, 0, 0, slopes=False)
     pl._guard_keys, pl._support_keys = {}, {}
+    pl.crumble, pl._stages, pl._now, pl._crumble = {}, {}, 0, None
     field = ProgressField.__new__(ProgressField)
     field.key_order = [[0]]
     field.times = lambda x, y, leg, supported=True, vy=None: np.full(np.shape(x), 100.) - 50 * np.asarray(leg)

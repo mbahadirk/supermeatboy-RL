@@ -164,7 +164,7 @@ from mpc.candidates import ACTIONS, act
 from plan import safety as S
 from plan.explain import Plan, SurpriseTracker, HORIZONS
 from plan.geometry import Terrain
-from realpath import BODY
+from realpath import BODY, tile_classes
 from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MAX_LEN, padded
 from plan.progress import FX_GROUND, ProgressField
 from wm.buffer import ROW
@@ -256,13 +256,20 @@ EXPLORE_EVERY = 16                           # frames between an explore agent's
 CONTACT_EPS = 0.01                           # units: a body put back to contact is this clear of the solid
 SIDE_SHRINK = 0.05                           # units: the collide guard's near-exact box for which face a body hits
 CORNER_FALL = 400.0                          # units: how far corner_risk follows a missed ledge's slide down
+# crumble blocks (Planner.crumble). Measured (runs/experiments/crumble_v1/delay.py; 1-9, 1-10, 1-11, 3-1: 164
+# tiles the body touched): the first word change a median 29 frames after the first touch, the tile gone (word
+# 0x100) 29-30 frames after it, never sooner than 29.
+CRUMBLE_DELAY = 30                           # frames from the first touch until the tile is taken as gone
+CRUMBLE_REACH = 1.0                          # units beyond the body box that count as a touch (as measured)
+CRUMBLE_LATE = 10                            # frames past its time a tile may stay before the touch is forgotten
 
 
 # ---- world model rollouts with per-row time offsets -------------------------------------------------------
 @torch.inference_mode()
 def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.ndarray, dt_ms: float,
             worlds: list, offsets=None, keep_rows: bool = False,
-            terrain: Terrain | None = None, tol: float = None, key_pickup=False, terrain_for_mask=None) -> dict:
+            terrain: Terrain | None = None, tol: float = None, key_pickup=False, terrain_for_mask=None,
+            stages=None) -> dict:
     """wm.rollout.rollout_batched for a subset of ensemble members (`members`, a slice) whose rows may start at
     different future frames: row i at step k sees the level's moving parts worlds[offsets[i] + k] (clamped to
     the last). s0 (n,) ROW, actions (n, K). Returns x, y (E, n, K+1) float64; vx, vy (E, n, K+1): the velocity
@@ -272,6 +279,9 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     a cross-check only), rows (E, n, K+1) when keep_rows, and steps (K: every step runs). terrain: the collision guard (collide) after every step
     against these tiles with tolerance tol (default COLLIDE_TOL); clip (E, n, K+1) says which steps it moved
     (None without a terrain).
+    stages: [(frame, geom, terrain, terrain_for_mask)] in frame order (frames from the start, as offsets): a
+    row's model steps that start at or after `frame` (its offset counted) use these in place of geom, terrain and
+    terrain_for_mask (Planner.crumble_stages: crumble tiles expected to be gone by then).
     A step-k model (model.step = f > 1): actions, dt_ms, offsets and worlds stay per frame; every array is per
     model step instead (ceil(K / f) steps, column j = frame j x f, the last action repeated to fill the last
     step), step j sees worlds[offset + j x f]; vx, vy stay units per frame (the step's difference / f); steps
@@ -319,11 +329,18 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
         if CANCEL is not None and CANCEL.is_set():
             raise PlanCancelled()
         wk = [worlds[min(o + k * f, last)] for o, _ in groups]     # each group's world this step (f = 1: o + k)
-        if f > 1:
-            features_into(Xf, groups, s, a_all[:, k, 0], dt_step, geom, wk)
-            actions_into(X, a_all[:, k])
+        # each group's tiles this step: the last stage due at its frame (None: the given geom and terrain)
+        tiles = [None] * len(groups) if not stages else [
+            next((st for st in reversed(stages) if st[0] <= o + k * f), None) for o, _ in groups]
+        same = all(t is tiles[0] for t in tiles)
+        Xk, ak, dk = (Xf, a_all[:, k, 0], dt_step) if f > 1 else (X, a_all[:, k], dt_ms)
+        if same:
+            features_into(Xk, groups, s, ak, dk, geom if tiles[0] is None else tiles[0][1], wk)
         else:
-            features_into(X, groups, s, a_all[:, k], dt_ms, geom, wk)
+            for grp, w, t in zip(groups, wk, tiles):
+                features_into(Xk, [grp], s, ak, dk, geom if t is None else t[1], [w])
+        if f > 1:
+            actions_into(X, a_all[:, k])
         torch.sub(Xt, model.mu, out=Z0)
         z = Z0.div_(model.sd).view(E, n, -1)
         for i in range(len(Wl) - 1):
@@ -333,15 +350,22 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
         pb = torch.sigmoid(o[:, _BIN]).numpy()
         s2 = advance(s, a_all[:, k], move, pb, o[:, _STATE].argmax(-1).numpy())
         if clip is not None:
-            if terrain_for_mask is None:
-                clipped = collide(terrain, s, s2, tol)
-            else:
-                clipped = np.zeros(len(s), bool)
-                for mask in np.unique(s["keys"]):
-                    idx = np.flatnonzero(s["keys"] == mask)
-                    private = s2[idx].copy()
-                    clipped[idx] = collide(terrain_for_mask(int(mask)), s[idx], private, tol)
-                    s2[idx] = private
+            clipped = np.zeros(len(s), bool)
+            for (_, gi), t in ([((0, slice(None)), tiles[0])] if same else zip(groups, tiles)):
+                ter, per_mask = (terrain, terrain_for_mask) if t is None else (t[2], t[3])
+                rows_g = np.arange(len(s))[gi]
+                if per_mask is None:
+                    parts = [(rows_g, ter)]
+                else:
+                    parts = [(rows_g[s["keys"][rows_g] == mask], per_mask(int(mask)))
+                             for mask in np.unique(s["keys"][rows_g])]
+                for idx, tr in parts:
+                    if len(idx) == len(s):
+                        clipped = collide(tr, s, s2, tol)
+                    else:
+                        private = s2[idx].copy()
+                        clipped[idx] = collide(tr, s[idx], private, tol)
+                        s2[idx] = private
             clip[:, :, k + 1] = clipped.reshape(E, n)
         if key_pickup:
             # Guard uses the INCOMING mask for the whole model step. Pickup is post-update; coarse-step
@@ -1299,6 +1323,12 @@ class Planner:
         self.geom = LevelGeom(level.words0, level.wm_geometry_metadata(),        # the model's tile encoding
                               protocol=model_layout(self.model).protocol)
         self.words = np.asarray(level.words0, np.uint32).copy()
+        self._words0 = np.asarray(level.words0, np.uint32)
+        crumble = tile_classes(self._words0)["crumble"]
+        self._crumble = crumble if crumble.any() else None     # the level's crumble cells (None: it has none)
+        self.crumble: dict[tuple, int] = {}          # touched, still intact crumble cell (r, c) -> wave frame gone
+        self._stages: dict = {}                      # crumble_stages' tiles per (keys, per-mask)
+        self._now = 0                                # the wave frame of the decision being made
         self.tiles_changed = False                   # a tile differs from the level's start (crumble, lock, switch)
         self.terrain = Terrain(level.words0, level.ox, level.oy)
         self.guard = Terrain(level.words0, level.ox, level.oy, slopes=False)    # the collision guard's tiles
@@ -1338,6 +1368,9 @@ class Planner:
         self.guard.update(self.words)
         self._guard_keys = {}
         self._support_keys = {}
+        for idx, _ in changes:                       # the game spoke for these cells: no expectation left
+            self.crumble.pop(divmod(int(idx), self.terrain.W), None)
+        self._stages = {}
 
     def _corner(self, xs, ys, frames, upto, keys):
         """corner_risk of imagined paths on the guard's tiles for these keys (None with the guard or the rule off),
@@ -1356,10 +1389,60 @@ class Planner:
             self._support_keys[mask] = self.terrain.opened(self.geom.lock_context.opened_cells(mask))
         return self._support_keys[mask]
 
-    def imagine_options(self, keys=0):
+    def imagine_options(self, keys=0, frame=None):
+        """imagine()'s guard and tile options for rollouts that start at wave frame `frame` (default: the frame of
+        the decision being made, Planner.plan's; the crumble stages are counted from it)."""
+        per_mask = self.key_pickup and self.collide_tol is not None
         return {"terrain": self.guard_terrain(keys), "tol": self.collide_tol,
                 "key_pickup": self.key_pickup,
-                "terrain_for_mask": self.guard_terrain if self.key_pickup and self.collide_tol is not None else None}
+                "terrain_for_mask": self.guard_terrain if per_mask else None,
+                "stages": self.crumble_stages(keys, self._now if frame is None else frame, per_mask)}
+
+    # ---- crumble blocks: gone CRUMBLE_DELAY frames after a touch -----------------------------------------------
+    def touch(self, frame: int, x: float, y: float):
+        """A real state: the intact crumble tiles the body box (CRUMBLE_REACH wider) reaches are expected gone at
+        frame + CRUMBLE_DELAY (the game breaks a tile that long after its first touch); a tile still there
+        CRUMBLE_LATE frames past its time was not touched after all and is forgotten."""
+        if self._crumble is None:
+            return
+        late = [k for k, t in self.crumble.items() if frame > t + CRUMBLE_LATE]
+        for k in late:
+            del self.crumble[k]
+        h = BODY + CRUMBLE_REACH
+        c0, c1 = int((x - h - self.lv.ox) // 20.0), int((x + h - self.lv.ox) // 20.0)
+        r0, r1 = int((y - h - self.lv.oy) // 20.0), int((y + h - self.lv.oy) // 20.0)
+        H, W = self._crumble.shape
+        new = [(r, c) for r in range(max(r0, 0), min(r1, H - 1) + 1) for c in range(max(c0, 0), min(c1, W - 1) + 1)
+               if self._crumble[r, c] and (r, c) not in self.crumble and self.words[r, c] == self._words0[r, c]]
+        for k in new:
+            self.crumble[k] = int(frame) + CRUMBLE_DELAY
+        if late or new:
+            self._stages = {}
+
+    def crumble_stages(self, keys: int, frame: int, per_mask: bool = False):
+        """imagine()'s stages for rollouts from wave frame `frame`: per expected break (Planner.crumble: cell ->
+        wave frame), in time order, [(frames from `frame`, the model's tile inputs, the guard's tiles, the guard's
+        tiles per key mask or None)] with every tile due by then open. None: nothing is expected to break."""
+        if not self.crumble:
+            return None
+        key = (int(keys), bool(per_mask))
+        st = self._stages.get(key)
+        if st is None:
+            st = []
+            for t in sorted(set(self.crumble.values())):
+                cells = tuple(sorted(k for k, v in self.crumble.items() if v <= t))
+                guard = self.guard_terrain(keys)
+                by_mask = None
+                if per_mask:
+                    cache = {}
+
+                    def by_mask(mask, cells=cells, cache=cache):
+                        if mask not in cache:
+                            cache[mask] = self.guard_terrain(mask).opened(cells)
+                        return cache[mask]
+                st.append((t, self.geom.opened(cells), None if guard is None else guard.opened(cells), by_mask))
+            self._stages[key] = st
+        return [(t - int(frame), g, ter, m) for t, g, ter, m in st]
 
     def guard_terrain(self, keys: int) -> Terrain | None:
         """The collision guard's tiles for an agent holding `keys`: the live tiles (plan.geometry.solid_now's
@@ -1381,6 +1464,7 @@ class Planner:
         """A new wave: per-wave state cleared. Returns the events of route trials the wave left open."""
         self.prev = {}
         self.long = {}                               # agent -> the last long-safe plan {frame, actions, segs, valid}
+        self.crumble, self._stages = {}, {}          # the level is whole again
         self.memory.new_wave()
         self.route.new_wave()
         if self.moves is not None:
@@ -1467,6 +1551,8 @@ class Planner:
         (FailureMemory.update: real T and the state key; vx, vy as recorded, units / s, None: unknown) and, on a
         death (cause: what killed it, for the log), the point of no return (MoveMemory.died)."""
         ev = self.surprise.observe(agent, frame, x, y, dead)
+        if not dead:
+            self.touch(int(frame), float(x), float(y))
         if dead:
             ev = ev + self.memory.update(agent, frame, dead=True)
             at = self.route.dead(agent, frame)
@@ -1749,6 +1835,7 @@ class Planner:
         (previous plan, best-route use, route trial, surprise / move / failure memories) wait for
         plan.commit_fn() (agent.py --async-plan: a plan made ahead counts only if it is adopted)."""
         t0 = time.perf_counter()
+        self._now = int(frame)                       # imagine_options: the crumble stages count from here
         f = self.f                                   # frames per model step; arrays are per step (column)
         H = -(-self.H // f) * f                      # frames, whole steps
         Hc = H // f
@@ -2273,17 +2360,20 @@ class Planner:
             apply()
         return plan
 
-    def predict_start(self, row, actions, worlds: list, dt_ms: float = 16.667):
+    def predict_start(self, row, actions, worlds: list, dt_ms: float = 16.667, frame: int | None = None):
         """The agent's state after it plays `actions` (frames, a whole number of model steps) from `row`, as the
         ensemble imagines it with the collision guard: the member row nearest the members' mean position, and
         the members' largest distance from that mean (units). agent.py --async-plan plans from it while those
-        frames play. worlds: at least len(actions) World (index k = row's frame + k)."""
+        frames play. worlds: at least len(actions) World (index k = row's frame + k). frame: the row's wave frame
+        (the crumble stages count from it; None: no tile is expected to break on the way)."""
         row = np.asarray(row, ROW).reshape(1)
         acts = np.asarray(actions, np.int64).reshape(1, -1)
         if acts.shape[1] % self.f:
             raise ValueError(f"a prediction ahead needs whole model steps of {self.f} frames")
-        out = imagine(self.model, slice(None), self.geom, row, acts, dt_ms, worlds,
-                      **self.imagine_options(int(row["keys"][0])))
+        opts = self.imagine_options(int(row["keys"][0]), frame=frame if frame is not None else 0)
+        if frame is None:
+            opts["stages"] = None
+        out = imagine(self.model, slice(None), self.geom, row, acts, dt_ms, worlds, **opts)
         last = out["last"][:, 0]
         d = np.hypot(last["x"] - last["x"].mean(), last["y"] - last["y"].mean())
         return last[int(np.argmin(d))].reshape(1).copy(), float(d.max())
@@ -2399,6 +2489,7 @@ class Planner:
         rolled with members 3 and 4; among the plans without a veto, the one whose two members' end positions
         disagree most (the most informative for the model), ties by estimate (all vetoed: the latest veto).
         Returns a Plan with mode "explore" (no previous plan, memories or surprise tracking)."""
+        self._now = int(frame)                       # imagine_options: the crumble stages count from here
         t0 = time.perf_counter()
         f = self.f
         H = -(-self.H // f) * f

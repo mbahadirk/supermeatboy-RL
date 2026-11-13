@@ -122,6 +122,9 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
     s = state_row(r0["x"], r0["y"], r0["vx"], r0["vy"], r0["flags"], r0["state"], r0["keys"], r0["held"])
     for g in sorted(k for k in wf if k < start):    # the wave before the start, as the live agent saw it (flying
         feed(wf[g])                                 # shots' tracks, launchers, the hazards' runs)
+    for r in sorted((r for r in rows if int(r["agent"]) == int(r0["agent"]) and int(r["frame"]) < start
+                     and r["status"] == 0), key=lambda r: int(r["frame"])):
+        planner.touch(int(r["frame"]), float(r["x"]), float(r["y"]))     # and the crumble tiles it touched
     goal_boxes = np.asarray(lv.goal_boxes(), np.float64).reshape(-1, 5)
     key_boxes = list(lv.key_boxes())
     plans, played, plan_ms, check_s, events = [], {}, 0.0, 0.0, []

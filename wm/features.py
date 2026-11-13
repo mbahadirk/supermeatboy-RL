@@ -204,6 +204,35 @@ class LevelGeom:
     def in_tile(self, x, y):
         return ((x - self.ox) / TILE) % 1.0 - 0.5, ((y - self.oy) / TILE) % 1.0 - 0.5
 
+    def opened(self, cells) -> "OpenedGeom":
+        """These tile inputs with cells [(row, col)] empty: a view, nothing is copied (OpenedGeom)."""
+        return OpenedGeom(self, cells)
+
+
+class OpenedGeom:
+    """A LevelGeom seen with some cells already gone (crumble blocks the planner expects to have broken by then:
+    plan.planner.Planner.crumble): the same patches with those cells' channels 0, as an opened lock's. Everything
+    else is the LevelGeom's own (the live tiles, the layout, the lock context)."""
+
+    def __init__(self, geom: LevelGeom, cells):
+        self._geom = geom
+        self.cells = tuple((int(r), int(c)) for r, c in cells)
+
+    def __getattr__(self, name):
+        return getattr(self._geom, name)
+
+    def patches(self, x: np.ndarray, y: np.ndarray, keys=None) -> np.ndarray:
+        g = self._geom
+        out = g.patches(x, y, keys)
+        c = np.clip(np.floor((x - g.ox) / TILE).astype(int), -P, g.W + P - 1) + P
+        r = np.clip(np.floor((y - g.oy) / TILE).astype(int), -P, g.H + P - 1) + P
+        patch = out.reshape(len(r), g.layout.channels, 2 * P + 1, 2 * P + 1)
+        for lr, lc in self.cells:
+            pr, pc = lr - (r - P) + P, lc - (c - P) + P
+            within = np.nonzero((pr >= 0) & (pr <= 2 * P) & (pc >= 0) & (pc <= 2 * P))[0]
+            patch[within, :, pr[within], pc[within]] = 0
+        return out
+
 
 def hazard_boxes(hz: list, keep=None) -> np.ndarray:
     """The model's hazard inputs, as it was trained: each piece's own box [x, y, size w, size h, scale x,

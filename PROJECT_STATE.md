@@ -36,11 +36,35 @@
 - Goldens re-recorded (they pass with `early_margin=False`).
 - Not run in the game. Near passes are now weighed, not refused: more deaths near hazards are possible.
 
-**Crumble blocks: measured, not built** (`crumble_v1/delay.py`, 4 levels, 164 touched tiles):
+**Crumble blocks: measured** (`crumble_v1/delay.py`, 4 levels, 164 touched tiles):
 - The first word change comes a median 29 frames after the first touch (p90 29-30).
 - The tile is gone 29-30 frames after the touch at the earliest (median 29-30).
 - Untouched neighbours change too (a chain); their timing is not measured.
-- Next step: the planner's imagined world opens a touched tile 30 frames after the live touch.
+
+## Crumble blocks in the imagined world (2026-11-14)
+
+**Crumble clock** (`Planner.crumble`, `Planner.touch`, `CRUMBLE_DELAY` = 30):
+- Every real state (`Planner.observe`): an intact crumble tile within 1 unit of the body box is expected gone 30 frames later.
+- The game's own tile change for a cell (`Planner.tiles`) ends the expectation. So does a new wave.
+- A tile still there 10 frames past its time is forgotten (the touch was not one).
+- Untouched neighbours stay solid until the game changes them.
+
+**Imagined steps** (`imagine(stages=...)`, `Planner.crumble_stages`, `Planner.imagine_options`):
+- A row's model steps that start at or after a tile's time see it open: in the collision guard's tiles (`Terrain.opened`) and in the model's tile inputs (`LevelGeom.opened`, a view with those cells' channels 0, as an opened lock's).
+- Rows with their own start offsets (stage 2, the completion) get their own stage.
+- The plan made ahead (`predict_start`) counts from its own frame.
+- Before the first touch nothing is expected: the field (crumble cells cost 1 frame) still leads the agent to the wall.
+- Not changed: the field's crumble cost, the support rule at a plan's end, the corner risk's tiles.
+
+**Checked on the user's 3-1 wave that passes the wall** (`crumble_v1/wall_pass.py`; touch f398, the game's tiles gone f428 / 430 / 436, the user through at f451):
+- The clock's times from the user's real states: 429, 430, 436.
+- One decision from the user's state, clock off -> on:
+  - f404 (354, -8): T 48 -> 48, not past the wall -> T 48 -> 15, past it at +41.
+  - f412 (346, -18): T 48 -> 45 -> T 48 -> 5, past it at +30 (y -30).
+  - f420 (326, 21): T 58 -> 46 -> T 58 -> 3, past it at +27 (y -30).
+- `plan.offline.closed_loop` gives the planner the recorded agent's touches before START.
+- Tests: `tests/test_crumble.py`.
+- Not run in the game. Not covered: arriving at the wall low and fast (the 4 deaths in h6 came within 5 frames of the touch).
 
 ## 3-1: the full jump, and the crumble wall (2026-11-14)
 
