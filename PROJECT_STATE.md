@@ -30,6 +30,17 @@
   - Held-out loss was still falling slowly at the end (0.024 -> 0.023 over the last three epochs): more epochs alone will give little more.
   - Decision time is about the same for the three models (offline closed loop on 1-14, median 145 / 151 / 154 ms).
   - It loads and plans in agent.py (simulate.py with `MODEL=`); the wind prior is not in it (gravity-v1).
+- **48 epochs** (`runs/experiments/model_compare_v1/epoch_48/model/wm_model.pt`; same manifest and settings, 3 threads, 3158 s; never run in the game). Same waves, `epoch24_vs_epoch48.json`, median / 90%:
+
+| Level | +4 | +8 | +16 | +32 | +48 |
+|---|---|---|---|---|---|
+| 1-14 | 0.2 / 1.7 | 0.8 / 4.0 | 2.7 / 15.9 | 11.9 / 44.5 | 21.8 / 73.4 |
+| 1-15 | 0.2 / 1.4 | 0.7 / 4.7 | 1.7 / 11.8 | 5.6 / 46.3 | 10.6 / 93.0 |
+| 1-16 | 0.3 / 1.4 | 0.8 / 6.6 | 2.8 / 22.1 | 8.9 / 55.3 | 22.3 / 93.2 |
+| 1-17 | 0.3 / 1.9 | 0.9 / 7.4 | 2.0 / 18.1 | 6.7 / 43.0 | 14.7 / 62.1 |
+
+  - Better than epoch_24 at every median on all four levels, and at every 90% value but two (1-14 +48: 73.2 -> 73.4; 1-16 +8: 5.9 -> 6.6, n 64).
+  - Its own held-out loss was lowest at epochs 24-36 (0.013) and rose to 0.016 by epoch 48, while the position errors on later recordings kept falling. The loss includes the event heads (death / finish) and the members' uncertainty, so the rise may be those getting overconfident; not checked.
 
 **The 1-17 stall does not reproduce offline** (`model_compare_v1/stall_1-17.py`, `stall_1-17.json`): from the stalled agent's recorded state (frame 208 of a 1200-frame wave, recorded hazards), with runs/wm_locked standing in for the game, the planner goes from T 187 to 71 (wm_step4) or 81 (epoch_12) in 500 frames and stays alive. So the stall is not a property of the planner's rules alone; in the game the plans there come out lower and shorter than predicted (the largest surprises: predicted y 17-22 units above the real one, x 18 beyond). They are not concentrated at slope or half tiles (13 of 69 surprises within 30 units of one). The cause in the game is not pinned down.
 
