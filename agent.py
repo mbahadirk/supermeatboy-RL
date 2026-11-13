@@ -472,6 +472,14 @@ class Runner:
             args.agents, args.explore = 0, 0
         self.search = None                                   # plan.search.Search (--search)
         n_search = 0
+        self.human = None                                    # plan.human.HumanInput (--human): agent 0 is you
+        if getattr(args, "human", False):
+            if self.demo is not None or getattr(args, "search", False) or getattr(args, "learn", False):
+                raise SystemExit("--human plays alone: not with --demo / --search / --learn")
+            from plan.human import HumanInput
+            self.human = HumanInput()
+            args.agents, args.explore, args.end_after = 0, 0, 1
+            n_search = 1                                     # (counted as the one agent below)
         if getattr(args, "search", False):
             if self.demo is not None:
                 raise SystemExit("--search and --demo / --demo-level: give one")
@@ -552,7 +560,10 @@ class Runner:
         self.wm = None
         if args.wm_collect:
             from wm.buffer import Collector
-            if self.demo is not None:
+            if self.human is not None:
+                self.wm = Collector(os.path.join(self.run_dir, "wm_data"), source="human")
+                self.wm.meta_extra = {"agent_sources": {"human": [0]}}
+            elif self.demo is not None:
                 self.wm = Collector(os.path.join(self.run_dir, "wm_data"),
                                     source="demo" if not self.demo.copies else "demo+demo-noisy")
                 self.wm.meta_extra = {"agent_sources": {"demo": [0], "demo-noisy": list(range(1, self.n_total))},
@@ -902,7 +913,7 @@ class Runner:
                     self.on_finish(i, frame - 1, x, y)
                 elif planned and pl is None:
                     self.st["died"] += 1
-                elif self.search is not None:
+                elif self.search is not None and self.human is None:
                     self.search_death(i, frame, x, y)
                 elif not planned:
                     self.st["ex_died"] += 1
@@ -1004,7 +1015,12 @@ class Runner:
                 if self.alive[i] and int(states[i][6]) == 0:
                     a = self.demo.action(i, frame)
                     acts[i], act_idx[i] = list(ACTIONS[a]), a
-        for i in range(self.n_plan, n if self.demo is None and self.search is None else 0):
+        if self.human is not None:
+            for i in range(n):
+                if self.alive[i] and int(states[i][6]) == 0:
+                    a = self.human.action() if i == 0 else 0
+                    acts[i], act_idx[i] = list(ACTIONS[a]), a
+        for i in range(self.n_plan, n if self.demo is None and self.search is None and self.human is None else 0):
             if self.alive[i] and int(states[i][6]) == 0:
                 a = self.explore_plan(i, frame, states[i], held_before[i], dt, fut) if pl is not None and \
                     pl.modes else self.explore_action(i)
@@ -1028,7 +1044,7 @@ class Runner:
                                                 round(float(states[i][2]), 2), round(float(states[i][3]), 2),
                                                 int(states[i][6])]
                                                for i in range(n if self.demo is not None or self.search is not None
-                                                              else min(self.n_plan, n))]})
+                                                              or self.human is not None else min(self.n_plan, n))]})
         if self.tel is not None:
             C.go("telemetry")
             self.send_frame(m, frame, states, act_idx, boxes, kept, fboxes, dt)
@@ -1259,9 +1275,11 @@ class Runner:
         lock on it is offered as the level's best (planned and explore apart); planned finishes are events."""
         planned = i < self.n_plan
         search = self.search is not None
-        source = "planned" if planned else ("demo" if self.demo is not None else ("search" if search else "explore"))
-        self.st["finished" if planned or search else "ex_finished"] += 1
-        if search:
+        human = self.human is not None
+        source = "planned" if planned else ("demo" if self.demo is not None else ("search" if search else
+                                                                                 "human" if human else "explore"))
+        self.st["finished" if planned or (search and not human) else "ex_finished"] += 1
+        if search and not human:
             self.search.finished(i, int(finish_frame) + 1, x, y)
         if self.demo is not None and i == 0:
             self.demo_fin = int(finish_frame)
@@ -1272,7 +1290,16 @@ class Runner:
                "frames": frames, "seconds": seconds, "dt_ms": round(self.dt_ms, 3), "lock": self.lock,
                "time": time.strftime("%Y-%m-%d %H:%M:%S")}
         self._write(self.f_times, rec)
-        self.fin[source].append(seconds)
+        self.fin.setdefault(source, []).append(seconds)
+        if human:
+            par = a_plus_time(lv)
+            ok = par is not None and seconds <= par
+            print(f"[human] {lv} wave {self.wave_no}: finished in {seconds:.2f} s"
+                  + (f" (A+ {par:g} s: {'UNDER A+, kept as an A+ example' if ok else 'over A+'})" if par is not None
+                     else " (no A+ time known)") + ("" if self.lock is True else "; the time step is NOT locked"),
+                  flush=True)
+            self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds, source=source,
+                       dt_ms=rec["dt_ms"], lock=self.lock, a_plus_seconds=par, a_plus=ok)
         if planned and self.planner is not None:
             self.pl_sync(drop="the agent finished")
             r = (self.proc.call("finished", i, int(finish_frame)) if self.proc is not None
@@ -1285,7 +1312,7 @@ class Runner:
             if ev:
                 self.event(ev["kind"], int(finish_frame), **{a: b for a, b in ev.items() if a not in ("kind", "frame")})
         new = False
-        if self.lock is True and lv is not None and self.demo is None:
+        if self.lock is True and lv is not None and self.demo is None and not human:
             new = self.best.offer(lv, source, {"seconds": seconds, "frames": frames, "run": self.args.name,
                                                "wave": self.wave_no, "agent": int(i), "date": rec["time"]})
         if planned:
@@ -1434,7 +1461,7 @@ class Runner:
                 last = final[i] if final is not None and i < len(final) else self.last_state[i]
                 fx, fy = (float(last[0]), float(last[1])) if last is not None else (None, None)
                 self.on_finish(i, ff, fx, fy)
-            elif self.search is not None:
+            elif self.search is not None and self.human is None:
                 last = final[i] if final is not None and i < len(final) else self.last_state[i]
                 self.search_death(i, frame, *((float(last[0]), float(last[1])) if last is not None else (None, None)))
             elif not planned:
@@ -1828,8 +1855,15 @@ class Runner:
         self.script = session.create_script(src)
         self.script.on("message", self.on_message)
         self.script.load()
+        if self.human is not None:
+            from plan.human import KEYS
+            print("[human] you play agent 0: keyboard arrows or A / D, jump Space / Up / W, run Shift / Ctrl (never "
+                  "S: it finishes the level); gamepad d-pad or stick, jump A / B, run X / Y / bumpers / triggers. "
+                  f"Input counts only while the game is in front. Gamepad {'found' if self.human.xinput else 'API missing'}.",
+                  flush=True)
         print(f"attached: {self.n_plan} planned + {self.n_explore} explore agents"
-              + (f" + {self.n_total} search agents (plan/search.py)" if self.search is not None else "")
+              + (f" + {self.n_total} search agents (plan/search.py)" if self.search is not None and self.human is None
+                 else "")
               + f", waves of {self.args.wave_seconds:g}s, "
               f"replan every {self.replan} frames" + (f" or on a trigger (tube x{self.args.tube:g})" if self.commit.on
                                                        else " (triggers off)") + f", budget {self.args.budget_ms:g} ms"
@@ -1954,6 +1988,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="replay this PPO best finish (runs/real_*/levels/<level>/best.json; plan.demos inventory)")
     ap.add_argument("--demo-level", default=None, help="replay the level's fastest non-suspicious PPO best finish")
     ap.add_argument("--demo-copies", type=int, default=20, help="--demo: perturbed copies besides the exact one")
+    ap.add_argument("--human", action="store_true",
+                    help="you play: one agent driven by your keyboard / gamepad (plan/human.py), no planner, no model; "
+                         "with --wm-collect your play is recorded as the agents' is (source 'human'); finishes under "
+                         "the level's A+ time are reported. Not with --demo / --search / --learn")
     ap.add_argument("--search", action="store_true",
                     help="wave search (plan/search.py): no planner, no model; every agent replays a known action "
                          "prefix exactly, then branches; not with --agents / --explore / --demo / --learn")
@@ -2009,6 +2047,8 @@ def main():
         args.name = args.name or time.strftime("search_%Y%m%d-%H%M%S")
     if args.learn:
         args.wm_collect = True                      # the learner trains on this run's shards too
+    if args.human:
+        args.name = args.name or time.strftime("human_%Y%m%d-%H%M%S")
     args.name = args.name or time.strftime("first_%Y%m%d-%H%M%S" if args.eval_first else "plan_%Y%m%d-%H%M%S")
     Runner(args).run()
 

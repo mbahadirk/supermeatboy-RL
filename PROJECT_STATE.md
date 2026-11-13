@@ -1,5 +1,20 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Bolder risk rules, your own play as data, A+ examples (2026-11-13)
+
+**Risk rules** (`747d8d4`; the golden planner cases re-recorded after it):
+- 2-1 (nowait_epoch24_check01): the agent stood at (-155, -194) for whole waves. Every move that made progress got "risk 0.54 near h18 at frame 32", costing about 268 frames, while waiting cost only its frames.
+- The soft-risk margin (`plan.safety.margin`) now stops growing at `MARGIN_HORIZON` = 16 frames (13.9 units instead of 38 at +32 and 60 at +48). Plans are corrected long before their far frames are played.
+- A death costs at least `DEATH_MIN_FRAMES` = 120 frames instead of 500 (`--death-min`).
+- `DeathMemory`: unexplained deaths within 16 units of each other at wave frames more than 30 apart are on at every frame. In 2-1 the agent died at one place once per wave, 48 frames later each time. There our kill box from the game's shape is about 14 units smaller than where it dies; the box read itself is not fixed.
+- In the offline replay of the 2-1 stand-still, the first decision's risk cost went from 301 to 0 and still plans fell from 36 to 8 of the decisions. The 3 golden cases that changed all wait less (1-13 f200: "wait 16f" became "jump up").
+- Not run live yet.
+
+**Your own play** (`agent.py --human`, `plan/human.py`): agent 0 takes the keyboard (arrows or A/D, jump Space/Up/W, run Shift/Ctrl; never S) or the first XInput pad, read each frame while the game window is in front. It is recorded with `--wm-collect` exactly like an agent (source "human"), and finishes print the A+ verdict.
+
+**A+ examples** (`python -m plan.aplus RUN... | --all`, writes runs/demos/aplus.json for `wm.train --demos`): finishes under the level's A+ time, with the time-step lock, rows 0..f without a gap, no teleport, not held-out or user-excluded, and no exact duplicate route. Over all existing recordings (`runs/demos/aplus_existing.json`): 7077 kept, mostly PPO on 1-1..1-13 and 2-10; the planner on 1-14 (25), 1-15 (2) and 1-17 (17).
+- Some PPO times are far under A+ (1-1 median 1.5 s against 3 s, 1-3 1.5 s against 9 s). The par lookup (`levels_smb.a_plus_time`) may be picking a level from the wrong chapter; this is not checked.
+
 ## Model comparison on new recordings, the 1-17 stall offline, --veto-members (2026-11-13)
 
 **Two models on recordings neither trained on** (`runs/experiments/model_compare_v1/compare.py`, results in `step4_vs_epoch12.json`): open-loop position error, median / 90%, game units (a tile is 20), with the agents' real actions and recorded hazards. `wm_step4` is the model in use; `epoch_12` is `runs/experiments/tile_shapes_epochs_v1/epoch_12/model/wm_model.pt` (tile-shapes-v1, 12 epochs, never run in the game).

@@ -246,6 +246,17 @@
         "died": []
        }
       ]
+     },
+     "key_pickup": {
+      "rule": "strict-native-endpoint-circle-v1",
+      "radius": 22.0,
+      "frames_per_model_step": 1,
+      "interpolated_integer_endpoints": false,
+      "guard_mask": "before_incoming_model_step",
+      "new_mask_usable": "next_model_step",
+      "maximum_opening_delay_frames": 0,
+      "delay_reference": "predicted_endpoint",
+      "approximation": "post_update_endpoint"
      }
     },
     "contact": [
@@ -499,6 +510,17 @@
        },
        null
       ]
+     },
+     "key_pickup": {
+      "rule": "strict-native-endpoint-circle-v1",
+      "radius": 22.0,
+      "frames_per_model_step": 1,
+      "interpolated_integer_endpoints": false,
+      "guard_mask": "before_incoming_model_step",
+      "new_mask_usable": "next_model_step",
+      "maximum_opening_delay_frames": 0,
+      "delay_reference": "predicted_endpoint",
+      "approximation": "post_update_endpoint"
      }
     },
     "contact": [
@@ -511,33 +533,33 @@
    "flat hazard strip",
    {
     "chosen": [
-     "run L 8f",
-     "jump up hold 15"
+     "walk L 8f",
+     "jump up hold 3"
     ],
     "actions": [
-     8,
-     8,
-     8,
-     8,
-     8,
-     8,
-     8,
-     8,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
      3,
      3,
      3,
-     3,
-     3,
-     3,
-     3,
-     3,
-     3,
-     3,
-     3,
-     3,
-     3,
-     3,
-     3,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
      0,
      0,
      0,
@@ -566,38 +588,38 @@
     ],
     "segments": [
      [
-      "run L 8f",
+      "walk L 8f",
       0,
       8
      ],
      [
-      "jump up hold 15",
+      "jump up hold 3",
       8,
-      29
+      17
      ],
      [
       "pad",
-      29,
+      17,
       48
      ]
     ],
-    "pad": 19,
+    "pad": 31,
     "from_prev": false,
     "score": {
      "frames_used": 48,
      "t_start": 200.0,
-     "t_end": 210.0,
-     "estimate": 258.0,
+     "t_end": 205.0,
+     "estimate": 253.0,
      "risk_frames": 0.0,
      "failure_frames": 0.0,
      "death_frames": 0.0,
-     "total": -258.0,
+     "total": -253.0,
      "completion": 0,
      "landing": true,
-     "spread_end": 14.311086167701161
+     "spread_end": 17.120743317834375
     },
     "v_start": 40.0,
-    "v_end": 42.88284271247462,
+    "v_end": 41.6,
     "dead_end_members": 0,
     "leg": 0,
     "veto": null,
@@ -609,34 +631,34 @@
      {
       "moves": [
        "walk L 8f",
-       "walk L 8f"
+       "jump up hold 6"
       ],
-      "total": -263.0,
-      "progress": -63.0,
+      "total": -253.0,
+      "progress": -53.0,
       "stage": "final",
-      "reason": "no progress (T 200 -> 215 frames; estimate 263 vs 258)",
+      "reason": "no progress (T 200 -> 205 frames; estimate 253 vs 253)",
       "vetoed": false
      },
      {
       "moves": [
-       "jump L hold 6 turn",
-       "walk L 8f"
+       "walk L 16f",
+       "jump up hold 3"
       ],
-      "total": -309.1978768943845,
-      "progress": -109.19787689438448,
+      "total": -253.0,
+      "progress": -53.0,
       "stage": "final",
-      "reason": "risk 0.09 near h0 at frame 20 (chosen 0.00, +46 frames)",
+      "reason": "no progress (T 200 -> 205 frames; estimate 253 vs 253)",
       "vetoed": false
      },
      {
       "moves": [
-       "walk L 8f",
-       "jump up hold 15"
+       "run L 8f",
+       "jump up hold 3"
       ],
-      "total": -310.047801129695,
-      "progress": -110.04780112969502,
+      "total": -253.0,
+      "progress": -53.0,
       "stage": "final",
-      "reason": "risk 0.10 near h0 at frame 25 (chosen 0.00, +52 frames)",
+      "reason": "no progress (T 200 -> 205 frames; estimate 253 vs 253)",
       "vetoed": false
      },
      {
@@ -707,10 +729,10 @@
       "clipped": 0,
       "landing": 0,
       "completed": 16,
-      "completion_rows_frames": 90,
+      "completion_rows_frames": 30,
       "completion_clipped": 0,
       "completion_inputs": 93,
-      "safe_alternatives": 13,
+      "safe_alternatives": 6,
       "completions": [
        {
         "continuation": "neutral",
@@ -719,14 +741,20 @@
         "died": []
        },
        {
-        "continuation": "keep",
-        "frames": 1,
+        "continuation": "neutral",
+        "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "right",
-        "frames": 8,
+        "continuation": "keep",
+        "frames": 0,
+        "on": "ground",
+        "died": []
+       },
+       {
+        "continuation": "neutral",
+        "frames": 2,
         "on": "ground",
         "died": []
        },
@@ -737,78 +765,83 @@
         "died": []
        },
        {
-        "continuation": "right",
-        "frames": 6,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        },
        {
-        "continuation": "keep",
+        "continuation": "neutral",
         "frames": 0,
         "on": "ground",
         "died": []
        }
       ]
+     },
+     "key_pickup": {
+      "rule": "strict-native-endpoint-circle-v1",
+      "radius": 22.0,
+      "frames_per_model_step": 1,
+      "interpolated_integer_endpoints": false,
+      "guard_mask": "before_incoming_model_step",
+      "new_mask_usable": "next_model_step",
+      "maximum_opening_delay_frames": 0,
+      "delay_reference": "predicted_endpoint",
+      "approximation": "post_update_endpoint"
      }
     },
     "contact": [
@@ -822,7 +855,7 @@
    {
     "chosen": [
      "run-jump R hold 6",
-     "run-jump R hold 3"
+     "run-jump R hold 6"
     ],
     "actions": [
      7,
@@ -840,9 +873,9 @@
      7,
      7,
      7,
-     6,
-     6,
-     6,
+     7,
+     7,
+     7,
      6,
      6,
      6,
@@ -881,61 +914,50 @@
       12
      ],
      [
-      "run-jump R hold 3",
+      "run-jump R hold 6",
       12,
-      21
+      24
      ],
      [
       "pad",
-      21,
+      24,
       48
      ]
     ],
-    "pad": 27,
+    "pad": 24,
     "from_prev": false,
     "score": {
      "frames_used": 48,
      "t_start": 195.96000000000004,
      "t_end": 117.0,
-     "estimate": 290.22045781625195,
-     "risk_frames": 125.22045781625197,
+     "estimate": 176.41063288119236,
+     "risk_frames": 11.410632881192369,
      "failure_frames": 0.0,
      "death_frames": 0.0,
-     "total": -290.22045781625195,
+     "total": -176.41063288119236,
      "completion": null,
      "landing": true,
-     "spread_end": 7.2484435789967465
+     "spread_end": 6.735761781529314
     },
     "v_start": 40.77817459305203,
     "v_end": 23.4,
     "dead_end_members": 0,
     "leg": 0,
     "veto": null,
-    "soft_risk": 0.2504409156325039,
+    "soft_risk": 0.09508860734326974,
     "soft_frame": 18,
-    "end_supported": false,
+    "end_supported": true,
     "first_move_frames": 12,
     "alternatives": [
      {
       "moves": [
        "run-jump R hold 6",
-       "run-jump R hold 6"
-      ],
-      "total": -293.4115699282555,
-      "progress": -97.45156992825548,
-      "stage": "final",
-      "reason": "risk 0.26 near h0 at frame 18 (chosen 0.25, +128 frames)",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "run-jump R hold 6",
        "run-jump R hold 15"
       ],
-      "total": -294.4115699282555,
-      "progress": -98.45156992825548,
+      "total": -177.41063288119236,
+      "progress": 18.54936711880768,
       "stage": "final",
-      "reason": "risk 0.26 near h0 at frame 18 (chosen 0.25, +128 frames)",
+      "reason": "estimate 177 vs 176 frames",
       "vetoed": false
      },
      {
@@ -943,10 +965,21 @@
        "run-jump R hold 6",
        "run-jump R hold 10"
       ],
-      "total": -294.4115699282555,
-      "progress": -98.45156992825548,
+      "total": -177.41063288119236,
+      "progress": 18.54936711880768,
       "stage": "final",
-      "reason": "risk 0.26 near h0 at frame 18 (chosen 0.25, +128 frames)",
+      "reason": "estimate 177 vs 176 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump R hold 3",
+       "run-jump R hold 10"
+      ],
+      "total": -186.7782874941619,
+      "progress": 9.181712505838135,
+      "stage": "final",
+      "reason": "risk 0.17 near h0 at frame 18 (chosen 0.10, +21 frames)",
       "vetoed": false
      },
      {
@@ -954,7 +987,7 @@
        "run R 16f"
       ],
       "total": null,
-      "progress": -483.03999999999996,
+      "progress": -103.03999999999996,
       "stage": "stage 1",
       "reason": "hits h0 at frame 16",
       "vetoed": true
@@ -964,7 +997,7 @@
        "run R 24f"
       ],
       "total": null,
-      "progress": -483.03999999999996,
+      "progress": -103.03999999999996,
       "stage": "stage 1",
       "reason": "hits h0 at frame 16",
       "vetoed": true
@@ -999,9 +1032,9 @@
        "run-jump R hold 3",
        "run-jump R hold 6",
        "run-jump R hold 10",
+       "run-jump R hold 22",
        "jump up hold 10",
-       "jump R hold 6",
-       "jump up hold 6"
+       "jump R hold 6"
       ],
       "goal": 0,
       "clipped": 0
@@ -1015,9 +1048,9 @@
       "goal": 0,
       "start_in_goal": false,
       "clipped": 0,
-      "landing": 16,
-      "completed": 0,
-      "completion_rows_frames": 0,
+      "landing": 14,
+      "completed": 2,
+      "completion_rows_frames": 120,
       "completion_clipped": 0,
       "completion_inputs": 93,
       "safe_alternatives": 15,
@@ -1036,9 +1069,30 @@
        null,
        null,
        null,
-       null,
-       null
+       {
+        "continuation": "keep",
+        "frames": 19,
+        "on": "ground",
+        "died": []
+       },
+       {
+        "continuation": "keep",
+        "frames": 14,
+        "on": "ground",
+        "died": []
+       }
       ]
+     },
+     "key_pickup": {
+      "rule": "strict-native-endpoint-circle-v1",
+      "radius": 22.0,
+      "frames_per_model_step": 1,
+      "interpolated_integer_endpoints": false,
+      "guard_mask": "before_incoming_model_step",
+      "new_mask_usable": "next_model_step",
+      "maximum_opening_delay_frames": 0,
+      "delay_reference": "predicted_endpoint",
+      "approximation": "post_update_endpoint"
      }
     },
     "contact": [
@@ -1291,6 +1345,17 @@
         "died": []
        }
       ]
+     },
+     "key_pickup": {
+      "rule": "strict-native-endpoint-circle-v1",
+      "radius": 22.0,
+      "frames_per_model_step": 1,
+      "interpolated_integer_endpoints": false,
+      "guard_mask": "before_incoming_model_step",
+      "new_mask_usable": "next_model_step",
+      "maximum_opening_delay_frames": 0,
+      "delay_reference": "predicted_endpoint",
+      "approximation": "post_update_endpoint"
      }
     },
     "contact": [
@@ -1303,20 +1368,20 @@
    "1-13 recorded f200",
    {
     "chosen": [
-     "wait 16f",
+     "jump up hold 10",
      "run-jump R hold 15"
     ],
     "actions": [
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
      0,
      0,
      0,
@@ -1358,7 +1423,7 @@
     ],
     "segments": [
      [
-      "wait 16f",
+      "jump up hold 10",
       0,
       16
      ],
@@ -1376,20 +1441,20 @@
     "pad": 11,
     "from_prev": false,
     "score": {
-     "frames_used": 48,
+     "frames_used": 53,
      "t_start": 189.09999999999997,
-     "t_end": 162.89399999999998,
-     "estimate": 210.89399999999998,
+     "t_end": 149.50999999999996,
+     "estimate": 202.50999999999996,
      "risk_frames": 0.0,
      "failure_frames": 0.0,
      "death_frames": 0.0,
-     "total": -210.89399999999998,
-     "completion": null,
+     "total": -202.50999999999996,
+     "completion": 5,
      "landing": true,
-     "spread_end": 14.541905652195643
+     "spread_end": 11.426140941009994
     },
     "v_start": 50.39116892978619,
-    "v_end": 41.54386012324431,
+    "v_end": 40.70538249215929,
     "dead_end_members": 0,
     "leg": 0,
     "veto": null,
@@ -1400,57 +1465,57 @@
     "alternatives": [
      {
       "moves": [
+       "run wall-jump L hold 15",
+       "run-jump R hold 15"
+      ],
+      "total": -208.50999999999996,
+      "progress": -19.409999999999997,
+      "stage": "final",
+      "reason": "estimate 209 vs 203 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump L hold 15 after 4f",
+       "run-jump R hold 15"
+      ],
+      "total": -210.50999999999996,
+      "progress": -21.409999999999997,
+      "stage": "final",
+      "reason": "estimate 211 vs 203 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "wait 16f",
+       "run-jump R hold 15"
+      ],
+      "total": -210.89399999999998,
+      "progress": -21.79400000000001,
+      "stage": "final",
+      "reason": "estimate 211 vs 203 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump L hold 10 after 8f",
+       "run-jump R hold 15"
+      ],
+      "total": -211.50999999999996,
+      "progress": -22.409999999999997,
+      "stage": "final",
+      "reason": "estimate 212 vs 203 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
        "wait 16f",
        "wall-jump R hold 8"
       ],
       "total": -234.73999999999995,
       "progress": -45.639999999999986,
       "stage": "final",
-      "reason": "estimate 235 vs 211 frames",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "jump up hold 6",
-       "run-jump R hold 15"
-      ],
-      "total": -236.14999999999995,
-      "progress": -47.04999999999998,
-      "stage": "final",
-      "reason": "estimate 236 vs 211 frames",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "wait 8f",
-       "run-jump R hold 15"
-      ],
-      "total": -243.27199999999993,
-      "progress": -54.17199999999997,
-      "stage": "final",
-      "reason": "no progress (T 189 -> 195 frames; estimate 243 vs 211)",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "jump up hold 10",
-       "wall-jump R hold 8"
-      ],
-      "total": -244.14999999999995,
-      "progress": -55.04999999999998,
-      "stage": "final",
-      "reason": "estimate 244 vs 211 frames",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "run-jump L hold 10 after 8f",
-       "run R 16f"
-      ],
-      "total": -247.50999999999996,
-      "progress": -58.41,
-      "stage": "final",
-      "reason": "no progress (T 189 -> 200 frames; estimate 248 vs 211)",
+      "reason": "estimate 235 vs 203 frames",
       "vetoed": false
      }
     ],
@@ -1501,7 +1566,7 @@
       "clipped": 0,
       "landing": 8,
       "completed": 8,
-      "completion_rows_frames": 520,
+      "completion_rows_frames": 635,
       "completion_clipped": 0,
       "completion_inputs": 93,
       "safe_alternatives": 15,
@@ -1533,17 +1598,23 @@
        },
        {
         "continuation": "keep",
-        "frames": 20,
-        "on": "wall",
-        "died": []
-       },
-       {
-        "continuation": "keep",
         "frames": 14,
         "on": "ground",
         "died": []
        },
+       {
+        "continuation": "keep",
+        "frames": 20,
+        "on": "wall",
+        "died": []
+       },
        null,
+       {
+        "continuation": "neutral",
+        "frames": 29,
+        "on": "wall",
+        "died": []
+       },
        null,
        null,
        null,
@@ -1555,14 +1626,19 @@
        },
        null,
        null,
-       null,
-       {
-        "continuation": "keep",
-        "frames": 0,
-        "on": "wall",
-        "died": []
-       }
+       null
       ]
+     },
+     "key_pickup": {
+      "rule": "strict-native-endpoint-circle-v1",
+      "radius": 22.0,
+      "frames_per_model_step": 1,
+      "interpolated_integer_endpoints": false,
+      "guard_mask": "before_incoming_model_step",
+      "new_mask_usable": "next_model_step",
+      "maximum_opening_delay_frames": 0,
+      "delay_reference": "predicted_endpoint",
+      "approximation": "post_update_endpoint"
      }
     },
     "contact": [
@@ -1820,6 +1896,17 @@
        null,
        null
       ]
+     },
+     "key_pickup": {
+      "rule": "strict-native-endpoint-circle-v1",
+      "radius": 22.0,
+      "frames_per_model_step": 1,
+      "interpolated_integer_endpoints": false,
+      "guard_mask": "before_incoming_model_step",
+      "new_mask_usable": "next_model_step",
+      "maximum_opening_delay_frames": 0,
+      "delay_reference": "predicted_endpoint",
+      "approximation": "post_update_endpoint"
      }
     },
     "contact": [
@@ -1834,20 +1921,20 @@
    "1-13 recorded f200",
    {
     "chosen": [
-     "wait 16f",
+     "jump up hold 10",
      "run-jump R hold 15"
     ],
     "actions": [
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
-     0,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
+     3,
      0,
      0,
      0,
@@ -1889,7 +1976,7 @@
     ],
     "segments": [
      [
-      "wait 16f",
+      "jump up hold 10",
       0,
       16
      ],
@@ -1907,20 +1994,20 @@
     "pad": 11,
     "from_prev": false,
     "score": {
-     "frames_used": 48,
+     "frames_used": 50,
      "t_start": 189.09999999999997,
-     "t_end": 164.98999999999998,
-     "estimate": 212.98999999999998,
+     "t_end": 149.50999999999996,
+     "estimate": 199.50999999999996,
      "risk_frames": 0.0,
      "failure_frames": 0.0,
      "death_frames": 0.0,
-     "total": -212.98999999999998,
-     "completion": 0,
+     "total": -199.50999999999996,
+     "completion": 2,
      "landing": true,
-     "spread_end": 11.88417359291986
+     "spread_end": 17.497637407730235
     },
     "v_start": 50.39116892978619,
-    "v_end": 41.41248927334583,
+    "v_end": 41.22964656087121,
     "dead_end_members": 0,
     "leg": 0,
     "veto": null,
@@ -1931,57 +2018,57 @@
     "alternatives": [
      {
       "moves": [
+       "run wall-jump L hold 15",
+       "run-jump R hold 15"
+      ],
+      "total": -208.50999999999996,
+      "progress": -19.409999999999997,
+      "stage": "final",
+      "reason": "estimate 209 vs 200 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump L hold 15 after 4f",
+       "run-jump R hold 15"
+      ],
+      "total": -210.50999999999996,
+      "progress": -21.409999999999997,
+      "stage": "final",
+      "reason": "estimate 211 vs 200 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "run-jump L hold 10 after 8f",
+       "run-jump R hold 15"
+      ],
+      "total": -211.50999999999996,
+      "progress": -22.409999999999997,
+      "stage": "final",
+      "reason": "estimate 212 vs 200 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
+       "wait 16f",
+       "run-jump R hold 15"
+      ],
+      "total": -212.98999999999998,
+      "progress": -23.890000000000015,
+      "stage": "final",
+      "reason": "estimate 213 vs 200 frames",
+      "vetoed": false
+     },
+     {
+      "moves": [
        "wait 16f",
        "wall-jump R hold 8"
       ],
       "total": -234.73999999999995,
       "progress": -45.639999999999986,
       "stage": "final",
-      "reason": "estimate 235 vs 213 frames",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "wait 8f",
-       "run-jump R hold 15"
-      ],
-      "total": -243.27199999999993,
-      "progress": -54.17199999999997,
-      "stage": "final",
-      "reason": "no progress (T 189 -> 195 frames; estimate 243 vs 213)",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "jump up hold 10",
-       "wall-jump R hold 8"
-      ],
-      "total": -244.14999999999995,
-      "progress": -55.04999999999998,
-      "stage": "final",
-      "reason": "estimate 244 vs 213 frames",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "wait 16f",
-       "run-jump L hold 15 after 4f"
-      ],
-      "total": -247.55199999999996,
-      "progress": -58.452,
-      "stage": "final",
-      "reason": "no progress (T 189 -> 200 frames; estimate 248 vs 213)",
-      "vetoed": false
-     },
-     {
-      "moves": [
-       "wait 8f",
-       "run-jump L hold 15 after 4f"
-      ],
-      "total": -248.16799999999998,
-      "progress": -59.06800000000001,
-      "stage": "final",
-      "reason": "no progress (T 189 -> 200 frames; estimate 248 vs 213)",
+      "reason": "estimate 235 vs 200 frames",
       "vetoed": false
      }
     ],
@@ -2057,6 +2144,12 @@
        },
        {
         "continuation": "keep",
+        "frames": 13,
+        "on": "ground",
+        "died": []
+       },
+       {
+        "continuation": "keep",
         "frames": 16,
         "on": "wall",
         "died": []
@@ -2064,12 +2157,6 @@
        {
         "continuation": "keep",
         "frames": 20,
-        "on": "ground",
-        "died": []
-       },
-       {
-        "continuation": "keep",
-        "frames": 13,
         "on": "ground",
         "died": []
        },
@@ -2089,6 +2176,17 @@
        null,
        null
       ]
+     },
+     "key_pickup": {
+      "rule": "strict-native-endpoint-circle-v1",
+      "radius": 22.0,
+      "frames_per_model_step": 1,
+      "interpolated_integer_endpoints": false,
+      "guard_mask": "before_incoming_model_step",
+      "new_mask_usable": "next_model_step",
+      "maximum_opening_delay_frames": 0,
+      "delay_reference": "predicted_endpoint",
+      "approximation": "post_update_endpoint"
      }
     },
     "contact": [
@@ -2346,6 +2444,17 @@
        null,
        null
       ]
+     },
+     "key_pickup": {
+      "rule": "strict-native-endpoint-circle-v1",
+      "radius": 22.0,
+      "frames_per_model_step": 1,
+      "interpolated_integer_endpoints": false,
+      "guard_mask": "before_incoming_model_step",
+      "new_mask_usable": "next_model_step",
+      "maximum_opening_delay_frames": 0,
+      "delay_reference": "predicted_endpoint",
+      "approximation": "post_update_endpoint"
      }
     },
     "contact": [
