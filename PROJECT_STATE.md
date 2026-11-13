@@ -1,5 +1,22 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## The stall rule (2026-11-14)
+
+**Live run** (`runs/human_v2_check04`, the full jump, the reflex rule, the crumble clock):
+- 3-1: finished on the first life in 414 frames; 12 of 18 waves finished (2 died to the ceiling shot, 2 in h5#1, 2 timed out).
+- 2-5 (held out): 2 of 2 waves finished, 511 frames.
+- 3-2: 0 of 10 waves finished. The agent climbs to (41, 226) by frame ~177 and stays within 60 units of it for about 1,020 frames.
+
+**Why it stood:** a waiting plan scores frames + T at its end (268-274), as if the way on were free after the wait. The plans that go on cost soft risk near the floor salt h29 / h30 (303-328), so waiting won every decision.
+
+**Rule** (`Planner.stalled`, `stall_penalty`, `STALL_FREE` = 60, `STALL_STEP` = 10, `agent.py --stall-free`, -1 = off):
+- Per agent: the best T reached and the frame it was reached; it moves on when a decision's T is 10 frames lower.
+- A plan that does not end 10 frames below the best T pays the frames since then, beyond the 60 free ones. A plan that does pays nothing. No part credit (a hop in place lowers T by ~7 for a moment).
+- Charged in stage 1, stage 2 and the final estimate; a vetoed plan is still never chosen over one that is not.
+- Logged: `score.stalled`, `score.stall_frames`, and the alternatives' reason "stalled: no progress for N frames".
+- Offline (`crumble_v1/stall_rule.py`, 3-2 wave 3, as if stalled since f180): f300 (60 charged) still waits; f400 (160) takes `jump L hold 6 > jump up hold 15`, risk 0.78, T 225 -> 213; f640 (400) takes a risk 1.00 plan, T 221 -> 191.
+- Not run in the game. Levels that need a wait longer than about 2-3 s for a moving part will now be rushed.
+
 ## Narrow passages: the reflex rule, not the walls (2026-11-14)
 
 **The user's report:** agents are thrown off by hazards behind walls and play badly in narrow sections (3-2).

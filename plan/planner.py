@@ -202,6 +202,12 @@ CLING_SPEED = math.inf
 COMPLETE_MAX = 45
 COMPLETE_CHUNK = 10                          # frames rolled out per completion batch (early stop between them)
 NO_PROGRESS = 0.0                            # frames: "no progress" when T(start) - T(end) is not above this
+# The stall rule (Planner.stall_free, stall_penalty). A plan that waits is scored frames + T at its end, as if the
+# way on were free after the wait; where the way on costs soft risk, waiting stayed cheaper at every decision and
+# the agent stood for 1,000 frames (3-2 at (41, 226): wait 268-274, the plans that go on 303-328). So a plan that
+# does not get below the best T this wave has reached pays the frames already spent without getting below it.
+STALL_FREE = 60                              # frames without progress that cost nothing (timing a hazard, a wall)
+STALL_STEP = 10.0                            # frames of T: progress that resets the stall, and frees a plan of it
 SAFE_RISK = 0.5                              # soft risk (completion's deaths included) under which a landing alternative counts as safe
 # MoveMemory: a death within REPEAT_FRAMES wave frames and BODY units of an earlier death on the level (this run) is
 # the same death repeated: its point of no return walks back one more (cell, first move) pair per repeat
@@ -443,6 +449,18 @@ def collide(ter: Terrain, prev: np.ndarray, s: np.ndarray, tol: float = COLLIDE_
     np.copyto(s["vx"], 0.0, casting="unsafe", where=cut_x)
     np.copyto(s["vy"], 0.0, casting="unsafe", where=cut_y)
     return moved
+
+
+def stall_penalty(stalled: float, best: float, t_end) -> np.ndarray:
+    """The stall rule's frames for plans that end with T = t_end (array), when the agent has been `stalled` frames
+    (beyond the free ones) without getting STALL_STEP below `best`, the lowest T it has reached: the whole
+    `stalled` for a plan that does not end STALL_STEP below `best` either, none for one that does (waiting again
+    is expected to cost what it has cost so far; a plan that gets on does not pay it). No part credit: a hop in
+    place lowers T by a few frames for a moment (3-2: 225 -> 218) and would buy most of the charge off."""
+    t_end = np.asarray(t_end, np.float64)
+    if stalled <= 0 or not math.isfinite(best):
+        return np.zeros(t_end.shape)
+    return np.where(np.isfinite(t_end) & (t_end <= best - STALL_STEP), 0.0, float(stalled))
 
 
 def corner_risk(ter: Terrain | None, xs, ys, frames, step: int, upto, bounds=None, offset: int = 0):
@@ -1277,7 +1295,8 @@ class Planner:
                  complete_max: int = COMPLETE_MAX, modes: bool = False, key_pickup=True,
                  route_trial_gain: float = TRIAL_GAIN, veto_members: int = 1,
                  death_min: float = DEATH_MIN_FRAMES, risk_members: str = "second", corner: bool = True,
-                 early_margin: bool = True):
+                 early_margin: bool = True, stall_free: float = STALL_FREE):
+        self.stall_free = float(stall_free)           # the stall rule's free frames (agent.py --stall-free; < 0: off)
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.veto_members = max(1, int(veto_members))   # _verdict's quorum on the final stage's members
         self.death_min = float(death_min)             # DEATH_FRAMES' floor (agent.py --death-min)
@@ -1329,6 +1348,7 @@ class Planner:
         self.crumble: dict[tuple, int] = {}          # touched, still intact crumble cell (r, c) -> wave frame gone
         self._stages: dict = {}                      # crumble_stages' tiles per (keys, per-mask)
         self._now = 0                                # the wave frame of the decision being made
+        self.stalls = {}                             # agent -> {"best": lowest T reached, "since": its wave frame}
         self.tiles_changed = False                   # a tile differs from the level's start (crumble, lock, switch)
         self.terrain = Terrain(level.words0, level.ox, level.oy)
         self.guard = Terrain(level.words0, level.ox, level.oy, slopes=False)    # the collision guard's tiles
@@ -1371,6 +1391,17 @@ class Planner:
         for idx, _ in changes:                       # the game spoke for these cells: no expectation left
             self.crumble.pop(divmod(int(idx), self.terrain.W), None)
         self._stages = {}
+
+    def stalled(self, agent: int, frame: int, T0: float) -> tuple[float, float]:
+        """The stall rule's state at a decision: (frames without progress beyond the free ones, the best T so
+        far). Progress: the decision's T is STALL_STEP below the best one (which then becomes the best, and the
+        count starts again). (0, inf) with the rule off or T unknown."""
+        if self.stall_free < 0 or not math.isfinite(T0):
+            return 0.0, math.inf
+        s = self.stalls.get(int(agent))
+        if s is None or T0 <= s["best"] - STALL_STEP or frame < s["since"]:
+            s = self.stalls[int(agent)] = {"best": float(T0), "since": int(frame)}
+        return max(0.0, float(frame - s["since"]) - self.stall_free), s["best"]
 
     def _corner(self, xs, ys, frames, upto, keys):
         """corner_risk of imagined paths on the guard's tiles for these keys (None with the guard or the rule off),
@@ -1465,6 +1496,7 @@ class Planner:
         self.prev = {}
         self.long = {}                               # agent -> the last long-safe plan {frame, actions, segs, valid}
         self.crumble, self._stages = {}, {}          # the level is whole again
+        self.stalls = {}                             # agent -> {"best": lowest T reached, "since": its wave frame}
         self.memory.new_wave()
         self.route.new_wave()
         if self.moves is not None:
@@ -1850,6 +1882,7 @@ class Planner:
         v0_ok = math.isfinite(v0)
         cell0 = self.cell(x0, y0)
         scale = max(self.t_spawn - T0, self.death_min) if T0_ok and math.isfinite(self.t_spawn) else self.death_min
+        stalled, t_best = self.stalled(agent, frame, T0)     # the stall rule: frames to charge, the best T so far
         death_of = (lambda nm: self.moves.penalty(cell0, nm, scale)) if self.moves is not None else (lambda nm: 0.0)
         self.death_frames = scale                    # DEATH_FRAMES of this decision (module docstring)
         mem = slice(self.member, self.member + 1)
@@ -1903,6 +1936,7 @@ class Planner:
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
         death1 = np.array([death_of(m.name) for m in self.lib])
         pen1 = scale * soft1 + fail1 + death1
+        pen1 = pen1 + np.where(succ1, 0.0, stall_penalty(stalled, t_best, self._tt(tend1)))
         est1 = end1 + self._tt(tend1) + pen1
         score1 = np.where(veto1, vetoed_total(vf1, est1), -est1)
         score1 = np.where(succ1, success_total(tg1, pen1), score1)
@@ -1966,6 +2000,7 @@ class Planner:
         masks2 = self._path_keys(xs2[:, :, :K + 1], ys2[:, :, :K + 1], keys, up2, sw2.contact_frame)[0][0, :, -1]
         tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2, masks2)
         pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
+        pen2 = pen2 + np.where(succ2, 0.0, stall_penalty(stalled, t_best, self._tt(tend2)))
         est2 = up2 + self._tt(tend2) + pen2
         score2 = np.where(veto2, vetoed_total(vf2, est2), -est2)
         score2 = np.where(succ2, success_total(tg2, pen2), score2)
@@ -2166,7 +2201,8 @@ class Planner:
         death3 = np.array([death_of(nm) for nm in first_name])
         soft3 = np.minimum(saf.soft_risk + comp_risk, 1.0)          # one death at most
         risk3 = scale * soft3
-        est3 = base3 + risk3 + fail3 + death3
+        stall3 = np.where(succ3, 0.0, stall_penalty(stalled, t_best, t_end3))
+        est3 = base3 + risk3 + fail3 + death3 + stall3
         total3 = np.where(saf.veto, vetoed_total(saf.veto_frame, est3), -est3)
         total3 = np.where(succ3, success_total(tg3, risk3 + fail3 + death3), total3)
         landing3 = lands | succ3 | np.array([r is not None and r["continuation"] is not None and r["on"] != "air"
@@ -2290,8 +2326,8 @@ class Planner:
             t = real["tg"]
             goal_touch = None if not (real["success"] and t <= H) else {
                 "frame": int(t), "x": float(real["x"][-1]), "y": float(real["y"][-1]), "members": 0, "real": True}
-        parts = {"base": base3, "t_end": t_end3, "comp_death": comp_risk, "risk": risk3, "fail": fail3, "death": death3, "est": est3, "soft": soft3,
-                 "first": first_name}
+        parts = {"base": base3, "t_end": t_end3, "comp_death": comp_risk, "risk": risk3, "fail": fail3, "death": death3,
+                 "est": est3, "soft": soft3, "first": first_name, "stall": stall3, "stalled": stalled}
         alts = self._alternatives(final, best, saf, parts, total3, T0, cell0, scale, veto1, vf1, vk1, vid1, est1,
                                   paths=(out3["x"].mean(0), out3["y"].mean(0), out1["x"][0], out1["y"][0], uc1),
                                   goal=(succ3, tg3, n_goal, E), switch=switch)
@@ -2317,6 +2353,7 @@ class Planner:
             score={"frames_used": int(frames_used[best]), "t_start": T0 if T0_ok else None,
                    "t_end": float(t_end3[best]), "estimate": float(est3[best]),
                    "risk_frames": float(risk3[best]), "failure_frames": float(fail3[best]),
+                   "stall_frames": float(stall3[best]), "stalled": float(stalled),
                    "death_frames": float(death3[best]), "total": float(total3[best]),
                    "completion": None if completion is None else completion["frames"],
                    "landing": bool(landing3[best]), "spread_end": float(spread_end[best])},
@@ -2651,9 +2688,14 @@ class Planner:
                 reason = "does not reach the princess" + (f" ({n_goal[c]} of {E} members do)" if n_goal[c] else "")
             else:
                 gaps = {"time": parts["base"][c] - parts["base"][best], "risk": parts["risk"][c] - parts["risk"][best],
-                        "fail": parts["fail"][c] - parts["fail"][best], "death": parts["death"][c] - parts["death"][best]}
+                        "fail": parts["fail"][c] - parts["fail"][best], "death": parts["death"][c] - parts["death"][best],
+                        "stall": parts["stall"][c] - parts["stall"][best]}
                 why = max(gaps, key=gaps.get)
-                if why == "time" and math.isfinite(T0) and T0 - parts["t_end"][c] <= NO_PROGRESS:
+                if why == "stall" and parts["stall"][c] > 0:
+                    reason = (f"stalled: no progress for {parts['stalled'] + self.stall_free:.0f} frames, and it ends "
+                              f"at T {parts['t_end'][c]:.0f} (+{parts['stall'][c]:.0f} frames; estimate {est[c]:.0f} "
+                              f"vs {est[best]:.0f})")
+                elif why == "time" and math.isfinite(T0) and T0 - parts["t_end"][c] <= NO_PROGRESS:
                     reason = (f"no progress (T {T0:.0f} -> {parts['t_end'][c]:.0f} frames; estimate {est[c]:.0f} "
                               f"vs {est[best]:.0f})")
                 elif why == "fail" and parts["fail"][c] > 0:

@@ -125,7 +125,7 @@ from plan import safety as S                                             # noqa:
 from plan.commit import Committer, MIN_TUBE, REPLAN_DEFAULT, TUBE_DEFAULT, kind_of  # noqa: E402
 from levels_smb import a_plus_time                                       # noqa: E402
 from plan.moves import LIBRARY                                           # noqa: E402
-from plan.planner import (DEATH_MIN_FRAMES, EXPLORE_EVERY, HYSTERESIS_FRAMES, TRIAL_GAIN, MoveMemory, Planner,   # noqa: E402
+from plan.planner import (STALL_FREE, DEATH_MIN_FRAMES, EXPLORE_EVERY, HYSTERESIS_FRAMES, TRIAL_GAIN, MoveMemory, Planner,   # noqa: E402
                           future_inputs, state_row)
 from plan.progress import ProgressField                                  # noqa: E402
 from shutdown import Shutdown, bounded                                   # noqa: E402
@@ -789,6 +789,7 @@ class Runner:
                                        risk_members=getattr(self.args, "risk_members", "second"),
                                        corner=getattr(self.args, "corner_risk", "on") == "on",
                                        early_margin=getattr(self.args, "reflex", "veto") == "veto",
+                                       stall_free=getattr(self.args, "stall_free", STALL_FREE),
                                        modes=self.args.modes == "on",
                                        route_trial_gain=getattr(self.args, "route_trial_gain", TRIAL_GAIN))
                 cm = self.commit                    # route trials: deviation = the surprise trigger's tube
@@ -811,6 +812,7 @@ class Runner:
                             "risk_members": getattr(self.args, "risk_members", "second"),
                             "corner": getattr(self.args, "corner_risk", "on") == "on",
                             "early_margin": getattr(self.args, "reflex", "veto") == "veto",
+                            "stall_free": getattr(self.args, "stall_free", STALL_FREE),
                             "modes": self.args.modes == "on",
                             "route_trial_gain": getattr(self.args, "route_trial_gain", TRIAL_GAIN)}
                     self.proc.call("init", self.model_path, lv, field, opts,
@@ -1948,6 +1950,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--corner-risk", choices=("on", "off"), default="on",
                     help="soft risk for passing a ledge's corner closer than the world model's error when missing it "
                          "slides into a hazard (plan.planner.corner_risk; 3-1's salt pit). off: the old planner")
+    ap.add_argument("--stall-free", type=float, default=STALL_FREE,
+                    help="frames an agent may go without progress (its time to the goal not falling) before plans that "
+                         f"make none are charged the frames already spent so (default {STALL_FREE}): the longer it has "
+                         "stood, the more risk the way on may carry. -1: off (it may wait for ever)")
     ap.add_argument("--reflex", choices=("veto", "any-risk"), default="veto",
                     help="when the reflex move replaces the chosen plan: veto (default) = only when the plan touches a "
                          "hazard within 16 frames; a near pass in those frames costs soft risk in the estimate "
