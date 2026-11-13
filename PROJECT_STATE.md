@@ -22,6 +22,13 @@
 - `--device cuda`.
 - Checked end to end on CPU with a small file: 24,248 transitions, 0.4 MB. The model loads in the agent.
 
+**human_v2 trained on Colab** (`runs/experiments/human_v2/gpu/wm_model.pt`; features.npz 105 MB, 1,396,348 transitions; 48 epochs, batch 4096, cuda; not yet run in the game):
+- Held-out human play (`HUMAN_EVAL=runs/experiments/human_v2/eval_waves.json compare.py --human`, `compare_human.json`, human_v1 -> human_v2):
+  - 3-1 (5 waves, never trained on by either) is clearly better: +32 0.6 / 14.8 -> 0.5 / 8.7, +48 1.2 / 33.4 -> 0.8 / 16.8 (median / 90%).
+  - The other 17 levels are about even, a few units up or down at +48.
+- 1-14..1-17 recordings (`compare_new_runs.json`): even (1-15 +48 median 11.1 -> 9.9, 1-14 24.1 -> 24.8).
+- The 3-1 pit offline from the real stall (`salt_3-1_from.py 80`, runs/wm_locked as the game, `--risk-members second`): neither model crosses. Both slow down at the edge and die later in the stand-in world. Only a live run can tell.
+
 ## 2-11 locks the game dissolves, and 2-16 laser beams (2026-11-14; code-read, not yet checked live)
 
 **2-11:**
