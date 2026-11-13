@@ -203,3 +203,38 @@ def test_deadly_only_gives_the_same_boxes_on_a_recorded_wave():
         assert wb is None and len(wa) == 48 and ra == rb
         for x, y in zip(fa[1:], fb[1:]):
             assert np.array_equal(x.boxes, y.boxes) and list(x.ids) == list(y.ids)
+
+
+def test_a_newborn_shot_follows_its_launchers_flight():
+    """A shot born 1-2 frames ago from a launcher whose flight is known follows that flight by age (margin one
+    frame of motion), not a SHOT_V_MAX k circle; unknown launchers keep the circle (3-1: the ceiling shot)."""
+    fw = FutureWorld()
+    for f in range(0, 61):
+        fw.observe(f, [], [], _launcher_frame(f), None, None, 16.667)
+    c1, m1, alive1 = fw.flying_shot(60, 7, 48)         # born at 60; the one born at 30 was seen whole
+    assert c1[4].tolist() == [15.0, 0.0] and m1[4] <= 1.0 + 3.0 + 1e-9 and alive1 == 9
+    fresh = FutureWorld()                              # no flight of the launcher seen yet: the old bound
+    fresh.observe(0, [], [], [], None, None, 16.667)
+    fresh.observe(1, [], [], [[7, 0.0, 0.0, 4.0]], None, None, 16.667)
+    c2, m2, _ = fresh.flying_shot(1, 7, 48)
+    assert m2[15] == F.SHOT_BASE + F.SHOT_V_MAX * 16
+
+
+def test_a_flight_cut_by_the_waves_end_is_kept_as_its_launchers_partial_template():
+    fw = FutureWorld()
+    for f in range(0, 36):                             # wave 1 ends while the shot born at 30 still flies
+        fw.observe(f, [], [], _launcher_frame(f, life=40), None, None, 16.667)
+    fw.new_wave()
+    for f in range(0, 41):                             # wave 2: off the recording after 35 (born again at 30)
+        fw.observe(f, [], [], _launcher_frame(f, life=40) if f != 35 else [], None, None, 16.667)
+    c, m, _ = fw.flying_shot(36, 7, 48)                # a new flight at 36 (the slot was empty at 35)
+    assert m[0] < 20.0                                 # its launcher's partial flight, then extrapolated
+
+
+def test_every_launcher_is_its_own():
+    """Two spawn points, two Launchers (a cache decorator once made every Launcher() the same object)."""
+    fw = FutureWorld()
+    fw.observe(0, [], [], [], None, None, 16.667)
+    fw.observe(1, [], [], [[1, 0.0, 0.0, 4.0], [2, 100.0, 0.0, 4.0]], None, None, 16.667)
+    a, b = fw.launchers.values()
+    assert a is not b and FutureWorld().launchers == {}

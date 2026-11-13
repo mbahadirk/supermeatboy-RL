@@ -255,6 +255,7 @@ REFLEX_NEAR = 40.0                           # units beyond a deadly box (2 tile
 EXPLORE_EVERY = 16                           # frames between an explore agent's decisions
 CONTACT_EPS = 0.01                           # units: a body put back to contact is this clear of the solid
 SIDE_SHRINK = 0.05                           # units: the collide guard's near-exact box for which face a body hits
+CORNER_FALL = 400.0                          # units: how far corner_risk follows a missed ledge's slide down
 
 
 # ---- world model rollouts with per-row time offsets -------------------------------------------------------
@@ -420,6 +421,73 @@ def collide(ter: Terrain, prev: np.ndarray, s: np.ndarray, tol: float = COLLIDE_
     return moved
 
 
+def corner_risk(ter: Terrain | None, xs, ys, frames, step: int, upto, bounds=None, offset: int = 0):
+    """Soft risk of passing a ledge's corner closer than the world model's error, when missing it is deadly.
+    xs, ys (E, n, K+1) imagined positions (column k = frame k x step), frames their FrameBoxes (sweep's), ter the
+    guard's tiles, upto (n,) the frames judged. A step whose x move is free as the guard saw it (its box, half
+    BODY - COLLIDE_TOL, at the step's end height) but would hit a block's side with the body margin(k) units lower (plan.safety.margin: the
+    model's 90% error at that horizon), from a start with no floor that near below, passes a ledge with its feet
+    c units above the block's top (0 <= c < margin). If the game had the body that much lower, it hits the side
+    and slides down the face (collide's side rule; 3-1: 6 of 11 deaths, the model's path 4 units high): when that
+    slide (from the top down to the next floor, at most CORNER_FALL) touches a deadly box of the column or
+    leaves the level, the step costs 1 - c / margin(k). offset: frames before column 0 (a completion's H; the
+    margin is taken at offset + k, the frames reported are k). Returns (risk (E, n), frame (E, n), -1 none);
+    None without a guard map. A missed ledge with a safe floor below costs nothing (it only takes longer)."""
+    if ter is None:
+        return None
+    xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+    E, n, K1 = xs.shape
+    P = E * n
+    X, Y = xs.reshape(P, K1), ys.reshape(P, K1)
+    lim = np.broadcast_to(np.asarray(upto, np.int64)[None, :], (E, n)).reshape(P)
+    risk, at = np.zeros(P), np.full(P, -1, np.int64)
+    half = BODY - SIDE_SHRINK
+    for k in range(1, K1):
+        fk = k * step
+        x0, y0, x1, y1 = X[:, k - 1], Y[:, k - 1], X[:, k], Y[:, k]
+        dx = x1 - x0
+        d = float(S.margin(offset + fk))
+        i = np.nonzero((np.abs(dx) > 1e-6) & (fk <= lim))[0]
+        if not len(i):
+            continue
+        m = len(i)                                           # as imagined, then 1/4 .. 4/4 of d lower (a
+        lows = np.repeat(np.arange(5) * (0.25 * d), m)       # lower box may also sink into a floor further down)
+        q = ter.travel(np.tile(x0[i], 5), np.tile(y1[i], 5) - lows, np.tile(dx[i], 5), np.zeros(5 * m, bool),
+                       half).reshape(5, m)
+        q[0] = ter.travel(x0[i], y1[i], dx[i], np.zeros(m, bool), BODY - COLLIDE_TOL)    # as the guard saw it
+        side = (q[1:] > 0) & (q[1:] < 1)
+        hit = (q[0] == 1) & side.any(0)                      # free as imagined, a side when lower
+        i, q1 = i[hit], q[1:, hit][side[:, hit].argmax(0), np.arange(int(hit.sum()))]
+        if not len(i):
+            continue
+        floor = ter.travel(x0[i], y0[i], np.full(len(i), -(d + 1.0)), np.ones(len(i), bool), half)
+        keep = floor == 1                                    # no floor within d below the start: over a gap
+        i, q1 = i[keep], q1[keep]
+        if not len(i):
+            continue
+        sgn = np.sign(dx[i])
+        xc = x0[i] + q1 * dx[i]                              # the lower body's centre at the face
+        px = xc + sgn * (half + 0.5)                         # just inside the block
+        t = ter.travel(px, y1[i], np.full(len(i), -(BODY + d)), np.ones(len(i), bool), 0.01)
+        top = y1[i] - 0.01 - t * (BODY + d)                 # a probe of half 0.01 down from the imagined height
+        c = (y1[i] - BODY) - top                             # the imagined feet above the block's top (the
+        ok = (t > 0) & (t < 1) & (c >= -COLLIDE_TOL) & (c < d)   # guard lets them be up to its tolerance under)
+        c = np.maximum(c, 0.0)
+        i, xc, top, c = i[ok], xc[ok], top[ok], c[ok]
+        if not len(i):
+            continue
+        ys0 = top + BODY - 0.5                               # missed: the feet just under the top, at the face
+        tf = ter.travel(xc, ys0, np.full(len(i), -CORNER_FALL), np.ones(len(i), bool), half)
+        ys1 = ys0 - tf * CORNER_FALL
+        clear, oc = S.segment_clearance(xc, ys0 + 1e-6, xc, ys1, frames[k], bounds)
+        dead = (oc < 0) | ((clear.min(1) < 0) if clear.shape[1] else np.zeros(len(i), bool))
+        r = np.where(dead, 1.0 - c / d, 0.0)
+        better = r > risk[i]
+        risk[i] = np.where(better, r, risk[i])
+        at[i] = np.where(better, fk, at[i])
+    return risk.reshape(E, n), at.reshape(E, n)
+
+
 _AXES = {}
 
 
@@ -550,7 +618,8 @@ def _near_frames(frames, xs, ys, margin=BOX_MARGIN):
 RISK_MEMBERS = ("worst", "second", "mean")      # how the final stage's members' soft risks combine (Planner.risk_members)
 
 
-def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum: int = 1, members: str = "worst"):
+def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum: int = 1, members: str = "worst",
+             corner=None):
     """The decision rule (plan.safety.assess) for candidates judged on their own first `upto` frames (one or
     more members): veto, veto frame, what was hit, soft risk and its frame (all in frames, also for a sweep of
     a step-k model's columns). The veto counts contact in frames 1..min(veto_upto, VETO_FRAMES) (veto_upto:
@@ -561,7 +630,8 @@ def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum
     veto (1, the default: any member; never more than the members there are). With a larger quorum a touch by
     fewer members is soft risk instead: the share of members that touched. members (RISK_MEMBERS): the soft risk of
     the worst member ("worst"), of the second worst ("second": one member alone grazing a hazard does not cost a whole
-    death, two do) or the members' average ("mean")."""
+    death, two do) or the members' average ("mean"). corner: corner_risk's (risk, frame) (E, n), soft risk of each
+    member like a hazard's (never a veto), combined by the same members rule."""
     E, n, K = sw.step_clear.shape
     cf = sw.contact_frame
     upto = np.asarray(upto)
@@ -578,6 +648,7 @@ def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum
     veto_id = [None if not veto[c] else S.contact_id(veto_kind[c], sw.ids, sw.contact_box[m[c], c]) for c in range(n)]
     soft = np.zeros(n)
     soft_frame = np.full(n, -1, np.int64)
+    own = np.zeros((E, n))                           # each member's worst soft risk
     fk = sw.frames_of()                              # frames of the columns (a step-k model: every k-th)
     late = fk > lim_n.min() if n else fk > S.VETO_FRAMES     # columns after some candidate's veto window
     if late.any():
@@ -594,10 +665,18 @@ def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum
         j = risk.argmax(1)
         soft = risk[np.arange(n), j]
         soft_frame = np.where(soft > 0, ks[j], -1)
+        own = per.max(2)                                                             # (E, n): each member's worst
         if members != "worst" and E > 1:
-            own = per.max(2)                                                         # (E, n): each member's worst
             soft = np.sort(own, 0)[-2] if members == "second" else own.mean(0)
             soft_frame = np.where(soft > 0, soft_frame, -1)
+    if corner is not None and (corner[0] > 0).any():
+        cr, cfr = corner
+        tot = np.maximum(own, cr)
+        new = (tot.max(0) if members == "worst" or E == 1 else
+               np.sort(tot, 0)[-2] if members == "second" else tot.mean(0))
+        cfirst = cfr[cr.argmax(0), np.arange(n)]
+        soft_frame = np.where((new > soft) & (cr.max(0) > 0), cfirst, soft_frame)
+        soft = np.maximum(soft, new)
     if q > 1:                                        # a minority touched early: its share of the members is risk
         share = np.where(veto, 0.0, early.mean(0))
         first = np.where(early, cf, np.iinfo(np.int64).max).min(0)
@@ -1171,13 +1250,14 @@ class Planner:
                  collide_tol: float | None = COLLIDE_TOL, moves: "MoveMemory | None | str" = "new",
                  complete_max: int = COMPLETE_MAX, modes: bool = False, key_pickup=True,
                  route_trial_gain: float = TRIAL_GAIN, veto_members: int = 1,
-                 death_min: float = DEATH_MIN_FRAMES, risk_members: str = "second"):
+                 death_min: float = DEATH_MIN_FRAMES, risk_members: str = "second", corner: bool = True):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.veto_members = max(1, int(veto_members))   # _verdict's quorum on the final stage's members
         self.death_min = float(death_min)             # DEATH_FRAMES' floor (agent.py --death-min)
         if risk_members not in RISK_MEMBERS:
             raise ValueError(f"risk_members {risk_members!r}: one of {RISK_MEMBERS}")
         self.risk_members = risk_members              # _verdict's members rule (agent.py --risk-members)
+        self.corner = bool(corner)                    # corner_risk on (agent.py --corner-risk)
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms   # budget: reported only
         self.hysteresis = float(hysteresis)          # frames (switch rule); 0: the best total is chosen
         self.collide_tol = collide_tol               # the collision guard's tolerance; None: no guard
@@ -1254,6 +1334,14 @@ class Planner:
         self.guard.update(self.words)
         self._guard_keys = {}
         self._support_keys = {}
+
+    def _corner(self, xs, ys, frames, upto, keys):
+        """corner_risk of imagined paths on the guard's tiles for these keys (None with the guard or the rule off),
+        over every frame the score credits (a pad tail's landing too: its T is credited)."""
+        if not self.corner:
+            return None
+        return corner_risk(self.guard_terrain(keys), xs, ys, frames, self.f, np.broadcast_to(upto, xs.shape[1]),
+                           self.bounds)
 
     def support_terrain(self, keys=0):
         """Private support geometry, keeping slopes (the guard intentionally uses a separate geometry)."""
@@ -1510,6 +1598,10 @@ class Planner:
             done += K
         # the scores
         end_c = np.where(at >= 0, at, done) // f
+        fr_all = [frames[min(H + k * f, len(frames) - 1)] for k in range(xs.shape[1])]
+        corner = corner_risk(self.guard_terrain(keys) if self.corner else None, xs[None], ys[None], fr_all, f,
+                             np.where(at >= 0, at, done), self.bounds, offset=H)
+        corner = corner[0][0] if corner is not None else np.zeros(n)
         xe, ye = xs[np.arange(n), end_c], ys[np.arange(n), end_c]
         t_land = np.where(state == 2, 0.0, np.inf)
         k = np.nonzero(state == 1)[0]
@@ -1543,7 +1635,10 @@ class Planner:
                    "x": round(float(xe[i]), 2), "y": round(float(ye[i]), 2),
                    "on": on[i] if ok else ("air" if not risk else None), "died": died,
                    "hits": {names[j]: hit[j] for j in idx if state[j] == 3}}
-            res.append((float(est), risk, rec, [[float(a), float(b)] for a, b in zip(xs[i, :kk // f + 1], ys[i, :kk // f + 1])]))
+            if risk == 0 and corner[i] > 0:          # a landing past a ledge's corner closer than the error
+                rec["corner_risk"] = round(float(corner[i]), 3)
+            res.append((float(est), max(float(risk), float(corner[i])), rec,
+                        [[float(a), float(b)] for a, b in zip(xs[i, :kk // f + 1], ys[i, :kk // f + 1])]))
         self.completion_clipped = getattr(self, "completion_clipped", 0) + int(clipped.sum())
         self.last_completion = {"frames": done, "rows": n, "flying_at_end": int((state == 0).sum()),
                                 "xs": xs, "ys": ys, "names": names,
@@ -1705,7 +1800,10 @@ class Planner:
         # margin rule stay on the move's own frames (or up to its touch); the held tail counts contact only
         own1 = np.where(succ1, np.minimum(up1, tg1), up1)
         veto1, vf1, vk1, vid1, soft1, sf1 = _verdict(sw1, np.where(succ1, tg1, end1), veto_upto=own1,
-                                                     planned=np.where(succ1, tg1, up1))
+                                                     planned=np.where(succ1, tg1, up1),
+                                                     corner=self._corner(out1["x"][:, :, :steps1 + 1],
+                                                                         out1["y"][:, :, :steps1 + 1], fr1,
+                                                                         np.where(succ1, tg1, end1), keys))
         xe1, ye1, vye1 = out1["x"][0, :, steps1], out1["y"][0, :, steps1], out1["vy"][0, :, steps1]
         masks1 = self._path_keys(out1["x"], out1["y"], keys, death=sw1.contact_frame)[0][0, :, -1]
         tend1 = ends_time(xe1, ye1, vye1, legs1, masks1)
@@ -1769,7 +1867,9 @@ class Planner:
         tg2, legs2, _ = self._contacts(xs2[:, :, :K + 1], ys2[:, :, :K + 1], up2, sw2.contact_frame, leg, keys)
         tg2, legs2 = tg2[0], legs2[0]
         succ2 = tg2 > 0
-        veto2, vf2, _, _, soft2, _ = _verdict(sw2, np.where(succ2, np.minimum(up2, tg2), up2))
+        win2 = np.where(succ2, np.minimum(up2, tg2), up2)
+        veto2, vf2, _, _, soft2, _ = _verdict(sw2, win2, corner=self._corner(xs2[:, :, :K + 1], ys2[:, :, :K + 1],
+                                                                            fr2, win2, keys))
         masks2 = self._path_keys(xs2[:, :, :K + 1], ys2[:, :, :K + 1], keys, up2, sw2.contact_frame)[0][0, :, -1]
         tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2, masks2)
         pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
@@ -1911,8 +2011,10 @@ class Planner:
             ts = np.sort(tg_e[tg_e[:, c] > 0, c])
             tg3[c] = ts[(len(ts) - 1) // 2]                          # median (the lower one of an even count)
         win3 = np.where(succ3, tg3, H)                               # successes: frames 1..t; others: 1..H
-        vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3, planned=np.where(succ3, tg3, planned3),
-                                                 quorum=self.veto_members, members=self.risk_members)
+        pl3 = np.where(succ3, tg3, planned3)
+        vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3, planned=pl3,
+                                                 quorum=self.veto_members, members=self.risk_members,
+                                                 corner=self._corner(out3["x"], out3["y"], fr3, win3, keys))
         saf = replace(saf, veto=vv, veto_frame=vfr, veto_kind=vkd, veto_id=vid, soft_risk=vsoft, soft_frame=vsf)
         xe, ye, vye = out3["x"][:, :, Hc], out3["y"][:, :, Hc], out3["vy"][:, :, Hc]
         masks3 = self._path_keys(out3["x"], out3["y"], keys, death=saf.sweep.contact_frame)[0][..., -1]
@@ -2100,7 +2202,7 @@ class Planner:
         first_frames = next((b for nm, a, b in segs if nm != "pad"), 0)
         completion = None
         if comp_rec[best] is not None:
-            completion = {**comp_rec[best], "risk": int(comp_risk[best]), "path": comp_path[best]}
+            completion = {**comp_rec[best], "risk": round(float(comp_risk[best]), 3), "path": comp_path[best]}
         plan = Plan(
             frame=int(frame), agent=int(agent),
             state={"x": x0, "y": y0, "vx": float(row["vx"][0]), "vy": float(row["vy"][0]),
@@ -2186,8 +2288,9 @@ class Planner:
         tg_e, legs_e, _ = self._contacts(x, y, upto, sw.contact_frame, leg, keys)
         succ = (tg_e > 0).all(0)
         tg = np.where(succ, tg_e.max(0), -1)
-        veto, vf, _, _, soft, _ = _verdict(sw, np.where(succ, np.minimum(upto, tg), upto), quorum=self.veto_members,
-                                           members=self.risk_members)
+        win = np.where(succ, np.minimum(upto, tg), upto)
+        veto, vf, _, _, soft, _ = _verdict(sw, win, quorum=self.veto_members, members=self.risk_members,
+                                           corner=self._corner(x, y, fr, win, keys))
         uc = np.asarray(upto) // f
         ar = np.arange(n)
         xe, ye, vye = x[:, ar, uc], y[:, ar, uc], out["vy"][:, ar, uc]

@@ -24,9 +24,36 @@
 - The planner keeps choosing a short hop (`run-jump R hold 3`).
 - The user crosses the face x = 440 at y -197..-208 (feet about 20 units above the top) in 22 recorded crossings of `runs/human_01`.
 
-**Proposed next step (not done):**
-- A soft risk for a ledge corner cleared by less than the model's margin, when missing it slides into a hazard.
-- This would make the planner prefer the higher jumps the user makes.
+**Ledge-corner risk** (`plan.planner.corner_risk`, `agent.py --corner-risk on|off`, default on):
+- A step whose x move the guard lets through, but which would hit a block's side if the body were up to margin(k) lower (`plan.safety.margin`), passes a ledge with its feet c units above the top.
+- When the slide down that face from the top reaches a deadly box or leaves the level, the step costs 1 - c / margin(k) of soft risk.
+- That risk combines with the hazard soft risk by the same members rule (`_verdict(corner=...)`, never a veto).
+- Checked in stage 1, stage 2, the final stage, the modes' `_judge` and the airborne completion (`complete`: margin at H + k).
+- The window is every frame the score credits. The pad tail counts too, because its landing's T is credited (3-1 f109: the corner was in the pad).
+- A missed ledge with a safe floor below costs nothing.
+- The user's own paths (`guard_side_v1/corner_on_human.py`, 17,198 windows of 48 frames, `runs/human_01`): 2.2% charged.
+  - 0% on 1-1..1-6, 1-9, 1-10, 2-3, 2-4.
+  - 7.2% on 1-7, 5.8% on 1-8, 5.5% on 2-1, 4.3% on 2-2, 2.7% on 3-1.
+  - Mean risk when charged 0.2-0.57.
+  - Where the user really passes corners close, the agent will now be more careful; `--corner-risk off` gives the old planner.
+- Cost: 3.4-4.9 ms per call (`corner_risk` on the 3-1 final and stage-2 sets), 3-4 calls per decision.
+- Offline (`corner_decisions.py`): the 3-1 plans that end at the corner now carry risk 1.0 (f109: 0.217 -> 1.0, f141: 0 -> 1.0). The chosen jump does not change: from that state every alternative already had risk 1.0.
+
+**Why the agent jumps from too far back: the ceiling shot** (`mpc/future.py`):
+- A launcher fires a shot every 119 frames at (111, -111), above the solid ceiling (y -160).
+- A shot seen 1-2 frames is bounded by SHOT_V_MAX k in every direction, through walls: 161 units at +16, 481 at +48.
+- Every birth triggered "danger shot0" (all candidates "hits shot0") in every wave of both runs. The reflex mode waited, then jumped early (`run-jump R hold 10` from x 137-167; the user jumps from about x 150-160 and lands about 20 units higher).
+- The live decision at f93 was planned ahead from f85's world (the async planner), so it still saw the newborn shot's circle.
+- Now (`FutureWorld.flying_shot`): a shot born less than 3 frames ago from a launcher whose flight is known follows that flight by age. The margin is one frame of motion (7 units instead of 161).
+- A flight cut by the wave's end is kept as the launcher's partial template.
+- Only the level's very first shot (nothing known yet) keeps the old bound.
+- Replayed (`guard_side_v1/shot_birth.py`, wave 2 birth at 442): no shot trigger, normal mode.
+
+**Bug fixed on the way:**
+- `@lru_cache` sat on `class Launcher` (meant for `_fit_weights`), so every `Launcher()` was one shared object: every spawn point of every level shared one period and template.
+- It is now on `_fit_weights`; `test_every_launcher_is_its_own`.
+
+**Not verified in the game.** The offline closed loop uses runs/wm_locked as the game.
 
 ## 3-1 salt pit, a less fearful risk rule, training on a GPU (2026-11-14)
 

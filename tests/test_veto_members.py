@@ -53,3 +53,16 @@ def test_soft_risk_of_the_second_worst_member_by_default():
     assert worst[0] == 1.0 and second[0] == 0.0 and mean[0] == 0.2
     cf2 = np.array([[30], [34], [-1], [-1], [-1]])                 # two members agree: a whole death again
     assert _verdict(_sweep(cf2), upto, members="second")[4][0] == 1.0
+
+
+def test_corner_risk_is_soft_risk_by_the_same_members_rule():
+    cf = np.full((5, 1), -1)
+    upto = np.full(1, 48)
+    one = (np.array([[0.8], [0.0], [0.0], [0.0], [0.0]]), np.array([[30], [-1], [-1], [-1], [-1]]))
+    two = (np.array([[0.8], [0.6], [0.0], [0.0], [0.0]]), np.array([[30], [28], [-1], [-1], [-1]]))
+    v = _verdict(_sweep(cf), upto, corner=one)
+    assert not v[0][0] and v[4][0] == 0.8 and v[5][0] == 30          # worst: the member's risk, never a veto
+    assert _verdict(_sweep(cf), upto, members="second", corner=one)[4][0] == 0.0
+    v2 = _verdict(_sweep(cf), upto, members="second", corner=two)
+    assert v2[4][0] == 0.6 and v2[5][0] == 30
+    assert abs(_verdict(_sweep(cf), upto, members="mean", corner=two)[4][0] - 0.28) < 1e-9

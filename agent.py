@@ -787,6 +787,7 @@ class Runner:
                                        veto_members=getattr(self.args, "veto_members", 1),
                                        death_min=getattr(self.args, "death_min", DEATH_MIN_FRAMES),
                                        risk_members=getattr(self.args, "risk_members", "second"),
+                                       corner=getattr(self.args, "corner_risk", "on") == "on",
                                        modes=self.args.modes == "on",
                                        route_trial_gain=getattr(self.args, "route_trial_gain", TRIAL_GAIN))
                 cm = self.commit                    # route trials: deviation = the surprise trigger's tube
@@ -807,6 +808,7 @@ class Runner:
                             "veto_members": getattr(self.args, "veto_members", 1),
                             "death_min": getattr(self.args, "death_min", DEATH_MIN_FRAMES),
                             "risk_members": getattr(self.args, "risk_members", "second"),
+                            "corner": getattr(self.args, "corner_risk", "on") == "on",
                             "modes": self.args.modes == "on",
                             "route_trial_gain": getattr(self.args, "route_trial_gain", TRIAL_GAIN)}
                     self.proc.call("init", self.model_path, lv, field, opts,
@@ -1941,6 +1943,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="a plan's soft risk over the world model's members: second (default) = the second worst "
                          "member's, so one member alone grazing a hazard does not cost a whole death; worst = the "
                          "old, most cautious rule; mean = their average (boldest)")
+    ap.add_argument("--corner-risk", choices=("on", "off"), default="on",
+                    help="soft risk for passing a ledge's corner closer than the world model's error when missing it "
+                         "slides into a hazard (plan.planner.corner_risk; 3-1's salt pit). off: the old planner")
     ap.add_argument("--veto-members", type=int, default=1,
                     help="world-model members that must touch a hazard within the first 16 frames for a plan to be "
                          "vetoed (default 1: any of the 5; 3: a majority). With more than 1, a touch by fewer members "

@@ -163,6 +163,41 @@ def test_collide_lands_on_the_half_floor_and_keeps_the_free_axis():
     assert abs(s["x"][0] - 300.3) < 1e-4 and abs(s["y"][0] - (50.0 + BODY - CONTACT_EPS)) < 1e-4
 
 
+def _ledge_over_pit():
+    """A lower-half block ledge (top y = 70) right of a pit (x 40..120, floor top 20) with a hazard at the pit's
+    bottom by the ledge's face (x 120): 3-1's salt pit in small."""
+    w = np.zeros((8, 12), np.uint32)
+    w[0, :] = 1                                                     # floor
+    w[1:3, 0:2] = 1                                                 # left platform, top 60
+    w[0:3, 6:] = 1
+    w[3, 6:] = 0x42011                                              # lower half solid: y 60..70
+    ter = Terrain(w, 0.0, 0.0, slopes=False)
+    hz = S.FrameBoxes(np.array([[110.0, 24.0, 10.0, 4.0, 0.0]]), np.array([S.KIND_HAZARD], np.int8), ["salt"])
+    return ter, hz
+
+
+def test_corner_risk_charges_a_ledge_passed_within_the_margin_over_a_hazard():
+    from plan.planner import corner_risk
+    from realpath import BODY
+    ter, hz = _ledge_over_pit()
+    x = 116.5 - 6.5 * np.arange(16, -1, -1)                          # crossing the face x = 120 on frame 16
+    d = float(S.margin(16))
+
+    def risk(feet, boxes=hz):
+        y = np.full(17, 70.0 + BODY + feet)
+        r, at = corner_risk(ter, x[None, None], y[None, None], [boxes] * 17, 1, np.array([16]))
+        return float(r[0, 0]), int(at[0, 0])
+    r, at = risk(3.0)                                               # feet 3 above the top: 1 - 3 / margin(16)
+    assert abs(r - (1.0 - 3.0 / d)) < 1e-6 and at == 16
+    assert risk(-0.5)[0] == 1.0                                     # under the top within the guard's tolerance
+    assert risk(d + 1.0) == (0.0, -1)                               # clear by more than the margin
+    empty = S.FrameBoxes(np.zeros((0, 5)), np.zeros(0, np.int8), [])
+    assert risk(3.0, empty) == (0.0, -1)                            # missing it lands on a safe floor: no risk
+    r2, _ = corner_risk(ter, x[None, None], np.full((1, 1, 17), 79.0), [hz] * 17, 1, np.array([15]))
+    assert r2[0, 0] == 0.0                                          # the crossing is after the judged frames
+    assert corner_risk(None, x[None, None], np.full((1, 1, 17), 79.0), [hz] * 17, 1, np.array([16])) is None
+
+
 @pytest.mark.skipif(not os.path.exists(MODEL), reason="no world model")
 def test_imagined_paths_stay_out_of_the_floor(flat):
     """With the guard, no imagined position of any stage overlaps the floor by more than the tolerance; the

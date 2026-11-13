@@ -90,6 +90,10 @@ class FutureWorld:
         info = {"frames": len(cur), "recording": before, "trusted": bool(trusted) if before else None,
                 "mismatch": None if mismatch is None else [int(mismatch[0]), round(float(mismatch[1]), 1)],
                 "extended": added}
+        for fl in getattr(self, "flights", {}).values():   # flights cut by the wave's end: a partial template
+            L = getattr(self, "launchers", {}).get(fl["key"])   # (extrapolated past its end) until a whole one
+            if L is not None and fl["first"] and len(fl["pts"]) >= 3 and not L.complete and                     (L.template is None or len(fl["pts"]) > len(L.template)):
+                L.template = np.array(fl["pts"], np.float64)
         self.cur: dict[int, tuple] = {}
         self.runs: dict[str, _BoxRun] = {}    # kill box id -> its consecutive boxes up to now in this wave
         self.trusted = True                   # this wave still matches the recording
@@ -170,22 +174,10 @@ class FutureWorld:
         for key, L in self.launchers.items():
             if L.P is None or L.last is None or L.radius is None or frame - L.last > L.P + LAUNCH_P_TOL:
                 continue                              # no period yet, or it stopped firing
-            tpl, complete = L.template, L.complete
-            if tpl is None:
-                fl = next((f for f in self.flights.values() if f["key"] == key and f["first"]), None)
-                if fl is None or len(fl["pts"]) < 3:
-                    continue
-                tpl, complete = np.array(fl["pts"], np.float64), False
-            n = len(tpl)
-            step = np.r_[np.hypot(*np.diff(tpl, axis=0).T), 0.0]
-            step[-1] = step[-2] if n > 1 else 0.0
-            if complete:
-                path, marg, life = tpl, SHOT_BASE + step, n
-            else:                                     # the flight so far, then its own extrapolation
-                c, m, alive = shot_future(tpl[-SHOT_FIT:], H, self.terrain)
-                path = np.concatenate([tpl, c])
-                marg = np.concatenate([SHOT_BASE + step, m + step[-1]])
-                life = n + alive
+            flight = self._launcher_flight(key, L, H)
+            if flight is None:
+                continue
+            path, marg, life = flight
             b = L.last + L.P
             while b - frame <= H:
                 if b > frame:
@@ -199,6 +191,43 @@ class FutureWorld:
                         out.append((f"{L.sid}+{b}", L.radius, centre, margin, int(k[0]) + 1, int(k[-1]) + 1))
                 b += L.P
         return out
+
+    def _launcher_flight(self, key, L: "Launcher", H: int):
+        """A launcher's flight by age from a birth: (positions (life, 2), margins (life,), life frames), from its
+        template (its last whole flight: margin SHOT_BASE + the speed, one frame of timing), else a flight of it
+        seen from its birth with at least 3 frames so far, then that flight's own extrapolation; None unknown."""
+        tpl, complete = L.template, L.complete
+        if tpl is None:
+            fl = next((f for f in self.flights.values() if f["key"] == key and f["first"] and len(f["pts"]) >= 3), None)
+            if fl is None:
+                return None
+            tpl, complete = np.array(fl["pts"], np.float64), False
+        n = len(tpl)
+        step = np.r_[np.hypot(*np.diff(tpl, axis=0).T), 0.0]
+        step[-1] = step[-2] if n > 1 else 0.0
+        if complete:
+            return tpl, SHOT_BASE + step, n
+        c, m, alive = shot_future(tpl[-SHOT_FIT:], H, self.terrain)     # the flight so far, then extrapolated
+        return np.concatenate([tpl, c]), np.concatenate([SHOT_BASE + step, m + step[-1]]), n + alive
+
+    def flying_shot(self, frame: int, sid, H: int):
+        """One flying shot's (centre (H, 2), margin (H,), frames it still flies) at frames 1..H: shot_future of its
+        own flight; a shot born less than 3 frames ago from a launcher whose flight is known (_launcher_flight)
+        follows that flight by age instead. (Its own 1-2 frames only bound it by SHOT_V_MAX k in every direction,
+        through walls: 3-1's ceiling shot, born every 119 frames 144 units above the floor behind a solid ceiling,
+        looked 160 units wide at +16 and sent the planner into reflex waits and early jumps at each birth.)"""
+        track = self.shot_track(frame, sid)
+        fl = self.flights.get(sid)
+        if len(track) < 3 and fl is not None and fl["first"] and fl["birth"] == frame - len(track) + 1:
+            L = self.launchers.get(fl["key"])
+            flight = self._launcher_flight(fl["key"], L, H) if L is not None else None
+            if flight is not None and len(flight[0]) > len(track) - 1:
+                path, marg, life = flight
+                a0 = len(track) - 1                       # its age now
+                if np.hypot(*(path[a0] - track[-1])) <= LAUNCH_KEY + SHOT_BASE:   # it is on that flight so far
+                    age = np.minimum(a0 + np.arange(1, H + 1), life - 1)
+                    return path[age], marg[age], int(np.clip(life - 1 - a0, 0, H))
+        return shot_future(track, H, self.terrain)
 
     def shot_track(self, frame: int, sid) -> np.ndarray:
         """Shot `sid`'s positions in its current flight (n, 2), oldest first, ending at `frame`: at most SHOT_FIT
@@ -296,7 +325,7 @@ class FutureWorld:
         # flying shots: only kept away from (the world model was not trained with them). Recorded (trusted, the
         # game repeats them) where the recording is used; otherwise each from its own flight, and the shots its
         # launcher will fire (launcher_shots: none before a launcher's period has been seen)
-        shots = [(sh[0], sh[3], *shot_future(self.shot_track(frame, sh[0]), H, self.terrain)) for sh in sh0]
+        shots = [(sh[0], sh[3], *self.flying_shot(frame, sh[0], H)) for sh in sh0]
         launch = self.launcher_shots(frame, H)
         worlds = None if deadly_only else [
             World(hz_k[k], pf_k[k] or None, (pf_k[k - 1] if k else (self.prev[2] if self.prev else None)) or None,
@@ -378,7 +407,6 @@ class _BoxRun:
         return self.arr[self.n - 1 + k - P * (-(-k // P))]
 
 
-@lru_cache(maxsize=256)
 class Launcher:
     """What fires shots at one spawn point (FutureWorld._shots_seen): its period P (frames between two births seen
     in one wave; kept for the level), the last birth in this wave, the shot's id and radius, and its template
@@ -416,6 +444,7 @@ def _shot_offset(a: list, b: list) -> float:
     return off
 
 
+@lru_cache(maxsize=256)
 def _fit_weights(n: int, H: int) -> tuple[np.ndarray, np.ndarray]:
     """Least-squares quadratic through n positions at frames -n+1..0: (H, n) weights giving its value at frames
     1..H, and the (n, n) matrix giving its value at the fitted frames (for the residual). Cached: read-only."""
