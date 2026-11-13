@@ -798,6 +798,7 @@ def test_best_route_is_judged_on_its_recorded_real_path(flat):
     pl.route.best = {"finish": 400, "f": np.arange(100, 100 + n), "x": real_x, "y": np.full(n, 46.0),
                      "vx": np.zeros(n), "vy": np.zeros(n), "a": np.full(n, act(0))}
     pl.trials.gain = 0.0                                            # no route trials here (test_route_trial_*)
+    pl.risk_members = "worst"                                       # any member in the box refuses the route here
     try:
         pl.new_wave()
         worlds, frames = inputs((x0, 46.0, 4.0, 4.0, 0.0), 30)      # from frame 30 on, where the model stands

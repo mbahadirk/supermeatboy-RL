@@ -37,6 +37,7 @@ agent's own new bests in runs/demos/self.json); this script trains from scratch 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -73,10 +74,11 @@ def to_raw(m: np.ndarray, scale=RES_SCALE) -> np.ndarray:
 
 def predict_all(model, X, bs=8192):
     outs = {}
+    dev = next(model.parameters()).device
     for i in range(0, len(X), bs):
-        p = model.predict(torch.as_tensor(X[i:i + bs], dtype=torch.float32))
+        p = model.predict(torch.as_tensor(X[i:i + bs], dtype=torch.float32, device=dev))
         for k, v in p.items():
-            outs.setdefault(k, []).append(v.numpy())
+            outs.setdefault(k, []).append(v.detach().cpu().numpy())
     return {k: np.concatenate(v) for k, v in outs.items()}
 
 
@@ -221,7 +223,8 @@ def fit(model, ts: dict, d: dict, va_idx, epochs: int, lr: float, batch: int, t0
     batch = max(1, min(batch, n))
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=epochs * max(1, n // batch), pct_start=0.1)
-    T = lambda a, dt=torch.float32: torch.as_tensor(a, dtype=dt)
+    dev = next(model.parameters()).device
+    T = lambda a, dt=torch.float32: torch.as_tensor(a, dtype=dt, device=dev)
     W = lambda src, b: T(src["wc"][b]) if "wc" in src else None     # step-k: cut chains' NLL weight 0
     rng = np.random.default_rng(0)
     for ep in range(epochs):
@@ -284,7 +287,19 @@ def main():
                     help=f"physics prior the targets correct (wm/protocol.py). Fresh training: default {PRIOR_PROTOCOL}; "
                          "gravity-fan-wind-v1 adds the measured fan wind force (explicit opt-in). --init: the parent's; "
                          "a different value is an error")
+    ap.add_argument("--save-features", default=None, metavar="NPZ",
+                    help="build the training features from --manifest (all the other data options apply), write them "
+                         "with the split and their provenance to this .npz and stop: train elsewhere (a GPU) with "
+                         "--load-features")
+    ap.add_argument("--load-features", default=None, metavar="NPZ",
+                    help="train from a --save-features file instead of the recordings (no --manifest, no data "
+                         "folders needed: the file holds the features, the split and the manifest's reference)")
+    ap.add_argument("--device", default="cpu", help="torch device for the fit: cpu (default) or cuda")
+    if "--load-features" in sys.argv:              # the recordings stay home: no manifest to open
+        sys.argv += ["--legacy-split"] if "--legacy-split" not in sys.argv and "--manifest" not in sys.argv else []
     args = ap.parse_args()
+    if args.load_features:
+        return train_from_features(args)
     dataset = cli_dataset(args)
     if dataset is not None:
         args.data = dataset.source_list(args.data)
@@ -329,6 +344,10 @@ def main():
               demos=all_demos(args.demos, args.data) if args.demos else None, dataset=dataset, protocol=protocol,
               prior_protocol=prior_protocol)
     val = sample_validation(d, strict=dataset is not None)
+    if args.save_features:
+        save_features(args.save_features, d, val, args, dataset, protocol, prior_protocol, held)
+        print(f"saved {len(d['X'])} transitions' features to {args.save_features}  [{time.time() - t0:.0f}s]")
+        return
     res_scale = RES_SCALE
     if args.step > 1:                        # targets in unit scale: the corrections' spread over full chains
         full = d["full"]
@@ -370,7 +389,9 @@ def main():
     train_set = {k: d[k][fit_idx] for k in ("X", "yc", "yb", "ys", "yr") + (("wc",) if "wc" in d else ())}
     base_fit_samples, sc_samples, sc_epochs = (len(fit_idx) if not args.init else 0), 0, 0
     if not args.init:
+        model.to(args.device)
         fit(model, train_set, d, va_idx, args.epochs, 1e-3, args.batch, t0)
+        model.to("cpu")
     if dataset is not None:
         model.info = dict(getattr(model, "info", {}) or {}, dataset=dataset.reference(),
                           feature_protocol=parent_feature_protocol if args.init else protocol,
@@ -415,6 +436,87 @@ def main():
         f"Features active: {protocol}; checkpoint trained: {info['feature_protocol']}; prior: {prior_protocol}.\n\n" + \
         f"Dataset protocol: {info['dataset']['protocol']}; manifest {info['dataset'].get('sha256', 'none (legacy)')}.\n\n" + \
         f"Data: {', '.join(args.data)}; levels {', '.join(info['levels'])}.\n\n" + report(model, d, va_idx)
+    with open(os.path.join(out, "wm_report.md"), "w", encoding="utf-8") as f:
+        f.write(text)
+    print(text)
+    print(f"saved {out}")
+
+
+FEATURE_KEYS_SKIP = ()
+
+
+def save_features(path: str, d: dict, val, args, dataset, protocol: str, prior_protocol: str, held):
+    """--save-features: every array of build()'s result, the validation split and where they came from."""
+    from wm.dataset import LEGACY
+    arrays = {f"d_{k}": v for k, v in d.items() if isinstance(v, np.ndarray) and v.dtype != object}
+    meta = {"dataset": dataset.reference() if dataset is not None else {"protocol": LEGACY},
+            "data": list(args.data), "protocol": protocol, "prior_protocol": prior_protocol, "step": args.step,
+            "sample_frac": args.sample_frac, "max_samples": args.max_samples, "seed": args.seed,
+            "demos": args.demos, "held": sorted(held),
+            "keys": sorted(k for k, v in d.items() if isinstance(v, np.ndarray) and v.dtype != object)}
+    np.savez_compressed(path, val=np.asarray(val, bool), meta=json.dumps(meta), **arrays)
+
+
+def train_from_features(args):
+    """--load-features: the rest of main() on the saved arrays (fresh weights; the saved split and settings)."""
+    from wm.protocol import UNTRAINED_FEATURE_PROTOCOL
+    t0 = time.time()
+    z = np.load(args.load_features, allow_pickle=False)
+    meta = json.loads(str(z["meta"]))
+    d = {k: z[f"d_{k}"] for k in meta["keys"]}
+    val = z["val"]
+    out = args.out or os.path.join(HERE, "runs", "wm_" + time.strftime("%Y%m%d-%H%M%S"))
+    if os.path.exists(out) and os.listdir(out):
+        raise SystemExit("training needs a new empty output folder; old checkpoints are never overwritten")
+    os.makedirs(out, exist_ok=True)
+    torch.set_num_threads(args.threads)
+    step = int(meta["step"])
+    res_scale = RES_SCALE
+    if step > 1:
+        full = d["full"]
+        corr = (d["raw"] - d["prior"])[full & ~val]
+        res_scale = np.maximum(corr.std(0), 1e-3).astype(np.float32)
+        d["yc"] = (d["yc"] * RES_SCALE / res_scale).astype(np.float32)
+        d["wc"] = full.astype(np.float32)
+    tr_idx, va_idx = np.nonzero(~val)[0], np.nonzero(val)[0]
+    batch = max(1, min(args.batch, len(tr_idx)))
+    print(f"{len(d['X'])} transitions ({len(tr_idx)} train / {len(va_idx)} held out) from {args.load_features}, "
+          f"device {args.device}", flush=True)
+    torch.manual_seed(args.seed)
+    model = WorldModel(d["X"].shape[1], members=args.members, hidden=args.hidden, layers=args.layers, step=step,
+                       res_scale=res_scale)
+    model.info = {"feature_protocol": UNTRAINED_FEATURE_PROTOCOL, "active_feature_protocol": meta["protocol"],
+                  "prior_protocol": meta["prior_protocol"]}
+    model.set_norm(torch.as_tensor(d["X"][tr_idx[:200000]], dtype=torch.float32))
+    pos = d["yb"][tr_idx].mean(0)
+    pw = np.where(np.isin(np.arange(len(BIN_NAMES)), list(EVENTS.values())),
+                  np.clip((1 - pos) / np.maximum(pos, 1e-6), 1, 50), 1)
+    model.pos_weight.copy_(torch.as_tensor(pw, dtype=torch.float32))
+    fit_idx = tr_idx
+    if meta.get("demos") and "demo" in d:
+        fit_idx, real = demo_oversample(tr_idx, d["demo"], args.demo_share)
+        print(f"demos oversampled to {real:.1%} of {len(fit_idx)} training samples", flush=True)
+    train_set = {k: d[k][fit_idx] for k in ("X", "yc", "yb", "ys", "yr") + (("wc",) if "wc" in d else ())}
+    model.to(args.device)
+    fit(model, train_set, d, va_idx, args.epochs, 1e-3, batch, t0)
+    model.to("cpu")
+    info = {"data": meta["data"], "levels": sorted(set(d["level"].tolist())), "train": int(len(tr_idx)),
+            "held_out": int(len(va_idx)), "eval_levels_excluded": meta["held"], "sample_frac": meta["sample_frac"],
+            "demos": meta["demos"], "demo_share": args.demo_share if meta.get("demos") else None,
+            "hidden": model.hidden, "layers": model.layers, "step": model.step, "dataset": meta["dataset"],
+            "parent_checkpoint": None, "active_feature_protocol": meta["protocol"], "parent_feature_protocol": None,
+            "prior_protocol": meta["prior_protocol"], "feature_protocol": meta["protocol"],
+            "training": {"epochs": args.epochs, "seed": args.seed, "max_samples": meta["max_samples"],
+                         "sample_frac": meta["sample_frac"], "batch": batch, "train_transitions": len(tr_idx),
+                         "validation_transitions": len(va_idx), "base_fit_samples": len(fit_idx),
+                         "fit_samples": len(fit_idx), "demo_samples": int(d["demo"][fit_idx].sum()) if "demo" in d else 0,
+                         "actual_sc_samples": 0, "self_correction": 0, "self_correction_epochs": 0,
+                         "features_file": os.path.basename(args.load_features), "device": args.device}}
+    model.save(os.path.join(out, "wm_model.pt"), info)
+    text = "# World model: one-step accuracy\n\n" + \
+        f"Features: {meta['protocol']}; prior: {meta['prior_protocol']}; trained from {args.load_features} on " \
+        f"{args.device}.\n\nDataset {meta['dataset'].get('protocol')}; manifest {meta['dataset'].get('sha256', 'none')}.\n\n" + \
+        report(model, d, va_idx)
     with open(os.path.join(out, "wm_report.md"), "w", encoding="utf-8") as f:
         f.write(text)
     print(text)

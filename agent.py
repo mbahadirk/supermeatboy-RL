@@ -786,6 +786,7 @@ class Runner:
                                        hysteresis=self.args.hysteresis, moves=self.moves,
                                        veto_members=getattr(self.args, "veto_members", 1),
                                        death_min=getattr(self.args, "death_min", DEATH_MIN_FRAMES),
+                                       risk_members=getattr(self.args, "risk_members", "second"),
                                        modes=self.args.modes == "on",
                                        route_trial_gain=getattr(self.args, "route_trial_gain", TRIAL_GAIN))
                 cm = self.commit                    # route trials: deviation = the surprise trigger's tube
@@ -805,6 +806,7 @@ class Runner:
                     opts = {"budget_ms": self.args.budget_ms, "hysteresis": self.args.hysteresis,
                             "veto_members": getattr(self.args, "veto_members", 1),
                             "death_min": getattr(self.args, "death_min", DEATH_MIN_FRAMES),
+                            "risk_members": getattr(self.args, "risk_members", "second"),
                             "modes": self.args.modes == "on",
                             "route_trial_gain": getattr(self.args, "route_trial_gain", TRIAL_GAIN)}
                     self.proc.call("init", self.model_path, lv, field, opts,
@@ -1935,6 +1937,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="frames one death costs at least in a plan's estimate (it costs the progress it throws "
                          f"away when that is more; default {DEATH_MIN_FRAMES:g}). Lower: bolder near hazards; 500 was "
                          "the old value")
+    ap.add_argument("--risk-members", choices=("worst", "second", "mean"), default="second",
+                    help="a plan's soft risk over the world model's members: second (default) = the second worst "
+                         "member's, so one member alone grazing a hazard does not cost a whole death; worst = the "
+                         "old, most cautious rule; mean = their average (boldest)")
     ap.add_argument("--veto-members", type=int, default=1,
                     help="world-model members that must touch a hazard within the first 16 frames for a plan to be "
                          "vetoed (default 1: any of the 5; 3: a majority). With more than 1, a touch by fewer members "

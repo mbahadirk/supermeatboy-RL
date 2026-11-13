@@ -40,3 +40,16 @@ def test_any_member_vetoes_by_default_and_a_majority_with_quorum_3():
     one = np.array([[-1, 8]])
     v1 = _verdict(_sweep(one), np.full(2, 48), quorum=3)[0]
     assert v1.tolist() == [False, True]
+
+
+def test_soft_risk_of_the_second_worst_member_by_default():
+    """One member grazing a hazard after the veto window: the worst rule costs a whole death (risk 1), the second
+    worst member's rule (the default) what the second member sees, the mean a fifth."""
+    cf = np.array([[30], [-1], [-1], [-1], [-1]])                  # member 0 touches at frame 30, nobody else
+    upto = np.full(1, 48)
+    worst = _verdict(_sweep(cf), upto)[4]
+    second = _verdict(_sweep(cf), upto, members="second")[4]
+    mean = _verdict(_sweep(cf), upto, members="mean")[4]
+    assert worst[0] == 1.0 and second[0] == 0.0 and mean[0] == 0.2
+    cf2 = np.array([[30], [34], [-1], [-1], [-1]])                 # two members agree: a whole death again
+    assert _verdict(_sweep(cf2), upto, members="second")[4][0] == 1.0

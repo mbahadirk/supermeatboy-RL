@@ -1,5 +1,27 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## 3-1 salt pit, a less fearful risk rule, training on a GPU (2026-11-14)
+
+**3-1** (shapes_check01: 12 of 13 waves time out at (136, -254)):
+- The way on is a ~55-frame running jump over a salt pit, under a low ceiling (y = -160).
+- The 10 recorded PPO crossings never enter our kill regions (0 of 7627 frames).
+- The model predicts that jump well: from PPO's own actions, the +48 error is 1-5 units and the members' clearance 8-25.
+- The field falls along it (315 -> 237).
+- Approaching at full speed, every jump candidate had at least one member grazing the salt. With the soft risk of the worst member that is a whole death (+145 frames), so the planner slowed down, and from the pit's edge a standing jump cannot make it.
+- An averaged-member rule tried offline died in the pit of the stand-in world (runs/wm_locked is not the game), so the offline evidence is not conclusive either way.
+
+**Risk rule now** (`plan.planner.RISK_MEMBERS`, `Planner.risk_members`, `agent.py --risk-members`): `second` (new default) = the second worst member's soft risk, so one member alone grazing a hazard costs nothing extra and two agreeing members still cost a whole death; `worst` = the old rule; `mean`. The golden planner cases were re-recorded.
+
+**human_v2** (`runs/experiments/human_v2/prepare.py`):
+- human_v1 plus the user's 27 waves of 3-1 (22 trained, 5 held out), 197 A+ demos.
+- The CPU training was stopped by the user, to be done on Colab.
+
+**Training on a GPU** (`wm/train.py`):
+- `--save-features NPZ` builds the features from the manifest (every data option applies), writes them with the validation split and the manifest's reference, and stops.
+- `--load-features NPZ` trains from that file alone; no recordings or manifest paths are needed.
+- `--device cuda`.
+- Checked end to end on CPU with a small file: 24,248 transitions, 0.4 MB. The model loads in the agent.
+
 ## 2-11 locks the game dissolves, and 2-16 laser beams (2026-11-14; code-read, not yet checked live)
 
 **2-11:**

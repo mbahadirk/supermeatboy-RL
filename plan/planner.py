@@ -535,7 +535,10 @@ def _near_frames(frames, xs, ys, margin=BOX_MARGIN):
     return out
 
 
-def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum: int = 1):
+RISK_MEMBERS = ("worst", "second", "mean")      # how the final stage's members' soft risks combine (Planner.risk_members)
+
+
+def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum: int = 1, members: str = "worst"):
     """The decision rule (plan.safety.assess) for candidates judged on their own first `upto` frames (one or
     more members): veto, veto frame, what was hit, soft risk and its frame (all in frames, also for a sweep of
     a step-k model's columns). The veto counts contact in frames 1..min(veto_upto, VETO_FRAMES) (veto_upto:
@@ -544,7 +547,9 @@ def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum
     tail: the pad, or stage 1's held last action) count contact only (1), no margin. Defaults: assess on the
     first upto frames. quorum (Planner.veto_members): the members that must touch within the veto window for a
     veto (1, the default: any member; never more than the members there are). With a larger quorum a touch by
-    fewer members is soft risk instead: the share of members that touched."""
+    fewer members is soft risk instead: the share of members that touched. members (RISK_MEMBERS): the soft risk of
+    the worst member ("worst"), of the second worst ("second": one member alone grazing a hazard does not cost a whole
+    death, two do) or the members' average ("mean")."""
     E, n, K = sw.step_clear.shape
     cf = sw.contact_frame
     upto = np.asarray(upto)
@@ -572,10 +577,15 @@ def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum
         after = ks[None, :] > lim_n[:, None]                                            # (n, columns)
         margin_win = after & (ks[None, :] <= pl_n[:, None])                             # planned frames
         tail_win = after & (ks[None, :] > pl_n[:, None]) & (ks[None, :] <= upto[:, None])  # never planned
-        risk = np.where(margin_win[None], near, np.where(tail_win[None] & (c < 0), 1.0, 0.0)).max(0)
+        per = np.where(margin_win[None], near, np.where(tail_win[None] & (c < 0), 1.0, 0.0))    # (E, n, cols)
+        risk = per.max(0)
         j = risk.argmax(1)
         soft = risk[np.arange(n), j]
         soft_frame = np.where(soft > 0, ks[j], -1)
+        if members != "worst" and E > 1:
+            own = per.max(2)                                                         # (E, n): each member's worst
+            soft = np.sort(own, 0)[-2] if members == "second" else own.mean(0)
+            soft_frame = np.where(soft > 0, soft_frame, -1)
     if q > 1:                                        # a minority touched early: its share of the members is risk
         share = np.where(veto, 0.0, early.mean(0))
         first = np.where(early, cf, np.iinfo(np.int64).max).min(0)
@@ -1149,10 +1159,13 @@ class Planner:
                  collide_tol: float | None = COLLIDE_TOL, moves: "MoveMemory | None | str" = "new",
                  complete_max: int = COMPLETE_MAX, modes: bool = False, key_pickup=True,
                  route_trial_gain: float = TRIAL_GAIN, veto_members: int = 1,
-                 death_min: float = DEATH_MIN_FRAMES):
+                 death_min: float = DEATH_MIN_FRAMES, risk_members: str = "second"):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.veto_members = max(1, int(veto_members))   # _verdict's quorum on the final stage's members
         self.death_min = float(death_min)             # DEATH_FRAMES' floor (agent.py --death-min)
+        if risk_members not in RISK_MEMBERS:
+            raise ValueError(f"risk_members {risk_members!r}: one of {RISK_MEMBERS}")
+        self.risk_members = risk_members              # _verdict's members rule (agent.py --risk-members)
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms   # budget: reported only
         self.hysteresis = float(hysteresis)          # frames (switch rule); 0: the best total is chosen
         self.collide_tol = collide_tol               # the collision guard's tolerance; None: no guard
@@ -1887,7 +1900,7 @@ class Planner:
             tg3[c] = ts[(len(ts) - 1) // 2]                          # median (the lower one of an even count)
         win3 = np.where(succ3, tg3, H)                               # successes: frames 1..t; others: 1..H
         vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3, planned=np.where(succ3, tg3, planned3),
-                                                 quorum=self.veto_members)
+                                                 quorum=self.veto_members, members=self.risk_members)
         saf = replace(saf, veto=vv, veto_frame=vfr, veto_kind=vkd, veto_id=vid, soft_risk=vsoft, soft_frame=vsf)
         xe, ye, vye = out3["x"][:, :, Hc], out3["y"][:, :, Hc], out3["vy"][:, :, Hc]
         masks3 = self._path_keys(out3["x"], out3["y"], keys, death=saf.sweep.contact_frame)[0][..., -1]
@@ -2161,7 +2174,8 @@ class Planner:
         tg_e, legs_e, _ = self._contacts(x, y, upto, sw.contact_frame, leg, keys)
         succ = (tg_e > 0).all(0)
         tg = np.where(succ, tg_e.max(0), -1)
-        veto, vf, _, _, soft, _ = _verdict(sw, np.where(succ, np.minimum(upto, tg), upto), quorum=self.veto_members)
+        veto, vf, _, _, soft, _ = _verdict(sw, np.where(succ, np.minimum(upto, tg), upto), quorum=self.veto_members,
+                                           members=self.risk_members)
         uc = np.asarray(upto) // f
         ar = np.arange(n)
         xe, ye, vye = x[:, ar, uc], y[:, ar, uc], out["vy"][:, ar, uc]
