@@ -262,12 +262,13 @@ function sendLevelInfo() {
   const sp = levelObj().add(0x1d2c);
   spawnX = sp.readFloat(); spawnY = sp.add(4).readFloat();
   buildLethal(w);
+  enemyProbe = 3;                                    // log the enemies' fields on the first 3 frames
   kb = null; kbPending = null;
   const k = rd(() => updateKillBox('info'));
   if (!k && !kbShown) { kbShown = true; send({ ev: 'debug', msg: 'level kill box: none (no camera bounds or unreadable): map edges +10 / -60 rule' }); }
   send({ ev: 'info', name: curName, W, H, ox, oy, goals: goalPieces, spawn: [sp.readFloat(), sp.add(4).readFloat()],
          agents: agents.length, lethal: lethal.length, hz: hazards(), objs,
-         lethalTypes: lethal.map(pc => pc.add(0x10).readU16() & 0xff), lethalIds: lethalInfo().ids,
+         lethalTypes: lethalInfo().types, lethalIds: lethalInfo().ids, enemies: enemies.length,
          fx: rd(() => forceFields(w)), portalTypes: rd(() => portalTypes(w)) || [], pf: rd(() => platforms(w)) || [],
          kb: kb, cam_bounds: k ? k.cam_bounds : null, view_half: k ? k.view_half : null }, tiles);
   waitGo();                                          // Python builds the reward paths now
@@ -304,6 +305,7 @@ function buildLethal(w) {
   }
   lethalSize = lethal.map(pc => old.get(pc.toString()) || pieceSize(w, pc));
   rd(() => Memory.copy(KILL_SHAPE, w.add(0x70).readPointer(), 0xa0));   // this level's animation library (+0x20)
+  buildEnemies(w);
 }
 
 // ---- kill regions: what the game's narrow phase really tests ----------------------------------------
@@ -383,15 +385,69 @@ function killShapes(pc) {   // the piece's shapes now: [[1, x, y, r, r, 0] | [2,
 // pieces can be added or removed while the level runs (shots): the list is checked every frame
 let pieceSig = '';
 function sig(all) { return all.length + ':' + (all.length ? all[0] + ',' + all[all.length - 1] : ''); }
-function lethalInfo() {   // types and ids (addresses) of the lethal pieces, in the order hazards() lists them
-  return { types: lethal.map(pc => pc.add(0x10).readU16() & 0xff), ids: lethal.map(pc => pc.toString()) };
+function lethalInfo() {   // types and ids (addresses) of the lethal pieces, in the order hazards() lists them;
+                          // then the enemies (ENEMY_TYPE + their kind, id "enemy<address>")
+  return { types: lethal.map(pc => pc.add(0x10).readU16() & 0xff).concat(enemies.map(e => ENEMY_TYPE + e.kind)),
+           ids: lethal.map(pc => pc.toString()).concat(enemies.map(e => 'enemy' + e.a)) };
 }
 // per lethal piece, now: [x, y, size w, size h, scale x, scale y, angle, kill shapes] (the piece itself, size
-// from FUN_004ca860 at scale 1: the world model's inputs; then what kills: killShapes, [] = nothing now)
+// from FUN_004ca860 at scale 1: the world model's inputs; then what kills: killShapes, [] = nothing now); then one
+// row per enemy (enemyRows)
 function hazards() {
   return lethal.map((pc, k) => [pc.add(0x14).readFloat(), pc.add(0x18).readFloat(), lethalSize[k][0],
                                 lethalSize[k][1], pc.add(0x24).readFloat(), pc.add(0x28).readFloat(),
-                                pc.add(0x2c).readFloat(), killShapes(pc)]);
+                                pc.add(0x2c).readFloat(), killShapes(pc)]).concat(enemyRows());
+}
+
+// ---- enemies: the crawlers and fliers (Hospital and later) are not pieces --------------------------------
+// They are SMBAnimal objects (SMBAnimal.cpp; vtable 0x682488, ctor FUN_005129e0, 0x1e8 bytes) of the animal
+// manager [[0x7035c4] + 0x2e48] (FUN_00513430 adds one: u16 count +0x18, u16 capacity +0x1a, pointer array +0x28).
+// Kind +0x1cc indexes the name table at 0x6f1a00: 0-3 groundcritter, 4-7 aircritter (background, never lethal),
+// 8-11 groundenemy, 12-15 airenemy, 16 bosscritter, 17 charger, 18 boo, 19 hellbossboy. The character update
+// (FUN_00520d30 at 0x5218ef, right after the pieces check FUN_004cd350) calls FUN_00513200(char, char box +0x71c):
+// every animal of kind 8-15 or 17-19 whose state +0x1d0 is not 5 is tested with the bounds-vs-bounds test
+// FUN_00476720 against its bounds at +0x13c: type 1 = a circle {flags (& 0xf = 1), radius +0x140, centre
+// +0x144 / +0x148} (set to radius 10 in the ctor). A touch kills (the same death path as a lethal piece, so agents
+// die through CANDIE as for pieces). Read straight from the game: nothing is written.
+const ENEMY_TYPE = 1000;                             // lethal type ids of enemies: ENEMY_TYPE + kind (not a piece type)
+const ENEMY_KINDS = new Set([8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19]);
+let enemies = [];                                    // [{a: address, kind}] of this level, in manager order
+function buildEnemies(w) {
+  enemies = [];
+  const mgr = rd(() => w.add(0x2e48).readPointer());
+  if (!mgr || mgr.isNull()) return;
+  const n = rd(() => mgr.add(0x18).readU16()) || 0, arr = rd(() => mgr.add(0x28).readPointer());
+  if (!arr || arr.isNull() || n > 4096) return;
+  for (let i = 0; i < n; i++) {
+    const a = rd(() => arr.add(4 * i).readPointer());
+    if (!a || a.isNull()) continue;
+    const kind = rd(() => a.add(0x1cc).readS32());
+    if (kind !== null && ENEMY_KINDS.has(kind)) enemies.push({ a, kind });
+  }
+}
+// per enemy, now: [x, y, 2r, 2r, 1, 1, 0, kill shapes]: the circle's centre and diameter as the piece box (the
+// world model's inputs), and [[1, x, y, r, r, 0]] while it can kill (state not 5; bounds a circle), else []
+function enemyRows() {
+  return enemies.map(e => {
+    const a = e.a;
+    const fl = rd(() => a.add(0x13c).readU32()), r = rd(() => a.add(0x140).readFloat());
+    const x = rd(() => a.add(0x144).readFloat()), y = rd(() => a.add(0x148).readFloat());
+    const st = rd(() => a.add(0x1d0).readS32());
+    if (x === null || y === null || r === null) return [0, 0, 0, 0, 1, 1, 0, null];
+    const on = st !== 5 && fl !== null && (fl & 0xf) === 1;
+    return [r2(x), r2(y), r2(2 * r), r2(2 * r), 1, 1, 0, on ? [[1, r2(x), r2(y), r2(r), r2(r), 0]] : []];
+  });
+}
+// the first frames of a level: everything read about each enemy (to check the layout above against the game)
+let enemyProbe = 0;
+function probeEnemies() {
+  if (enemyProbe <= 0 || !enemies.length) return;
+  enemyProbe--;
+  send({ ev: 'debug', msg: 'enemies: ' + JSON.stringify(enemies.slice(0, 12).map(e => {
+    const a = e.a, f = o => rd(() => r2(a.add(o).readFloat()));
+    return { kind: e.kind, state: rd(() => a.add(0x1d0).readS32()), bounds: rd(() => a.add(0x13c).readU32()),
+             r: f(0x140), centre: [f(0x144), f(0x148)], pos: [f(0xd8), f(0xdc)], spawn: [f(0xe8), f(0xec)] };
+  })) });
 }
 // Shots (thrown saws, missiles): not pieces. Each shooter / launcher is an entity in the world's array
 // (u16 count +0x2c30, pointer +0x2c40, 0x9d4 bytes each; +0 its piece, +0x14 kind) with 10 shot slots of
@@ -610,6 +666,7 @@ function exchange(w, gap) {                         // lockstep: send states, wa
   const pf = rd(() => platforms(w));
   if (pf && pf.length) msg.pf = pf;                  // moving platforms: every frame
   if (changed) msg.lt = lethalInfo();
+  probeEnemies();
   if (kbPending) { msg.kb = kbPending; kbPending = null; }   // the kill box moved (rare)
   const tc = tileChanges();
   if (tc) msg.tc = tc;

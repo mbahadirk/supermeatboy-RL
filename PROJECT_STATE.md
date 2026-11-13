@@ -1,5 +1,25 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Enemies the agent could not see: SMBAnimal crawlers and fliers (2026-11-14; code-read, not yet checked live)
+
+**Finding** (human_v1_check01 on 2-9, 2-12..2-15: every death "none", unexplained):
+- The pieces of type 44 and 45 (lethal-listed, never a kill shape) are the Hospital palette's "particle" and "smoke": decoration, not the killers.
+- The moving killers are not pieces at all. They are `SMBAnimal` objects (SMBAnimal.cpp, vtable 0x682488, ctor FUN_005129e0), which the earlier note "SMBAnimal = background critters" missed.
+- Kind +0x1cc indexes 0x6f1a00: 0-3 groundcritter, 4-7 aircritter (background), 8-11 groundenemy, 12-15 airenemy, 16 bosscritter, 17 charger, 18 boo, 19 hellbossboy.
+- Manager: `[[0x7035c4] + 0x2e48]` (u16 count +0x18, capacity +0x1a, pointer array +0x28; FUN_00513430 adds one).
+- Kill test: the character update FUN_00520d30 at 0x5218ef, right after the pieces check, calls FUN_00513200(char, char+0x71c box). Every animal of kind 8-15 or 17-19 whose state +0x1d0 is not 5 is tested with FUN_00476720 against its bounds at +0x13c: a circle (type 1), radius +0x140 (10 from the ctor), centre +0x144/+0x148 (world: FUN_00476720 uses it directly).
+- The next check after it, FUN_0052f770, is the boss (DAT_007047c4); not read.
+
+**Reader** (`realgame.js` buildEnemies / enemyRows):
+- The enemies are appended to the hazard rows after the lethal pieces, as `[x, y, 2r, 2r, 1, 1, 0, [[1, x, y, r, r, 0]] or []]`, with lethal type 1000 + kind and id `enemy<address>`.
+- Everything that reads hazards (kill boxes, futures, world-model inputs, death explanation, viewer) gets them without other changes.
+- The first 3 frames of a level log each enemy's kind, state, bounds flags, radius, centre, +0xd8 position and +0xe8 spawn, to check this layout in the game.
+
+**Not known yet:**
+- whether the centre is updated every frame;
+- whether the agents' wave reset also resets the enemies;
+- whether fliers home in on the hidden real character (the camera).
+
 ## human_v1: the first model trained with the user's own play (2026-11-14; offline, not run in the game)
 
 **Data** (`runs/experiments/human_v1/prepare.py`):
