@@ -1,5 +1,47 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Narrow passages: the reflex rule, not the walls (2026-11-14)
+
+**The user's report:** agents are thrown off by hazards behind walls and play badly in narrow sections (3-2).
+
+**Live run** (`runs/human_v2_check03`, 3-2, the full jump; 0 of 9 waves finished):
+- The goal is up (y 566); the spawn is at y -190 in a shaft 120 units wide with salt in both walls.
+- Wave 1 climbed to y 232 and died there (h28).
+- The later waves went down the shaft and stayed at its bottom until the time ran out.
+
+**Hazards behind walls: measured, not the cause.**
+- Our kill shapes are right in 3-2 (`runs/experiments/crumble_v1/alive_in_kill.py`, PPO, `runs/collect_more_ppo50_02`, 6 waves):
+  - 119,010 alive rows, 82 inside a kill shape (0.07%).
+  - 262 deaths, 98% within 3 units of a shape.
+- The salt's boxes lie inside the wall tiles, but the game's box test reaches out of the wall. A body touching the shaft's right wall dies on 150 of 186 sampled heights, the left wall on 88 (`check03`, y -724..16).
+- A full wall tile is 20 units thick and the largest margin is 13.9, so a hazard behind a full wall never enters the soft risk.
+- A reachability test (`walled`: can the body get to where it dies without entering a solid tile) was written and removed again. It changed nothing in these cases and cost 50% more planning time in the shaft (310 -> 460 ms).
+- 17 of 3-2's 130 kill shapes cannot be touched from any free position; none is near the agent's path.
+
+**The cause: the reflex override.**
+- REFLEX replaced the chosen plan whenever it had any early risk: a hazard within margin(k) in frames 1..16, no touch.
+- It then took the short move with the least early risk, whatever its progress.
+- The normal estimate did not price those frames at all, so the two rules were never weighed against each other.
+- Overrides in the live runs:
+  - `human_v2_check02` (3-1): 2,946 of 6,787 decisions for early risk, 15 for a veto.
+  - `human_v2_check03` (3-2): 199 of 1,060 for early risk, 3 for a veto.
+- Examples (3-2 wave 1): f16 "early risk 0.09": `jump up hold 6`, estimate 531, over plans at 364; f72 "early risk 0.03".
+
+**Rule now** (`_verdict(early_margin=True)`, `Planner.early_margin`, `agent.py --reflex veto|any-risk`, default veto):
+- A near pass in the planned frames 1..16 is soft risk like a later one (1 - clearance / margin(frame)), priced in every stage's estimate. A touch there is still a veto.
+- REFLEX overrides only a vetoed plan. The reflex move stays a candidate.
+- The best route's real-path verdict prices the early frames the same way.
+- `--reflex any-risk` is the old rule.
+- Offline (`crumble_v1/reflex_rule.py`, 3-2 wave 1 f16): old `jump up hold 6` (estimate 428) -> new `jump R hold 22 > run-jump R hold max` (352).
+- Goldens re-recorded (they pass with `early_margin=False`).
+- Not run in the game. Near passes are now weighed, not refused: more deaths near hazards are possible.
+
+**Crumble blocks: measured, not built** (`crumble_v1/delay.py`, 4 levels, 164 touched tiles):
+- The first word change comes a median 29 frames after the first touch (p90 29-30).
+- The tile is gone 29-30 frames after the touch at the earliest (median 29-30).
+- Untouched neighbours change too (a chain); their timing is not measured.
+- Next step: the planner's imagined world opens a touched tile 30 frames after the live touch.
+
 ## 3-1: the full jump, and the crumble wall (2026-11-14)
 
 **Live run** (`runs/human_v2_check02`, after the corner and shot fixes; 0 of 24 waves finished):

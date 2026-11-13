@@ -86,7 +86,7 @@ def test_long_safe_excludes_plans_with_soft_risk_over_the_limit(flat, monkeypatc
 
 
 @needs_model
-def test_reflex_overrides_a_chosen_plan_with_early_risk(flat, monkeypatch):
+def test_reflex_overrides_early_risk_only_under_the_old_rule(flat, monkeypatch):
     lv, pl = flat
     worlds, frames = inputs(pl.future_frames)
     k = next(i for i, m in enumerate(pl.lib) if m.name == "wait 8f")
@@ -99,8 +99,13 @@ def test_reflex_overrides_a_chosen_plan_with_early_risk(flat, monkeypatch):
     pl.new_wave()
     monkeypatch.setattr(P, "early_risk", lambda sw, upto=None: np.full(sw.step_clear.shape[1], 0.3))
     plan = pl.plan(standing(), 100, worlds, frames, danger=True)
+    assert plan.mode != "reflex" and not plan.counts["modes"]["reflex"]["override"]   # a near pass: priced, kept
+    pl.new_wave()
+    monkeypatch.setattr(pl, "early_margin", False)                        # the old rule (--reflex any-risk)
+    plan = pl.plan(standing(), 100, worlds, frames, danger=True)
     assert plan.mode == "reflex" and plan.chosen == ["wait 8f"]
     assert plan.switch["reason"].startswith("reflex override")
+    monkeypatch.setattr(pl, "early_margin", True)
     pl.new_wave()
     plan = pl.plan(standing(), 100, worlds, frames)                       # no danger: reflex does not run
     assert not plan.counts["modes"]["reflex"]["ran"] and plan.mode != "reflex"

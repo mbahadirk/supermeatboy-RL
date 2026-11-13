@@ -619,12 +619,14 @@ RISK_MEMBERS = ("worst", "second", "mean")      # how the final stage's members'
 
 
 def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum: int = 1, members: str = "worst",
-             corner=None):
+             corner=None, early_margin: bool = True):
     """The decision rule (plan.safety.assess) for candidates judged on their own first `upto` frames (one or
     more members): veto, veto frame, what was hit, soft risk and its frame (all in frames, also for a sweep of
     a step-k model's columns). The veto counts contact in frames 1..min(veto_upto, VETO_FRAMES) (veto_upto:
-    default upto); the later frames up to `planned` (n,; default upto) are soft risk by the margin rule
-    (contact 1, else 1 - clearance / margin(frame)); the frames after `planned` up to upto (a never-planned
+    default upto); the planned frames 1..`planned` (n,; default upto) are soft risk by the margin rule
+    (contact 1, else 1 - clearance / margin(frame); early_margin False: only the frames after the veto window,
+    the rule before 2026-11-14, when a near pass in the first 16 frames cost nothing in the estimate and REFLEX
+    overrode any plan that had one); the frames after `planned` up to upto (a never-planned
     tail: the pad, or stage 1's held last action) count contact only (1), no margin. Defaults: assess on the
     first upto frames. quorum (Planner.veto_members): the members that must touch within the veto window for a
     veto (1, the default: any member; never more than the members there are). With a larger quorum a touch by
@@ -650,14 +652,14 @@ def _verdict(sw: S.Sweep, upto: np.ndarray, veto_upto=None, planned=None, quorum
     soft_frame = np.full(n, -1, np.int64)
     own = np.zeros((E, n))                           # each member's worst soft risk
     fk = sw.frames_of()                              # frames of the columns (a step-k model: every k-th)
-    late = fk > lim_n.min() if n else fk > S.VETO_FRAMES     # columns after some candidate's veto window
+    late = np.ones(len(fk), bool) if early_margin else         (fk > lim_n.min() if n else fk > S.VETO_FRAMES)      # columns after some candidate's veto window
     if late.any():
         ks = fk[late]
         c = sw.step_clear[:, :, late]
         with np.errstate(invalid="ignore", divide="ignore"):
             near = np.where(c < 0, 1.0, np.clip(1.0 - c / S.margin(ks), 0.0, 1.0))
         near = np.nan_to_num(near, nan=0.0)
-        after = ks[None, :] > lim_n[:, None]                                            # (n, columns)
+        after = np.ones((n, len(ks)), bool) if early_margin else ks[None, :] > lim_n[:, None]   # (n, columns)
         margin_win = after & (ks[None, :] <= pl_n[:, None])                             # planned frames
         tail_win = after & (ks[None, :] > pl_n[:, None]) & (ks[None, :] <= upto[:, None])  # never planned
         per = np.where(margin_win[None], near, np.where(tail_win[None] & (c < 0), 1.0, 0.0))    # (E, n, cols)
@@ -1250,7 +1252,8 @@ class Planner:
                  collide_tol: float | None = COLLIDE_TOL, moves: "MoveMemory | None | str" = "new",
                  complete_max: int = COMPLETE_MAX, modes: bool = False, key_pickup=True,
                  route_trial_gain: float = TRIAL_GAIN, veto_members: int = 1,
-                 death_min: float = DEATH_MIN_FRAMES, risk_members: str = "second", corner: bool = True):
+                 death_min: float = DEATH_MIN_FRAMES, risk_members: str = "second", corner: bool = True,
+                 early_margin: bool = True):
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.veto_members = max(1, int(veto_members))   # _verdict's quorum on the final stage's members
         self.death_min = float(death_min)             # DEATH_FRAMES' floor (agent.py --death-min)
@@ -1258,6 +1261,7 @@ class Planner:
             raise ValueError(f"risk_members {risk_members!r}: one of {RISK_MEMBERS}")
         self.risk_members = risk_members              # _verdict's members rule (agent.py --risk-members)
         self.corner = bool(corner)                    # corner_risk on (agent.py --corner-risk)
+        self.early_margin = bool(early_margin)        # near passes in frames 1..16 priced (agent.py --reflex)
         self.H, self.B1, self.branch, self.S, self.budget = H, B1, branch, S_final, budget_ms   # budget: reported only
         self.hysteresis = float(hysteresis)          # frames (switch rule); 0: the best total is chosen
         self.collide_tol = collide_tol               # the collision guard's tolerance; None: no guard
@@ -1714,8 +1718,9 @@ class Planner:
                 out.update(veto=True, veto_frame=cf, veto_kind=kind,
                            veto_id=S.contact_id(kind, sw.ids, sw.contact_box[0, 0]))
             late = ks > S.VETO_FRAMES
-            if late.any() and near[late].max() > 0:
-                i = int(np.argmax(np.where(late, near, -1.0)))
+            priced = np.ones(W, bool) if self.early_margin else late     # as _verdict: the early frames too
+            if priced.any() and near[priced].max() > 0:
+                i = int(np.argmax(np.where(priced, near, -1.0)))
                 out.update(soft=float(near[i]), soft_frame=int(ks[i]))
             out["early"] = float(near[~late].max()) if (~late).any() else 0.0
         if success:
@@ -1801,6 +1806,7 @@ class Planner:
         own1 = np.where(succ1, np.minimum(up1, tg1), up1)
         veto1, vf1, vk1, vid1, soft1, sf1 = _verdict(sw1, np.where(succ1, tg1, end1), veto_upto=own1,
                                                      planned=np.where(succ1, tg1, up1),
+                                                     early_margin=self.early_margin,
                                                      corner=self._corner(out1["x"][:, :, :steps1 + 1],
                                                                          out1["y"][:, :, :steps1 + 1], fr1,
                                                                          np.where(succ1, tg1, end1), keys))
@@ -1868,8 +1874,8 @@ class Planner:
         tg2, legs2 = tg2[0], legs2[0]
         succ2 = tg2 > 0
         win2 = np.where(succ2, np.minimum(up2, tg2), up2)
-        veto2, vf2, _, _, soft2, _ = _verdict(sw2, win2, corner=self._corner(xs2[:, :, :K + 1], ys2[:, :, :K + 1],
-                                                                            fr2, win2, keys))
+        veto2, vf2, _, _, soft2, _ = _verdict(sw2, win2, early_margin=self.early_margin,
+                                              corner=self._corner(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, win2, keys))
         masks2 = self._path_keys(xs2[:, :, :K + 1], ys2[:, :, :K + 1], keys, up2, sw2.contact_frame)[0][0, :, -1]
         tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2, masks2)
         pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
@@ -2016,6 +2022,7 @@ class Planner:
         pl3 = np.where(succ3, tg3, planned3)
         vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3, planned=pl3,
                                                  quorum=self.veto_members, members=self.risk_members,
+                                                 early_margin=self.early_margin,
                                                  corner=self._corner(out3["x"], out3["y"], fr3, win3, keys))
         saf = replace(saf, veto=vv, veto_frame=vfr, veto_kind=vkd, veto_id=vid, soft_risk=vsoft, soft_frame=vsf)
         xe, ye, vye = out3["x"][:, :, Hc], out3["y"][:, :, Hc], out3["vy"][:, :, Hc]
@@ -2128,7 +2135,11 @@ class Planner:
             er = early_risk(saf.sweep)
             if real is not None:
                 er[gi] = real["early"]
-            if saf.veto[best] or er[best] > 0:       # REFLEX overrides a chosen plan with early danger
+            # REFLEX overrides a chosen plan that is vetoed (a touch within 16 frames). A near pass in those
+            # frames is soft risk in the estimate now (_verdict's early margin): the reflex move is a candidate
+            # like the others. (Before: any early risk > 0 overrode, least risk first whatever the progress; in
+            # 3-2's shaft, salt in both walls, that was every other decision: estimate 531 chosen over 364.)
+            if saf.veto[best] or (not self.early_margin and er[best] > 0):
                 why = (f"vetoed f{int(saf.veto_frame[best])}" if saf.veto[best] else f"early risk {er[best]:.2f}")
                 switch = {"kept": False, "gain": None, "margin": None, "unit": "frames",
                           "reason": f"reflex override: the chosen plan was {why}"}
@@ -2292,6 +2303,7 @@ class Planner:
         tg = np.where(succ, tg_e.max(0), -1)
         win = np.where(succ, np.minimum(upto, tg), upto)
         veto, vf, _, _, soft, _ = _verdict(sw, win, quorum=self.veto_members, members=self.risk_members,
+                                           early_margin=self.early_margin,
                                            corner=self._corner(x, y, fr, win, keys))
         uc = np.asarray(upto) // f
         ar = np.arange(n)

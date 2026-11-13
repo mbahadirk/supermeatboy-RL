@@ -41,7 +41,7 @@ def synthetic(step=1, key_x=90):
             member[0].bias[8:8 + len(F.BIN_NAMES)] = -100
     pl = P.Planner.__new__(P.Planner)
     pl.f, pl.key_pickup, pl.collide_tol, pl.geom = step, True, 1., geom
-    pl.model, pl.member, pl.complete_max, pl.corner = model, 0, step * 2, True
+    pl.model, pl.member, pl.complete_max, pl.corner, pl.early_margin = model, 0, step * 2, True, True
     pl.lv = types.SimpleNamespace(plats=[], keys=meta["keys"], ox=0, oy=0,
                                   lock_groups=[[16]], opened_cells=geom.lock_context.opened_cells)
     pl.terrain, pl.guard = Terrain(words, 0, 0), Terrain(words, 0, 0, slopes=False)

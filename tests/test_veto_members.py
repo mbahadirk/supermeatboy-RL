@@ -66,3 +66,16 @@ def test_corner_risk_is_soft_risk_by_the_same_members_rule():
     v2 = _verdict(_sweep(cf), upto, members="second", corner=two)
     assert v2[4][0] == 0.6 and v2[5][0] == 30
     assert abs(_verdict(_sweep(cf), upto, members="mean", corner=two)[4][0] - 0.28) < 1e-9
+
+
+def test_a_near_pass_in_the_first_frames_is_soft_risk():
+    """A hazard within the margin at frame 8 (no touch): soft risk 1 - clearance / margin(8) in the estimate (the
+    reflex move no longer overrides such a plan); early_margin False is the rule before: nothing until frame 17."""
+    cf = np.full((1, 1), -1)
+    sw = _sweep(cf)
+    sw.step_clear[0, 0, 7] = 0.5 * S.margin(8)                     # frame 8: half the margin away
+    upto = np.full(1, 48)
+    veto, _, _, _, soft, sf = _verdict(sw, upto)
+    assert not veto[0] and abs(soft[0] - 0.5) < 1e-9 and sf[0] == 8
+    old = _verdict(sw, upto, early_margin=False)
+    assert not old[0][0] and old[4][0] == 0.0

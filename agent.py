@@ -788,6 +788,7 @@ class Runner:
                                        death_min=getattr(self.args, "death_min", DEATH_MIN_FRAMES),
                                        risk_members=getattr(self.args, "risk_members", "second"),
                                        corner=getattr(self.args, "corner_risk", "on") == "on",
+                                       early_margin=getattr(self.args, "reflex", "veto") == "veto",
                                        modes=self.args.modes == "on",
                                        route_trial_gain=getattr(self.args, "route_trial_gain", TRIAL_GAIN))
                 cm = self.commit                    # route trials: deviation = the surprise trigger's tube
@@ -809,6 +810,7 @@ class Runner:
                             "death_min": getattr(self.args, "death_min", DEATH_MIN_FRAMES),
                             "risk_members": getattr(self.args, "risk_members", "second"),
                             "corner": getattr(self.args, "corner_risk", "on") == "on",
+                            "early_margin": getattr(self.args, "reflex", "veto") == "veto",
                             "modes": self.args.modes == "on",
                             "route_trial_gain": getattr(self.args, "route_trial_gain", TRIAL_GAIN)}
                     self.proc.call("init", self.model_path, lv, field, opts,
@@ -1946,6 +1948,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--corner-risk", choices=("on", "off"), default="on",
                     help="soft risk for passing a ledge's corner closer than the world model's error when missing it "
                          "slides into a hazard (plan.planner.corner_risk; 3-1's salt pit). off: the old planner")
+    ap.add_argument("--reflex", choices=("veto", "any-risk"), default="veto",
+                    help="when the reflex move replaces the chosen plan: veto (default) = only when the plan touches a "
+                         "hazard within 16 frames; a near pass in those frames costs soft risk in the estimate "
+                         "instead. any-risk = the old rule: any hazard within the margin in the first 16 frames "
+                         "(stalls in narrow passages with hazards on the walls)")
     ap.add_argument("--veto-members", type=int, default=1,
                     help="world-model members that must touch a hazard within the first 16 frames for a plan to be "
                          "vetoed (default 1: any of the 5; 3: a majority). With more than 1, a touch by fewer members "
