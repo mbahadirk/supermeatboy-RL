@@ -254,6 +254,7 @@ REFLEX_WINDOW = 16                           # frames of the current plan's path
 REFLEX_NEAR = 40.0                           # units beyond a deadly box (2 tiles): a hazard this near is danger
 EXPLORE_EVERY = 16                           # frames between an explore agent's decisions
 CONTACT_EPS = 0.01                           # units: a body put back to contact is this clear of the solid
+SIDE_SHRINK = 0.05                           # units: the collide guard's near-exact box for which face a body hits
 
 
 # ---- world model rollouts with per-row time offsets -------------------------------------------------------
@@ -372,7 +373,11 @@ def collide(ter: Terrain, prev: np.ndarray, s: np.ndarray, tol: float = COLLIDE_
     into solid tiles by more than `tol` are put back to contact, per axis as a platformer resolves it: if
     moving only along x (from the previous position) is free, x is kept and y goes back to where the box
     touches (vy = 0); else if moving only along y is free, y is kept and x goes back to contact (vx = 0); else
-    x then y, each to contact (a cut axis' velocity 0). "Free" and "touches": Terrain.travel of the box shrunk
+    x then y, each to contact (a cut axis' velocity 0). Which face a body hits is the game's question for the
+    body's real size: a body whose box already reaches less than `tol` below a block's top (3-1: a lower-half
+    block's top 0.7 above the feet) hits that block's side, not its top, so a row whose x move is free only for
+    the shrunk box (not for the box SIDE_SHRINK smaller than BODY) and whose y move alone is free for both keeps
+    y and goes back to contact along x (the game: (429.8,-224.7) -> (436.3,-228.7) ends at x 434, not on top). "Free" and "touches": Terrain.travel of the box shrunk
     by `tol` (exact on the guard's map of full and half blocks, slopes open: ter.rects_only); a cut move is
     then backed off to CONTACT_EPS of overlap (never behind its start). A body already deeper in a solid
     than that stays where it was. Flags, movement state and the jump key stay what the model predicted (the
@@ -388,6 +393,13 @@ def collide(ter: Terrain, prev: np.ndarray, s: np.ndarray, tol: float = COLLIDE_
     e = np.where(q < 1, np.maximum(q - (tol - CONTACT_EPS) / np.maximum(np.abs(D), 1e-12), 0.0), 1.0)
     q, e = q.reshape(4, m), e.reshape(4, m)              # a cut move backed off to CONTACT_EPS of overlap
     a = q[0] == 1                                        # x free: x kept, y after x
+    side = np.nonzero(a & (q[1] < 1) & (q[2] == 1))[0]   # y cut after x: does the real box hit a side first?
+    if len(side):
+        n = len(side)
+        qe = ter.travel(np.concatenate([x0[side], x0[side]]), np.concatenate([y0[side], y0[side]]),
+                        np.concatenate([dx[side], dy[side]]), np.repeat(np.array([False, True]), n),
+                        BODY - SIDE_SHRINK).reshape(2, n)
+        a[side[(qe[0] < 1) & (qe[1] == 1)]] = False      # x blocked, y free for the real box: y first
     b = ~a & (q[2] == 1)                                 # else y free: y kept, x after y
     c = ~a & ~b                                          # else x, then y from there
     nx = np.where(a, x1, x0 + np.where(b, e[3], e[0]) * dx)

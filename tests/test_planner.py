@@ -151,6 +151,16 @@ def test_collide_lands_on_the_half_floor_and_keeps_the_free_axis():
     # through the open cell next to the half block (the hole): nothing to clip
     prev, s = _rows([(290.0, 70.0)]), _rows([(290.0, 60.0)])
     assert collide(t, prev, s).tolist() == [False]
+    # falling at the half block's side with the feet 0.7 below its top (within the tolerance): the real box hits
+    # the side (the game, 3-1), so y is kept and x goes back to contact, not up onto the top
+    prev, s = _rows([(293.8, 55.3)]), _rows([(300.3, 51.3)], (390.0, -240.0))
+    assert collide(t, prev, s).tolist() == [True]
+    assert abs(s["x"][0] - (300.0 - BODY + CONTACT_EPS)) < 1e-4 and abs(s["y"][0] - 51.3) < 1e-4
+    assert s["vx"][0] == 0.0 and s["vy"][0] == -240.0
+    # the same with the feet 0.3 above the top: it lands on the top as before
+    prev, s = _rows([(293.8, 56.3)]), _rows([(300.3, 52.3)], (390.0, -240.0))
+    assert collide(t, prev, s).tolist() == [True]
+    assert abs(s["x"][0] - 300.3) < 1e-4 and abs(s["y"][0] - (50.0 + BODY - CONTACT_EPS)) < 1e-4
 
 
 @pytest.mark.skipif(not os.path.exists(MODEL), reason="no world model")
@@ -560,7 +570,8 @@ def test_cling_rule_fast_falls_are_not_support(monkeypatch):
     assert P.CLING_SPEED == float("inf")
     w = np.zeros((10, 10), np.uint32)
     w[0:10, 5] = 1                                                   # a wall: x 100..120
-    pl = SimpleNamespace(terrain=Terrain(w, 0.0, 0.0), lv=SimpleNamespace(plats=[]))
+    ter = Terrain(w, 0.0, 0.0)
+    pl = SimpleNamespace(terrain=ter, support_terrain=lambda keys=0: ter, lv=SimpleNamespace(plats=[]))
     x, y = np.array([93.0, 93.0, 93.0, 50.0]), np.array([110.0, 110.0, 110.0, 110.0])
     vy = np.array([-1.0, -9.0, 2.0, -1.0])                           # slow slide, fast fall, rising, no wall
     sup, g, side = P.Planner.support(pl, x, y, vy)

@@ -1,5 +1,33 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## 3-1 with human_v2: the corner of the salt pit (2026-11-13)
+
+**Live run** (`runs/human_v2_check01`, the user's two runs: `--risk-members second`, then `mean`; 0 of 11 waves finished):
+- 6 of the 11 deaths are at (434, -234..-237) in salt h15, on the far side of the pit.
+- 3 are in h1#1 at about (404, -225), after a jump into the pit that every candidate then vetoed.
+- 1 is in h3, and 1 is unexplained at (354, -39).
+- `runs/experiments/guard_side_v1/deaths.py` lists the last plans before each death.
+
+**The corner.**
+- The landing cell (x 440..460, y -240..-220, word 0x43842011) is a half block with its lower half solid (top y = -230). It is not a slope.
+- In the game the step (429.8, -224.7) -> (436.3, -228.7) ends at (434.0, -228.7). The feet were 0.7 below the top, so the body hit the block's side and slid down into the salt.
+- Our guard used a box shrunk by its 1-unit tolerance. To that box the move along x looked free, so it put the body on top of the block at (436.3, -224.7).
+
+**Guard side rule** (`plan.planner.collide`, `SIDE_SHRINK` = 0.05):
+- Applies when the x move is free only for the shrunk box (not for the near-exact box) and the y move alone is free.
+- Then y is kept and x goes back to contact, as the game does. The corner step now gives (434.01, -228.7).
+- Unit test: `test_collide_lands_on_the_half_floor_and_keeps_the_free_axis`.
+
+**Not enough alone** (`guard_side_v1/corner_decisions.py`: the same decisions under both rules):
+- The model's path is about 4 units higher than the real one: (431, -221) predicted where the game was at (430, -225).
+- In imagination the feet clear the corner by about 3 units, so the guard never acts.
+- The planner keeps choosing a short hop (`run-jump R hold 3`).
+- The user crosses the face x = 440 at y -197..-208 (feet about 20 units above the top) in 22 recorded crossings of `runs/human_01`.
+
+**Proposed next step (not done):**
+- A soft risk for a ledge corner cleared by less than the model's margin, when missing it slides into a hazard.
+- This would make the planner prefer the higher jumps the user makes.
+
 ## 3-1 salt pit, a less fearful risk rule, training on a GPU (2026-11-14)
 
 **3-1** (shapes_check01: 12 of 13 waves time out at (136, -254)):
