@@ -18,7 +18,22 @@
 - Held out: 8 of the 41 3-2 waves (every 5th: `eval_waves.json`; wave 29, the one measured above, is one).
 - Demos: human_v2's (the user's A+ finishes).
 - Features for the GPU: `runs/experiments/human_v3/features.npz`, 129 MB, 1,758,968 transitions (347,217 validation); 3-2 is 257,969 of them, 3-1 147,741, 2-12 40,034; same options as human_v2 (`--step 4 --sample-frac 0.4`).
-- Not trained yet. 3-2 becomes a trained level (as 3-1 did with the user's play).
+- Trained by the user on Colab: `runs/experiments/human_v3_gpu/wm_model.pt` (48 epochs, batch 4096, cuda). 3-2 is now a trained level (as 3-1 did with the user's play).
+
+**human_v3 checked** (not yet run in the game):
+- One-step report (its own 347,217 held-out transitions): position error median 0.08 / p90 0.89 (human_v2 on its own set: 0.10 / 1.01); death precision 0.68 (0.62).
+- The held-out 3-2 wave 29, PPO's own actions from f141 (`MODEL=... crumble_v1/ppo_cross.py 141`, 22 crossings):
+  - The worst member's error by 4-frame step, median: human_v2 0, 0.5, 1.4, 5.8, 12.8, 16.2, 27.9, 31.7, 34.4, 35.9, 41.0, 61.8; human_v3 0, 0.1, 0.3, 0.5, 1.2, 1.3, 1.9, 2.0, 2.8, 3.2, 4.3, 4.2.
+  - 3 of 5 members draw the wall jump up through the gap as the game does.
+- The user's held-out play (`compare.py --human`, `human_v3/compare/human.json`, 18 levels), weighted by samples:
+  - +16: median 0.71 -> 0.64, p90 6.10 -> 5.09.
+  - +48: median 4.00 -> 3.68, p90 34.9 -> 33.7.
+  - Per level at +48 p90: 7 better, 7 worse (3-1 16.8 -> 28.6, 5 waves; 1-13 29.1 -> 35.2), 4 even. At +32 median: 13 better, 1 worse.
+- Not checked: the held-out levels (1-18..1-20, 2-5..2-7).
+- The planner at 3-2's passage (`MODEL=... crumble_v1/ppo_state.py 29 0 ...`, `stall_rule.py`), human_v2 -> human_v3:
+  - From PPO's state at f146 (41, 226, vx -299): risk 1.00, estimate 378 -> `run-jump L hold 22 > run-jump R hold max`, risk 0.00, T 222 -> 159, estimate 227.
+  - From the agent's own arrival (check04 wave 3, f176, (82, 238), vx -220): `wait 8f > wait 8f` (269) -> `run-jump L hold 10 after 8f` twice, T 232 -> 191, estimate 239.
+  - Standing at (41, 244) with no speed it still waits (it needs a run-up), until the stall rule's charge grows.
 
 ## The stall rule (2026-11-14)
 
