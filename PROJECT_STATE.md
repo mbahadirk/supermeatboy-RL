@@ -1,5 +1,25 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## 3-2's passage at (41, 226): the model, and human_v3 (2026-11-14)
+
+**PPO passes it** (`runs/collect_more_ppo50_02`, 3-2, 41 waves of 50 agents):
+- 1,061 of 1,954 lives get above y 290 (past the gap at x -80..-40); 389 reach the goal's height.
+- The way: run left on the platform (y 226), a running jump off its left edge (x 35-41), over the floor salt to the left wall at (-74, 258), a wall jump right up through the gap (x -49, y 285).
+- The real paths are not close to the salt (`crumble_v1/ppo_cross.py`, 22 crossings from f141 of wave 29): smallest clearance median 13.4 units (min 9.8); the margin rule on the real path gives risk 0.02 (median).
+
+**The planner sees it as deadly because the model is wrong there:**
+- From PPO's own running state (f141, f146) every crossing has risk 0.84-1.00 (`crumble_v1/ppo_state.py`).
+- human_v2 rolled with PPO's own actions: the flight to the wall is right within 5-10 units, the wall jump is not. 4 of 5 members predict a fall from (-71, 258) where the game goes up to (-46, 303).
+- Median error by 4-frame step, second worst member: 0, 0.4, 1.0, 3.3, 7.5, 10.1, 11.6, 8.3, 8.2, 14.8, 29.0, 43.6.
+- human_v2 trained on 8 waves of 3-2 (`collect_2-10_ppo50_01`); `collect_more_ppo50_02` was not in its data.
+
+**human_v3** (`runs/experiments/human_v3/prepare.py`; manifest 21f5f3a5...):
+- human_v2's 866 shards, plus 48 of `collect_more_ppo50_02` (3-2, 2-12, 3-1) and 145 of the planner's own runs (`human_v2_check01..04`, the excluded levels left out).
+- Held out: 8 of the 41 3-2 waves (every 5th: `eval_waves.json`; wave 29, the one measured above, is one).
+- Demos: human_v2's (the user's A+ finishes).
+- Features for the GPU: `runs/experiments/human_v3/features.npz`, 129 MB, 1,758,968 transitions (347,217 validation); 3-2 is 257,969 of them, 3-1 147,741, 2-12 40,034; same options as human_v2 (`--step 4 --sample-frac 0.4`).
+- Not trained yet. 3-2 becomes a trained level (as 3-1 did with the user's play).
+
 ## The stall rule (2026-11-14)
 
 **Live run** (`runs/human_v2_check04`, the full jump, the reflex rule, the crumble clock):
