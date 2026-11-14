@@ -1,5 +1,47 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Learning from its own play: online learning, curiosity, daring (2026-11-14)
+
+**The user's report** (`runs/human_v3_check01`, human_v3): 3-2 stuck at the same place, 2-10 could not do a long jump away from the goal, 2-6 (wind, held out) not understood. The agent must learn from its tries, as PPO did, a general skill rather than the level.
+
+**Why it learned nothing** (measured on check01):
+- The world model never changes during a run. `wm.learner` (`--learn`) trains on a fixed manifest or old folders and not on held-out levels.
+- Held-out levels are not recorded at all (2-5, 2-6: no shards), so there was nothing to learn wind from.
+- It never tried the move. In 3-2 no wave entered the passage's left side (0 frames left of x 0 at y 230-290, 5 waves); every wave repeated the same decisions (the time step is locked).
+- In 3-2 every plan that moves on was vetoed (10 of 17 final candidates; a touch of the floor salt within 16 frames). A veto is ranked below every other plan, so the stall charge (824 frames at the end) could not change the choice.
+- 1-2 (finished before) stood 1,155 frames at (-12, -254). The field is flat there (T = 80 from x -160 to 40), every 48-frame plan tied and the stall charge was the same for all. The user's way leaves that stretch to the left and climbs.
+
+**Online learning** (`wm/online.py`, `agent.py --online`):
+- A child process (below-normal priority, 2 threads) watches the run's recorded waves.
+- After each wave it builds the new wave with the model's own encoding, fine-tunes a copy of the published model on the run's earlier waves (lr 3e-5, 4 passes, each batch 90% replay of human_v3's training data: `runs/experiments/human_v3/replay.npz`, 150k + 20k rows, `make_replay.py`).
+- It tests the copy on the newest wave (never trained on). It publishes `runs/<name>/online/wm_model.pt` only when the newest wave's one-step loss is lower and the replay validation loss is at most 5% higher.
+- Between waves the agent loads a newer published model (main process and the planner process: `set_model`).
+- Held-out levels are recorded to `runs/<name>/wm_heldout` with `--online` (never a `wm_data` folder: offline training never sees them). A first-life evaluation records and learns nothing.
+- The base model is never written.
+- Measured (`runs/experiments/online_v1`):
+  - A cycle takes 6-8 s (3-2, 1-4 waves of data).
+  - lr 1e-4, half replay: fresh loss 0.007 -> -0.035, replay +6%, the agent's own 1-8 waves +48 p90 8.5 -> 11.3 (forgetting).
+  - lr 3e-5, 90% replay: fresh -> -0.027, replay +0-4%, other levels' open-loop errors even or a little lower (1-8 +48 3.6/8.5 -> 3.3/8.3; 3-1 5.3/68.0 -> 5.0/67.0; 1-1 35.0/76.8 -> 36.3/77.5).
+  - An anchor to the start weights kept the replay flat but learned half as much (`sweep.py`; off).
+  - In the loop test with waves arriving one by one (`online_v1/loop`), the 2% slack refused every candidate; now 5%.
+
+**Daring** (`Planner.plan`, `ranked`):
+- While stalled (the stall rule), a vetoed plan is ranked like the others at one death's cost (soft risk raised to 1). Once the stall charge outgrows a death, the agent tries it.
+- REFLEX does not override it then.
+- 3-2 offline (`online_v1/curious.py`, check01 wave 1 stalled since 371): at f700 it takes `run-jump L hold 10 > wall-jump L hold 8` (risk 1.00, T 217 -> 202) instead of waiting.
+
+**Curiosity** (`Planner.visit`, `Planner.novelty`):
+- Tile visit counts per level for the run, from the real positions (every wave; kept across level changes).
+- While stalled, a plan pays the stall charge only for the share of its path in tiles already visited.
+- 1-2 offline (stalled since 64): f200 `wall-jump L hold 15 > wait 8f` (walks back along the floor) -> `run-jump L hold 22 > run R 16f` (charge 76 -> 25); f400 -> `run-jump L hold max > wall-jump R hold 8` (276 -> 92).
+
+**Not run in the game.** Tests: `tests/test_online.py`.
+
+**Unknowns:**
+- Whether 2-6's wind is learned from a few waves.
+- Whether daring kills too often where waiting is right (a moving hazard with a long period).
+- 2-10 was not in check01; not looked at.
+
 ## 3-2's passage at (41, 226): the model, and human_v3 (2026-11-14)
 
 **PPO passes it** (`runs/collect_more_ppo50_02`, 3-2, 41 waves of 50 agents):

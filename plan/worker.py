@@ -85,6 +85,9 @@ def serve(conn, cancel, threads: int):
                 planner.bounds = bounds
             elif name == "frame_level":
                 frame_level(a[0])
+            elif name == "set_model":                          # a newer world model (agent.py --online / --learn)
+                from wm.model import WorldModel
+                planner.model = WorldModel.load(a[0]).eval()
             elif name == "moves_learn":
                 if moves is not None:
                     moves.learn = bool(a[0])

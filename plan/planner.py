@@ -208,6 +208,14 @@ NO_PROGRESS = 0.0                            # frames: "no progress" when T(star
 # does not get below the best T this wave has reached pays the frames already spent without getting below it.
 STALL_FREE = 60                              # frames without progress that cost nothing (timing a hazard, a wall)
 STALL_STEP = 10.0                            # frames of T: progress that resets the stall, and frees a plan of it
+# Daring: while stalled, a vetoed plan (a touch within the first frames) is no longer ranked below every other: it
+# costs one death (soft risk 1), so once the stall charge outgrows a death the agent tries it (the user, 2026-11-14:
+# "if progress does not move it should be penalized and dare to die to move on"); REFLEX does not override it then.
+# Curiosity (Planner.novelty): while stalled, a plan pays the stall charge only for the share of its path that runs
+# through tiles the run has already been in on this level (any wave); the unvisited share counts as progress. Every
+# wave repeated the same decisions (the time step is locked), so a stall was the same stall each wave and nothing new
+# was ever tried, or learned (3-2: the passage's left side never entered in 5 waves; 1-2: 1,155 frames on a stretch
+# where every plan tied). The counts are per level, kept for the run, from the real positions (Planner.observe).
 SAFE_RISK = 0.5                              # soft risk (completion's deaths included) under which a landing alternative counts as safe
 # MoveMemory: a death within REPEAT_FRAMES wave frames and BODY units of an earlier death on the level (this run) is
 # the same death repeated: its point of no return walks back one more (cell, first move) pair per repeat
@@ -1392,6 +1400,39 @@ class Planner:
             self.crumble.pop(divmod(int(idx), self.terrain.W), None)
         self._stages = {}
 
+    def _visits(self):
+        """This level's tile visit counts for the run (frames a real agent's centre was in each tile), kept across
+        waves and level changes (Planner.visits: level name -> H x W)."""
+        if not hasattr(self, "visits"):
+            self.visits = {}
+        H, W = self.terrain.H, self.terrain.W
+        name = getattr(self.lv, "name", None)
+        v = self.visits.get(name)
+        if v is None or v.shape != (H, W):
+            v = self.visits[name] = np.zeros((H, W), np.int32)
+        return v
+
+    def visit(self, x: float, y: float):
+        v = self._visits()
+        c, r = int((x - self.lv.ox) // 20.0), int((y - self.lv.oy) // 20.0)
+        if 0 <= r < v.shape[0] and 0 <= c < v.shape[1]:
+            v[r, c] += 1
+
+    def novelty(self, xs, ys) -> np.ndarray:
+        """Per path (rows of xs, ys: positions per column, column 0 = now): the share of its later positions in
+        tiles no real agent of the run has been in on this level (curiosity: STALL rule above). Outside the map: not
+        new."""
+        xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+        if xs.ndim == 1:
+            xs, ys = xs[None], ys[None]
+        v = self._visits()
+        c = np.floor((xs[:, 1:] - self.lv.ox) / 20.0).astype(np.int64)
+        r = np.floor((ys[:, 1:] - self.lv.oy) / 20.0).astype(np.int64)
+        inside = (r >= 0) & (r < v.shape[0]) & (c >= 0) & (c < v.shape[1])
+        new = np.zeros(c.shape, bool)
+        new[inside] = v[r[inside], c[inside]] == 0
+        return new.mean(1) if new.shape[1] else np.zeros(len(xs))
+
     def stalled(self, agent: int, frame: int, T0: float) -> tuple[float, float]:
         """The stall rule's state at a decision: (frames without progress beyond the free ones, the best T so
         far). Progress: the decision's T is STALL_STEP below the best one (which then becomes the best, and the
@@ -1585,6 +1626,7 @@ class Planner:
         ev = self.surprise.observe(agent, frame, x, y, dead)
         if not dead:
             self.touch(int(frame), float(x), float(y))
+            self.visit(float(x), float(y))
         if dead:
             ev = ev + self.memory.update(agent, frame, dead=True)
             at = self.route.dead(agent, frame)
@@ -1903,6 +1945,14 @@ class Planner:
         def vetoed_total(vf, est):
             return VETO_SCORE + vf - VETO_TIE * np.minimum(est, 1e5)
 
+        def ranked(veto, vf, est, soft):
+            """Scores: a vetoed plan (a touch within VETO_FRAMES) below every other, unless the agent is stalled
+            (the stall rule): then it is a candidate like the others at one death's cost (its soft risk raised
+            to 1): when waiting has cost more than dying would, it dares (and its outcome is learned from)."""
+            if stalled > 0:
+                return -(est + np.where(veto, scale * (1.0 - np.minimum(soft, 1.0)), 0.0))
+            return np.where(veto, vetoed_total(vf, est), -est)
+
         start_in_goal = bool(len(self.goal_boxes)) and bool(
             (box_distances(np.array([x0]), np.array([y0]), self.goal_boxes) < S.BODY).any())
 
@@ -1936,9 +1986,10 @@ class Planner:
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
         death1 = np.array([death_of(m.name) for m in self.lib])
         pen1 = scale * soft1 + fail1 + death1
-        pen1 = pen1 + np.where(succ1, 0.0, stall_penalty(stalled, t_best, self._tt(tend1)))
+        pen1 = pen1 + np.where(succ1, 0.0, stall_penalty(stalled, t_best, self._tt(tend1))
+                               * (1.0 - self.novelty(out1["x"][0, :, :steps1 + 1], out1["y"][0, :, :steps1 + 1])))
         est1 = end1 + self._tt(tend1) + pen1
-        score1 = np.where(veto1, vetoed_total(vf1, est1), -est1)
+        score1 = ranked(veto1, vf1, est1, soft1)
         score1 = np.where(succ1, success_total(tg1, pen1), score1)
         order1 = np.argsort(-score1, kind="stable")
         keep1 = order1[:self.B1]
@@ -2000,9 +2051,10 @@ class Planner:
         masks2 = self._path_keys(xs2[:, :, :K + 1], ys2[:, :, :K + 1], keys, up2, sw2.contact_frame)[0][0, :, -1]
         tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2, masks2)
         pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
-        pen2 = pen2 + np.where(succ2, 0.0, stall_penalty(stalled, t_best, self._tt(tend2)))
+        pen2 = pen2 + np.where(succ2, 0.0, stall_penalty(stalled, t_best, self._tt(tend2))
+                               * (1.0 - self.novelty(xs2[0, :, :K + 1], ys2[0, :, :K + 1])))
         est2 = up2 + self._tt(tend2) + pen2
-        score2 = np.where(veto2, vetoed_total(vf2, est2), -est2)
+        score2 = ranked(veto2, vf2, est2, soft2)
         score2 = np.where(succ2, success_total(tg2, pen2), score2)
         pick = np.argsort(-score2, kind="stable")[:self.S]
         final = [cands[c] for c in pick]
@@ -2201,9 +2253,10 @@ class Planner:
         death3 = np.array([death_of(nm) for nm in first_name])
         soft3 = np.minimum(saf.soft_risk + comp_risk, 1.0)          # one death at most
         risk3 = scale * soft3
-        stall3 = np.where(succ3, 0.0, stall_penalty(stalled, t_best, t_end3))
+        novel3 = self.novelty(out3["x"].mean(0), out3["y"].mean(0)) if stalled > 0 else np.zeros(n3)
+        stall3 = np.where(succ3, 0.0, stall_penalty(stalled, t_best, t_end3) * (1.0 - novel3))
         est3 = base3 + risk3 + fail3 + death3 + stall3
-        total3 = np.where(saf.veto, vetoed_total(saf.veto_frame, est3), -est3)
+        total3 = ranked(saf.veto, saf.veto_frame, est3, soft3)
         total3 = np.where(succ3, success_total(tg3, risk3 + fail3 + death3), total3)
         landing3 = lands | succ3 | np.array([r is not None and r["continuation"] is not None and r["on"] != "air"
                                              for r in comp_rec])
@@ -2262,7 +2315,7 @@ class Planner:
             # frames is soft risk in the estimate now (_verdict's early margin): the reflex move is a candidate
             # like the others. (Before: any early risk > 0 overrode, least risk first whatever the progress; in
             # 3-2's shaft, salt in both walls, that was every other decision: estimate 531 chosen over 364.)
-            if saf.veto[best] or (not self.early_margin and er[best] > 0):
+            if (saf.veto[best] and stalled <= 0) or (not self.early_margin and er[best] > 0):
                 why = (f"vetoed f{int(saf.veto_frame[best])}" if saf.veto[best] else f"early risk {er[best]:.2f}")
                 switch = {"kept": False, "gain": None, "margin": None, "unit": "frames",
                           "reason": f"reflex override: the chosen plan was {why}"}

@@ -576,6 +576,13 @@ class Runner:
                 self.wm = Collector(os.path.join(self.run_dir, "wm_data"), source=src)
                 self.wm.meta_extra = {"agent_sources": {"planner": list(range(self.n_plan)),
                                                         "explore": list(range(self.n_plan, self.n_total))}}
+        self.wm_held = None                     # --online: the held-out levels' play (runs/<name>/wm_heldout: never in
+        if self.wm is not None and getattr(args, "online", False) and self.evaluation is None:   # offline training)
+            from wm.buffer import Collector
+            self.wm_held = Collector(os.path.join(self.run_dir, "wm_heldout"), source=self.wm.source)
+            self.wm_held.meta_extra = dict(self.wm.meta_extra, heldout=True)
+        self.online = None                      # --online: the wm.online child process
+        self.online_mtime = 0.0
         if telemetry is not None:
             self.tel = telemetry
         else:
@@ -681,8 +688,11 @@ class Runner:
         self.cost.reset()
         from wm.buffer import eval_levels
         self.protected = self.evaluation is not None or info["name"] in eval_levels()
-        if self.wm and not self.protected:
-            self.wm.level(lv, info)
+        for c in (self.wm, self.wm_held):           # the other collector's wave in progress ends with its level
+            if c is not None and c is not self.rec_for(self.protected):
+                c.cut("level change")
+        if self.rec is not None:
+            self.rec.level(lv, info)
         self.fw.new_level()
         self.commit.tube.refresh()                 # the surprise threshold, fixed for this level
         self.hz_start, self.moving, self.sweep = None, set(), set()
@@ -896,9 +906,9 @@ class Runner:
         self.dt_ms = dt
         self.fw.observe(frame, m.get("hz", []), m.get("pf"), m.get("sh", []), lv.hz_keep, lv.fans, dt,
                         terrain=pl.terrain if pl is not None else None)     # live tiles: where shots stop
-        if self.wm and not self.protected:
+        if self.rec is not None:
             C.go("wm_data")
-            self.wm.frame(m, list(lv.hz_ids), list(lv.hz_keep))
+            self.rec.frame(m, list(lv.hz_ids), list(lv.hz_keep))
 
         # what happened since the last frame: deaths, finishes, surprises, failed moves
         C.go("observe")
@@ -1059,9 +1069,9 @@ class Runner:
         if self.tel is not None:
             C.go("telemetry")
             self.send_frame(m, frame, states, act_idx, boxes, kept, fboxes, dt)
-        if self.wm and not self.protected:
+        if self.rec is not None:
             C.go("wm_data")
-            self.wm.agents(self.wave_no, frame, states, alive_before, held_before, act_idx, [float("nan")] * n)
+            self.rec.agents(self.wave_no, frame, states, alive_before, held_before, act_idx, [float("nan")] * n)
         C.go("other")
         if self.demo is not None and frame >= self.demo.end_frame:
             # the demo's actions ran out a second ago: copies still standing count as done (they would keep the
@@ -1440,8 +1450,8 @@ class Runner:
     def on_wave_end(self, m: dict):
         self.pl_sync(drop="the wave ended")
         lv = self.level
-        if self.wm and not self.protected:
-            self.wm.wave_end(m["wave"], m, held=list(self.held))
+        if self.rec is not None:
+            self.rec.wave_end(m["wave"], m, held=list(self.held))
         self.wave_no = int(m.get("wave", self.wave_no))
         status = m.get("status", [])
         frame = int(m.get("frame", 0))
@@ -1599,6 +1609,8 @@ class Runner:
             self.build_field(f"rebuild {self.rebuilds}/{FIELD_REBUILDS}: moving hazards / kill box / platforms")
         if self.learn:
             self.load_live()                        # between waves only: a newer published model
+        if self.online is not None:
+            self.load_online()                      # between waves only: the online learner's newer model
         self.new_wave(len(status) if status else len(self.alive))
         self.post_overlay(0, force=True)
         self.flush()
@@ -1751,28 +1763,101 @@ class Runner:
             print(f"[learn] could not load {p}: {e}", flush=True)
             return
         self.live_mtime = mt
-        if m.step != self.model.step or len(m.members) != len(self.model.members):
-            print(f"[learn] {p}: step {m.step} / {len(m.members)} members, the planner has {self.model.step} / "
-                  f"{len(self.model.members)}: not loaded", flush=True)
-            return
-        from wm.features import model_layout
-        try:
-            same_inputs = model_layout(m) == model_layout(self.model)     # the planner's tile encoding stays
-        except ValueError as e:
-            print(f"[learn] {p}: {e}: not loaded", flush=True)
-            return
-        if not same_inputs:
-            print(f"[learn] {p}: feature protocol {model_layout(m).protocol}, the planner uses "
-                  f"{model_layout(self.model).protocol}: not loaded", flush=True)
+        if not self.compatible(m, p, "learn"):
             return
         info = (m.info or {}).get("learner", {})
         old = (info.get("parent_errors") or {}).get("16", [None])[0]
         new = (info.get("errors") or {}).get("16", [None])[0]
+        self.swap_model(m, p)
+        print(f"[learn] model v{info.get('version', '?')} loaded (+16 error {old} -> {new})", flush=True)
+        self.event("learn model", None, version=info.get("version"), err16=[old, new], path=p)
+
+    @property
+    def rec(self):
+        """The collector this level's play goes to: wm_data (not held out), wm_heldout (held out, --online), or None
+        (no recording: --wm-collect off, a first-life evaluation, or a held-out level without --online)."""
+        return self.rec_for(self.protected)
+
+    def rec_for(self, protected: bool):
+        if self.evaluation is not None:
+            return None
+        return self.wm_held if protected else self.wm
+
+    def swap_model(self, m, p: str):
+        """Between waves: the planner's world model (here and in the planner process) becomes m (loaded from p)."""
         self.model, self.model_path = m, p
         if self.planner is not None:
             self.planner.model = m
-        print(f"[learn] model v{info.get('version', '?')} loaded (+16 error {old} -> {new})", flush=True)
-        self.event("learn model", None, version=info.get("version"), err16=[old, new], path=p)
+        if self.proc is not None:
+            self.proc.call("set_model", p)
+
+    def compatible(self, m, p: str, tag: str) -> bool:
+        if m.step != self.model.step or len(m.members) != len(self.model.members):
+            print(f"[{tag}] {p}: step {m.step} / {len(m.members)} members, the planner has {self.model.step} / "
+                  f"{len(self.model.members)}: not loaded", flush=True)
+            return False
+        from wm.features import model_layout
+        try:
+            same_inputs = model_layout(m) == model_layout(self.model)     # the planner's tile encoding stays
+        except ValueError as e:
+            print(f"[{tag}] {p}: {e}: not loaded", flush=True)
+            return False
+        if not same_inputs:
+            print(f"[{tag}] {p}: feature protocol {model_layout(m).protocol}, the planner uses "
+                  f"{model_layout(self.model).protocol}: not loaded", flush=True)
+        return same_inputs
+
+    def start_online(self):
+        """wm.online as a child (below-normal priority): it learns from this run's waves (held-out levels too) and
+        publishes runs/<name>/online/wm_model.pt when a model is better on the newest wave and no worse on the base
+        data's replay sample. The base model is never written."""
+        import subprocess
+        out_dir = os.path.join(self.run_dir, "online")
+        os.makedirs(out_dir, exist_ok=True)
+        data = [self.wm.dir] + ([self.wm_held.dir] if self.wm_held is not None else [])
+        log = open(os.path.join(out_dir, "online_output.txt"), "a", encoding="utf-8")
+        flags = 0x4000 if sys.platform == "win32" else 0          # BELOW_NORMAL_PRIORITY_CLASS
+        self.online = subprocess.Popen([sys.executable, "-m", "wm.online", "--init", self.model_path, "--replay",
+                                        self.args.online_replay, "--out", out_dir, "--data", *data],
+                                       cwd=HERE, stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
+        log.close()
+        self.online_path = os.path.join(out_dir, "wm_model.pt")
+        print(f"[online] learner started (pid {self.online.pid}; log {os.path.join(out_dir, 'online.log')})", flush=True)
+
+    def load_online(self):
+        """Between waves: the online learner's published model when it is newer than the one in use."""
+        p = self.online_path
+        try:
+            if not os.path.exists(p) or os.path.getmtime(p) <= self.online_mtime:
+                return
+            mt = os.path.getmtime(p)
+            from wm.model import WorldModel
+            m = WorldModel.load(p).eval()
+        except (OSError, RuntimeError, KeyError, ValueError) as e:
+            print(f"[online] could not load {p}: {e}", flush=True)
+            return
+        self.online_mtime = mt
+        if not self.compatible(m, p, "online"):
+            return
+        self.pl_sync(drop="model swap")
+        self.swap_model(m, p)
+        info = (m.info or {}).get("online", {})
+        print(f"[online] model v{info.get('version', '?')} loaded (losses {info.get('losses')})", flush=True)
+        self.event("online model", None, version=info.get("version"), losses=info.get("losses"), path=p)
+
+    def stop_online(self):
+        if self.online is None:
+            return
+        try:
+            self.online.terminate()
+            self.online.wait(5)
+        except Exception:
+            try:
+                self.online.kill()
+            except Exception:
+                pass
+        print("[online] learner stopped", flush=True)
+        self.online = None
 
     def start_learner(self):
         """wm.learner as a child (below-normal priority), from the default model unless --live-dir has a newer one."""
@@ -1817,11 +1902,14 @@ class Runner:
                 pass
             self.proc.close()
         self.stop_learner()
+        self.stop_online()
         if self.evaluation is not None:
             self.evaluation.interrupt("run stopped before the first life completed")
-        if self.wm is not None:
+        for c in (self.wm, self.wm_held):
+            if c is None:
+                continue
             try:
-                self.wm.cut("stop")                 # Ctrl+C / STOP: the wave in progress is kept (partial)
+                c.cut("stop")                       # Ctrl+C / STOP: the wave in progress is kept (partial)
             except OSError as e:
                 print(f"[wm] could not write the cut wave: {e}", flush=True)
         self.flush()
@@ -1851,6 +1939,9 @@ class Runner:
                   f"on screen now, if any, has the game's {GAME_POOL}: enter or restart a level for all)", flush=True)
         if self.learn:
             self.start_learner()
+        if getattr(self.args, "online", False) and self.model is not None and self.wm is not None \
+                and self.evaluation is None:
+            self.start_online()
         cfg = {"agents": self.n_total, "pool": self.pool, "wave_frames": int(self.args.wave_seconds * HZ),
                "finish_frames": 60, "debug": False, "finish_quota": max(0, self.args.end_after), "probe_frames": 0,
                "lock_step": True}
@@ -1995,6 +2086,13 @@ def build_parser() -> argparse.ArgumentParser:
     split.add_argument("--dataset-manifest", help="--learn: immutable world-model dataset snapshot")
     split.add_argument("--legacy-split", action="store_true", help="--learn: explicit old global-modulo compatibility")
     ap.add_argument("--live-dir", default=LIVE_DIR, help="--learn: the learner's folder (default runs/wm_live)")
+    ap.add_argument("--online", action="store_true",
+                    help="learn between waves: wm.online fine-tunes a copy of the world model on this run's own waves "
+                         "(held-out levels too, recorded to runs/<name>/wm_heldout, never used offline) mixed with a "
+                         "replay of the base training data, and the planner takes it between waves when it predicts "
+                         "the newest wave better and the replay no worse (runs/<name>/online). Turns on --wm-collect")
+    ap.add_argument("--online-replay", default=os.path.join(HERE, "runs", "experiments", "human_v3", "replay.npz"),
+                    help="--online: the base data's replay sample (runs/experiments/human_v3/make_replay.py)")
     ap.add_argument("--self-demos", default=SELF_DEMOS, help="--learn: self-demo list (default runs/demos/self.json)")
     ap.add_argument("--no-overlay", action="store_true", help="do not draw the plan in the game")
     ap.add_argument("--telemetry", default="127.0.0.1:47800",
@@ -2073,6 +2171,14 @@ def main():
         args.name = args.name or time.strftime("search_%Y%m%d-%H%M%S")
     if args.learn:
         args.wm_collect = True                      # the learner trains on this run's shards too
+    if args.online:
+        if args.learn or args.demo or args.demo_level or args.search or args.human:
+            raise SystemExit("--online learns from the planned agents' own play: not with --learn / --demo / "
+                             "--search / --human")
+        if not os.path.exists(args.online_replay):
+            raise SystemExit(f"--online needs its replay sample {args.online_replay} "
+                             "(python runs/experiments/human_v3/make_replay.py)")
+        args.wm_collect = True                      # the online learner trains on this run's waves
     if args.human:
         args.name = args.name or time.strftime("human_%Y%m%d-%H%M%S")
     args.name = args.name or time.strftime("first_%Y%m%d-%H%M%S" if args.eval_first else "plan_%Y%m%d-%H%M%S")

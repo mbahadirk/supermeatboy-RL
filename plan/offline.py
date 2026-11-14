@@ -125,6 +125,7 @@ def closed_loop(d: str, level: str, model: str, frames: int = 300, replan: int =
     for r in sorted((r for r in rows if int(r["agent"]) == int(r0["agent"]) and int(r["frame"]) < start
                      and r["status"] == 0), key=lambda r: int(r["frame"])):
         planner.touch(int(r["frame"]), float(r["x"]), float(r["y"]))     # and the crumble tiles it touched
+        planner.visit(float(r["x"]), float(r["y"]))                      # and the tiles it has been in
     goal_boxes = np.asarray(lv.goal_boxes(), np.float64).reshape(-1, 5)
     key_boxes = list(lv.key_boxes())
     plans, played, plan_ms, check_s, events = [], {}, 0.0, 0.0, []
