@@ -169,7 +169,8 @@ from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MAX_LEN, padded
 from plan.progress import FX_GROUND, ProgressField
 from wm.buffer import ROW
 from wm.features import (BIN_NAMES, N_STATES, EVENTS, LevelGeom, actions_into, box_distances, featurize,
-                         hazard_features, model_layout, model_prior, platform_features, prior, require_geom)
+                         hazard_features, model_layout, model_prior, platform_features, prior, require_geom,
+                         tile_patch)
 from wm.model import N_CONT
 from wm.protocol import GRAVITY_PRIOR
 from wm.model import WorldModel
@@ -572,7 +573,9 @@ def prior_into(s, dt_ms, f, protocol, groups, worlds):
 def features_into(X, groups, s, a, dt_ms, geom, worlds):
     """wm.features.featurize for rows in groups [(offset, row indices)] that see different worlds: one call for
     every row with the first group's world, then only the hazard and platform columns (the parts that depend on
-    the world besides wind) per other group. A group whose wind (fans) differs gets a full call."""
+    the world besides wind) per other group, and its tile patch (wm.features.tile_patch) when the protocol paints
+    the moving platforms into it (Layout.platforms) and its platforms differ. A group whose wind (fans) differs
+    gets a full call."""
     w0 = worlds[0]
     if len(groups) == 1:
         idx = groups[0][1]
@@ -586,12 +589,15 @@ def features_into(X, groups, s, a, dt_ms, geom, worlds):
     featurize(s, a, dt_ms, geom, np.zeros((0, 5)), w0.pf, w0.pf_prev, w0.dt_prev_s, w0.fans, out=X)
     lay = geom.layout                                # wm.features.featurize: [..., hazards, platform]
     haz_cols, plat_cols = slice(lay.haz, lay.plat), slice(lay.plat, lay.feat_dim)
+    patch_cols = slice(lay.patch, lay.haz)
     for (o, idx), w in zip(groups, worlds):
         x, y = s["x"][idx].astype(np.float64), s["y"][idx].astype(np.float64)
         if w.fans != w0.fans:
             X[idx] = featurize(s[idx], a[idx], dt_ms, geom, _model_boxes(w.boxes, x, y), w.pf, w.pf_prev,
                                w.dt_prev_s, w.fans)
             continue
+        if lay.platforms and w.pf != w0.pf:           # the first call painted w0's platforms: this group's own
+            X[idx, patch_cols] = tile_patch(geom, x, y, s["keys"][idx], w.pf)
         X[idx, haz_cols] = hazard_features(x, y, _model_boxes(w.boxes, x, y))
         X[idx, plat_cols] = platform_features(x, y, w.pf, w.pf_prev, w.dt_prev_s)
 

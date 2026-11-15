@@ -145,8 +145,10 @@ def test_a_replay_sample_of_another_step_feature_or_prior_protocol_is_refused():
     meta = {"step": 4, "protocol": "tile-shapes-v1", "prior_protocol": "gravity-v1"}
     assert W.replay_mismatch(meta, stub("tile-shapes-v1")) is None
     assert W.replay_mismatch({"step": 4, "protocol": "tile-shapes-v1"}, stub("tile-shapes-v1")) is None
-    why = W.replay_mismatch(meta, stub("tile-accel-v1"))                 # human_v4's model with human_v3's sample
-    assert why and "tile-shapes-v1" in why and "tile-accel-v1" in why and "human_v4/make_replay.py" in why
+    why = W.replay_mismatch(meta, stub("tile-plat-v1"))                  # human_v4's model with human_v3's sample
+    assert why and "tile-shapes-v1" in why and "tile-plat-v1" in why and "human_v4/make_replay.py" in why
+    stale = {"step": 4, "protocol": "tile-accel-v1", "prior_protocol": "gravity-v1"}     # the replaced protocol's
+    assert W.replay_mismatch(stale, stub("tile-plat-v1"))                # sample never feeds a tile-plat-v1 model
     assert W.replay_mismatch(meta, stub("tile-shapes-v1", prior="gravity-fan-wind-v1"))
     assert W.replay_mismatch(meta, stub("tile-shapes-v1", step=1))
     assert W.replay_mismatch({"step": 4}, stub("tile-shapes-v1"))       # a sample recording no feature protocol

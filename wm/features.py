@@ -8,7 +8,7 @@ mutating the level. This does not predict future key pickup. The tile encoding i
 training uses FEATURE_PROTOCOL unless it explicitly asks for another.
 
 Input (layout(protocol).feat_dim floats; FEAT_DIM = 291 for per-agent-key-tiles-v1, 389 for tile-shapes-v1, 634
-for tile-accel-v1):
+for tile-plat-v1):
   own state   vx/400, vy/600, time step / 33 ms, jump held / 20, position inside its tile (x, y; -0.5..0.5),
               wind here (/2000, the game's formula)                                                    8
   flags       the character's 32 flag bits (+0x7b4: airborne, on a wall, facing, input bits ...)     32
@@ -19,9 +19,11 @@ for tile-accel-v1):
               (crumble / lock / switch)                                                     4 x 49 = 196
               tile-shapes-v1: full, half, slope, special, open x, open y (the open side of a half
               block, the open corner of a slope: -1 / 0 / +1 each)                          6 x 49 = 294
-              tile-accel-v1: tile-shapes-v1's six, then accelerator, flip, wall, face a, face b
+              tile-plat-v1: tile-shapes-v1's six, then accelerator, flip, wall, face a, face b
               (realpath.accel_bits: a Salt Factory accelerator and its raw orientation bits,
               0 / 1 each; outside the map: plain solid, 0)                                11 x 49 = 539
+              and the frame's moving platforms painted in as plain full tiles (paint_platforms: a cell
+              at least half covered by bars, if no real tile is there)
   hazards     the 3 nearest (box edge distance): dx, dy, distance (/100), half w, half h (/50)         15
   platform    the nearest: dx, dy (/100), upright, vx, vy (/300), present                              6
 
@@ -41,8 +43,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from realpath import SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE, SHAPE_SPECIAL, accel_bits, box_distance, tile_shape
-from game.level import LockContext
-from wm.protocol import (ACCEL_TILES_PROTOCOL, FAN_WIND_PRIOR, FEATURE_PROTOCOL, GRAVITY_PRIOR, KEY_TILES_PROTOCOL,
+from game.level import LockContext, platform_boxes
+from wm.protocol import (FAN_WIND_PRIOR, FEATURE_PROTOCOL, GRAVITY_PRIOR, KEY_TILES_PROTOCOL, PLAT_TILES_PROTOCOL,
                          PRIOR_PROTOCOL, PRIOR_PROTOCOLS, TILE_SHAPES_PROTOCOL, input_protocol, prior_protocol)
 from wm.buffer import transitions, chains, load_level, load_shards
 
@@ -53,7 +55,7 @@ N_ACTIONS = 10
 N_HAZ = 3
 AIR, WALL, FACE = 0x2, 0x200, 0x1
 CONT_NAMES = ["vx", "vy", "dt", "held", "in-tile x", "in-tile y", "wind x", "wind y"]
-TILE_CHANNELS = {KEY_TILES_PROTOCOL: 4, TILE_SHAPES_PROTOCOL: 6, ACCEL_TILES_PROTOCOL: 11}
+PAINT_COVER = 0.5                      # a patch cell at least this share covered by moving platforms is painted
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,8 @@ class Layout:
     """One feature protocol's input columns: [continuous, flags, state, action, tile patch, hazards, platform]."""
     protocol: str
     channels: int                                  # tile channels per patch cell
+    accel: bool = False                            # channels 6..10: realpath.accel_bits
+    platforms: bool = False                        # moving platforms painted into the patch (paint_platforms)
 
     @property
     def patch(self) -> int:
@@ -83,7 +87,8 @@ class Layout:
         return self.feat_dim + (int(step) - 1) * N_ACTIONS
 
 
-LAYOUTS = {p: Layout(p, c) for p, c in TILE_CHANNELS.items()}
+LAYOUTS = {KEY_TILES_PROTOCOL: Layout(KEY_TILES_PROTOCOL, 4), TILE_SHAPES_PROTOCOL: Layout(TILE_SHAPES_PROTOCOL, 6),
+           PLAT_TILES_PROTOCOL: Layout(PLAT_TILES_PROTOCOL, 11, accel=True, platforms=True)}
 
 
 def layout(protocol: str) -> Layout:
@@ -143,7 +148,7 @@ class LevelGeom:
 
     def _channels(self, words):
         """The protocol's tile channels of these words, from realpath.tile_shape (the one shape owner) and, for
-        tile-accel-v1, realpath.accel_bits (the one accelerator owner)."""
+        tile-plat-v1, realpath.accel_bits (the one accelerator owner)."""
         t = tile_shape(words)
         slope = t.kind == SHAPE_SLOPE
         ch = np.zeros((self.layout.channels,) + words.shape, np.float32)
@@ -157,7 +162,7 @@ class LevelGeom:
             ch[2] = slope
             ch[4] = t.ox
             ch[5] = t.oy
-        if self.layout.protocol == ACCEL_TILES_PROTOCOL:
+        if self.layout.accel:
             ch[6:11] = accel_bits(words)                   # accel, flip, wall, face a, face b
         return ch
 
@@ -184,8 +189,7 @@ class LevelGeom:
     def patches(self, x: np.ndarray, y: np.ndarray, keys=None) -> np.ndarray:
         """The channels x (2P+1) x (2P+1) tile patch around each point (channel, then row, then column), flattened: one
         lookup in a table of every padded cell's patch (built once, kept up to date by set_tile / reset)."""
-        c = np.clip(np.floor((x - self.ox) / TILE).astype(int), -P, self.W + P - 1) + P
-        r = np.clip(np.floor((y - self.oy) / TILE).astype(int), -P, self.H + P - 1) + P
+        r, c = self.patch_index(x, y)
         if self._table is None:
             rr, cc = np.mgrid[0:self.H + 2 * P, 0:self.W + 2 * P]
             self._table = self._gather(rr.ravel(), cc.ravel()).reshape(rr.shape + (-1,))
@@ -200,6 +204,14 @@ class LevelGeom:
                     within = (pr >= 0) & (pr <= 2 * P) & (pc >= 0) & (pc <= 2 * P)
                     patch[idx[within], :, pr[within], pc[within]] = 0
         return out
+
+    def patch_index(self, x, y) -> tuple[np.ndarray, np.ndarray]:
+        """The padded (row, column) of each point's patch centre: its tile, clipped to the padding (a point far
+        outside the map sees the patch at the padding's edge). Patch cell (row i, column j) is padded cell
+        (r - P + i, c - P + j): the tile with lower-left corner (ox + TILE (c - 2P + j), oy + TILE (r - 2P + i))."""
+        c = np.clip(np.floor((x - self.ox) / TILE).astype(int), -P, self.W + P - 1) + P
+        r = np.clip(np.floor((y - self.oy) / TILE).astype(int), -P, self.H + P - 1) + P
+        return r, c
 
     def _gather(self, r: np.ndarray, c: np.ndarray) -> np.ndarray:
         """Patches of padded cells (r, c) from the padded channels (edge cells repeat the outermost padding)."""
@@ -231,14 +243,63 @@ class OpenedGeom:
     def patches(self, x: np.ndarray, y: np.ndarray, keys=None) -> np.ndarray:
         g = self._geom
         out = g.patches(x, y, keys)
-        c = np.clip(np.floor((x - g.ox) / TILE).astype(int), -P, g.W + P - 1) + P
-        r = np.clip(np.floor((y - g.oy) / TILE).astype(int), -P, g.H + P - 1) + P
+        r, c = g.patch_index(x, y)
         patch = out.reshape(len(r), g.layout.channels, 2 * P + 1, 2 * P + 1)
         for lr, lc in self.cells:
             pr, pc = lr - (r - P) + P, lc - (c - P) + P
             within = np.nonzero((pr >= 0) & (pr <= 2 * P) & (pc >= 0) & (pc <= 2 * P))[0]
             patch[within, :, pr[within], pc[within]] = 0
         return out
+
+
+def tile_patch(geom, x, y, keys, pf) -> np.ndarray:
+    """The tile patch columns of points x, y (float64) with key masks keys, as the model sees them: geom's patches
+    (a LevelGeom or an OpenedGeom), then, when geom's protocol paints platforms (Layout.platforms), this frame's
+    moving platforms pf ([x, y, upright] each) painted in (paint_platforms). The one owner of those columns."""
+    out = geom.patches(x, y, keys)
+    if geom.layout.platforms and pf:
+        paint_platforms(out, geom, x, y, pf)
+    return out
+
+
+def platform_tiles(pf, ox: float, oy: float) -> tuple[np.ndarray, np.ndarray]:
+    """The level tiles (rows, columns; the tile grid at ox, oy) that the moving platforms pf (their bars:
+    game.level.platform_boxes) cover by at least PAINT_COVER of the tile's area, summed over the bars."""
+    area = {}
+    for bx, by, hw, hh, _ in platform_boxes(pf):
+        if not all(math.isfinite(v) for v in (bx, by, hw, hh)):
+            continue
+        for tc in range(math.floor((bx - hw - ox) / TILE), math.floor((bx + hw - ox) / TILE) + 1):
+            fx = min(ox + TILE * (tc + 1), bx + hw) - max(ox + TILE * tc, bx - hw)
+            if fx <= 0:
+                continue
+            for tr in range(math.floor((by - hh - oy) / TILE), math.floor((by + hh - oy) / TILE) + 1):
+                fy = min(oy + TILE * (tr + 1), by + hh) - max(oy + TILE * tr, by - hh)
+                if fy > 0:
+                    area[tr, tc] = area.get((tr, tc), 0.0) + fx * fy
+    keep = [k for k, v in area.items() if v >= (PAINT_COVER - 1e-9) * TILE * TILE]
+    return (np.array([k[0] for k in keep], np.int64), np.array([k[1] for k in keep], np.int64))
+
+
+def paint_platforms(out, geom, x, y, pf) -> None:
+    """Moving platforms as solid ground in the patches out ((n, channels x 49): geom.patches of points x, y), in
+    place: each tile the bars cover by at least PAINT_COVER (platform_tiles) becomes, in every patch that shows it, a
+    plain full tile (channel 0 = 1, every other channel 0) unless that patch cell already holds a tile (any channel
+    non-zero, after geom's opened cells and key masks: a real tile wins). Only the patch copies change, never geom's
+    tables. Rows whose patch shows no such tile are untouched."""
+    tr, tc = platform_tiles(pf, geom.ox, geom.oy)
+    if not len(tr):
+        return
+    r, c = geom.patch_index(x, y)
+    i = tr[None, :] - (r[:, None] - 2 * P)            # the tile's patch row / column (geom.patch_index)
+    j = tc[None, :] - (c[:, None] - 2 * P)
+    m, t = np.nonzero((i >= 0) & (i <= 2 * P) & (j >= 0) & (j <= 2 * P))
+    if not len(m):
+        return
+    cells = (2 * P + 1) ** 2
+    cell = i[m, t] * (2 * P + 1) + j[m, t]
+    empty = ~out[m[:, None], cell[:, None] + cells * np.arange(geom.layout.channels)].any(1)
+    out[m[empty], cell[empty]] = 1.0                   # channel 0 (full block): the patch's first 49 columns
 
 
 def hazard_boxes(hz: list, keep=None) -> np.ndarray:
@@ -369,7 +430,7 @@ def featurize(s, a, dt_ms, geom: LevelGeom, boxes, pf, pf_prev, dt_prev_s, fans,
     r = np.arange(n)
     X[r, _C_ST + np.clip(s["state"], 0, N_STATES - 1)] = 1.0
     X[r, _C_ACT + np.clip(a, 0, N_ACTIONS - 1)] = 1.0
-    X[:, _C_PATCH:lay.haz] = geom.patches(x, y, s["keys"])
+    X[:, _C_PATCH:lay.haz] = tile_patch(geom, x, y, s["keys"], pf)
     X[:, lay.haz:lay.plat] = hazard_features(x, y, boxes)
     X[:, lay.plat:] = platform_features(x, y, pf, pf_prev, dt_prev_s)
     return X

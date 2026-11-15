@@ -1,5 +1,7 @@
-"""Accelerator tiles: one owner (realpath.accel_bits), game.level's mask from it, and the tile-accel-v1 input
-protocol (tile-shapes-v1's channels plus the accelerator and its raw orientation bits). Offline only."""
+"""Accelerator tiles: one owner (realpath.accel_bits), game.level's mask from it, and the tile-plat-v1 input
+protocol's accelerator channels (tile-shapes-v1's channels plus the accelerator and its raw orientation bits; its
+moving platforms: tests/test_plat_tiles.py). tile-plat-v1 replaced tile-accel-v1, which no longer loads. Offline
+only."""
 import hashlib
 import json
 import os
@@ -14,7 +16,7 @@ sys.path.insert(0, HERE)
 from realpath import ACCEL_TILE, accel_bits, tile_shape, SHAPE_FULL                     # noqa: E402
 from wm import features as F                                                         # noqa: E402
 from wm.buffer import ROW                                                            # noqa: E402
-from wm.protocol import (ACCEL_TILES_PROTOCOL, FEATURE_PROTOCOL, INPUT_PROTOCOLS, KEY_TILES_PROTOCOL,   # noqa: E402
+from wm.protocol import (PLAT_TILES_PROTOCOL, FEATURE_PROTOCOL, INPUT_PROTOCOLS, KEY_TILES_PROTOCOL,   # noqa: E402
                          TILE_SHAPES_PROTOCOL, input_protocol)
 
 T = 20.0
@@ -91,13 +93,24 @@ def test_game_level_accel_mask_on_3_6():
 
 # ---- the input protocol --------------------------------------------------------------------------------------
 def test_protocol_is_an_explicit_opt_in():
-    assert ACCEL_TILES_PROTOCOL == "tile-accel-v1" and ACCEL_TILES_PROTOCOL in INPUT_PROTOCOLS
+    assert PLAT_TILES_PROTOCOL == "tile-plat-v1" and PLAT_TILES_PROTOCOL in INPUT_PROTOCOLS
     assert FEATURE_PROTOCOL == KEY_TILES_PROTOCOL
-    assert input_protocol({"feature_protocol": ACCEL_TILES_PROTOCOL}) == ACCEL_TILES_PROTOCOL
+    assert input_protocol({"feature_protocol": PLAT_TILES_PROTOCOL}) == PLAT_TILES_PROTOCOL
+
+
+def test_replaced_tile_accel_protocol_no_longer_loads():
+    """tile-accel-v1 (the same columns without the platforms) was replaced: nothing builds or accepts it."""
+    assert "tile-accel-v1" not in INPUT_PROTOCOLS
+    with pytest.raises(ValueError):
+        input_protocol({"feature_protocol": "tile-accel-v1"})
+    with pytest.raises(ValueError):
+        input_protocol({"feature_protocol": "untrained", "active_feature_protocol": "tile-accel-v1"})
+    with pytest.raises(ValueError):
+        F.layout("tile-accel-v1")
 
 
 def test_layout_dims():
-    lay = F.layout(ACCEL_TILES_PROTOCOL)
+    lay = F.layout(PLAT_TILES_PROTOCOL)
     assert lay.channels == 11 and lay.haz - lay.patch == 11 * 49 == 539
     assert lay.feat_dim == 634 and lay.n_in(4) == 664
     assert F.layout(TILE_SHAPES_PROTOCOL).feat_dim == 389 and F.layout(KEY_TILES_PROTOCOL).feat_dim == 291
@@ -107,7 +120,7 @@ def test_channels_extend_tile_shapes_unchanged():
     w = accel_words()
     meta = {"ox": 0, "oy": 0, "keys": [[30, 70]]}
     old = F.LevelGeom(w, meta, protocol=TILE_SHAPES_PROTOCOL)
-    new = F.LevelGeom(w, meta, protocol=ACCEL_TILES_PROTOCOL)
+    new = F.LevelGeom(w, meta, protocol=PLAT_TILES_PROTOCOL)
     assert new.ch.shape == (11,) + w.shape
     assert np.array_equal(new.ch[:6], old.ch)
     a = accel_bits(w)
@@ -134,7 +147,7 @@ def test_channels_extend_tile_shapes_unchanged():
 
 def test_live_tile_changes_and_opened_cells_clear_accel_channels():
     w = accel_words()
-    g = F.LevelGeom(w, {"ox": 0, "oy": 0}, protocol=ACCEL_TILES_PROTOCOL)
+    g = F.LevelGeom(w, {"ox": 0, "oy": 0}, protocol=PLAT_TILES_PROTOCOL)
     x, y = np.array([2.5 * T]), np.array([1.5 * T])
     patch = lambda geom: geom.patches(x, y).reshape(11, 7, 7)
     assert patch(g)[6, 2, 3] == 1
@@ -154,14 +167,15 @@ def test_live_tile_changes_and_opened_cells_clear_accel_channels():
     (4, 7056, "46b1fdacc133755a3c0b3302ff4a04e37d52717cab52638cee3b90f557432eef"),
 ])
 def test_tile_shapes_features_are_byte_identical_on_recorded_data(step, rows, digest):
-    """tile-shapes-v1's X hashed before tile-accel-v1 existed; tile-accel-v1's first six channels equal it."""
+    """tile-shapes-v1's X hashed before tile-accel-v1 existed (commit a6cc655); tile-plat-v1's first six channels
+    equal it (1-3 has no moving platforms: nothing painted)."""
     if not os.path.isdir(DATA_1_3):
         pytest.skip("recorded data not present")
     d = F.build([DATA_1_3], step=step, log=lambda *a: None, protocol=TILE_SHAPES_PROTOCOL)
     assert d["X"].shape[0] == rows
     assert hashlib.sha256(np.ascontiguousarray(d["X"]).tobytes()).hexdigest() == digest
-    a = F.build([DATA_1_3], step=step, log=lambda *a: None, protocol=ACCEL_TILES_PROTOCOL)
-    lay, lo = F.layout(ACCEL_TILES_PROTOCOL), F.layout(TILE_SHAPES_PROTOCOL)
+    a = F.build([DATA_1_3], step=step, log=lambda *a: None, protocol=PLAT_TILES_PROTOCOL)
+    lay, lo = F.layout(PLAT_TILES_PROTOCOL), F.layout(TILE_SHAPES_PROTOCOL)
     assert a["X"].shape == (rows, lay.n_in(step))
     assert np.array_equal(a["X"][:, lay.patch:lay.haz].reshape(rows, 11, 49)[:, :6],
                           d["X"][:, lo.patch:lo.haz].reshape(rows, 6, 49))
@@ -182,7 +196,7 @@ def accel_recording(folder):
     return folder
 
 
-def test_training_save_and_load_features_with_tile_accel(tmp_path, monkeypatch):
+def test_training_save_and_load_features_with_tile_plat(tmp_path, monkeypatch):
     from wm import train as T_
     from wm.model import WorldModel
     from wm.rollout import World, rollout_batched
@@ -191,22 +205,28 @@ def test_training_save_and_load_features_with_tile_accel(tmp_path, monkeypatch):
     small = ["--members", "1", "--hidden", "8", "--layers", "1", "--epochs", "1"]
     out = tmp_path / "fresh"
     monkeypatch.setattr(sys, "argv", ["wm.train", str(data), "--legacy-split", "--out", str(out), "--sample-frac", "1",
-                                      "--feature-protocol", ACCEL_TILES_PROTOCOL] + small)
+                                      "--feature-protocol", PLAT_TILES_PROTOCOL] + small)
     T_.main()
     m = WorldModel.load(out / "wm_model.pt")
-    assert m.info["feature_protocol"] == m.info["active_feature_protocol"] == ACCEL_TILES_PROTOCOL
-    assert F.model_layout(m).protocol == ACCEL_TILES_PROTOCOL and m.mu.numel() == 634
+    assert m.info["feature_protocol"] == m.info["active_feature_protocol"] == PLAT_TILES_PROTOCOL
+    assert F.model_layout(m).protocol == PLAT_TILES_PROTOCOL and m.mu.numel() == 634
 
     npz = tmp_path / "features.npz"
     monkeypatch.setattr(sys, "argv", ["wm.train", str(data), "--legacy-split", "--out", str(tmp_path / "unused"),
                                       "--sample-frac", "1", "--step", "4", "--max-samples", "0",
-                                      "--feature-protocol", ACCEL_TILES_PROTOCOL, "--save-features", str(npz)])
+                                      "--feature-protocol", PLAT_TILES_PROTOCOL, "--save-features", str(npz)])
     T_.main()
     z = np.load(npz, allow_pickle=False)
     meta = json.loads(str(z["meta"]))
-    assert meta["protocol"] == ACCEL_TILES_PROTOCOL and z["d_X"].shape[1] == 664
-    lay = F.layout(ACCEL_TILES_PROTOCOL)
+    assert meta["protocol"] == PLAT_TILES_PROTOCOL and z["d_X"].shape[1] == 664
+    lay = F.layout(PLAT_TILES_PROTOCOL)
     assert z["d_X"][:, lay.patch:lay.haz].reshape(len(z["d_X"]), 11, 49)[:, 6].any()   # accelerators in the patches
+    stale = tmp_path / "stale.npz"                  # a features file of the replaced protocol (same width)
+    np.savez(stale, **{k: z[k] for k in z.files if k != "meta"}, meta=json.dumps({**meta, "protocol": "tile-accel-v1"}))
+    monkeypatch.setattr(sys, "argv", ["wm.train", "--load-features", str(stale), "--out", str(tmp_path / "s")] + small)
+    with pytest.raises(SystemExit, match="tile-accel-v1"):
+        T_.main()
+    assert not (tmp_path / "s").exists()
     gpu = tmp_path / "gpu"
     monkeypatch.setattr(sys, "argv", ["wm.train", "--load-features", str(npz), "--out", str(gpu)] + small)
     T_.main()
