@@ -45,6 +45,11 @@ WINDOW = 30                 # frames: a remembered death is a hazard this long b
 STATIC_NEAR = 16.0          # units: remembered deaths this close at wave frames more than WINDOW apart are one
                             # place that always kills (DeathMemory)
 DEATH_HALF = 8.0            # half size of a remembered death's box (contact adds BODY)
+# alive samples (wave frame, x, y) of real agents kept per level for the run (DeathMemory.observe_alive), so a
+# death added later can count the visits made before it: about 73 minutes of one agent at 60 frames a second,
+# 3 MB as float32; past it the oldest chunk is dropped
+TRAIL_KEEP = 1 << 18
+TRAIL_CHUNK = 4096          # samples gathered in a list before they become one float32 chunk of the trail
 
 KIND_NONE, KIND_HAZARD, KIND_SHOT, KIND_OUT, KIND_MEMORY, KIND_FLOOR = -1, 0, 1, 2, 3, 4
 KIND_NAMES = {KIND_NONE: "none", KIND_HAZARD: "hazard", KIND_SHOT: "shot", KIND_OUT: "out of level",
@@ -438,41 +443,148 @@ class DeathMemory:
     The exception: deaths within STATIC_NEAR units of each other at wave frames more than WINDOW apart. The agent
     came back when the window had passed and died there again, so the place kills at any time (2-1: a pile whose
     kill shape reaches further than the one read from the game; the agent died there once per wave, 48 frames
-    later each time). Those boxes are on at every frame (one per place).
+    later each time, and no agent was ever there alive). Those boxes are on at every frame (one per place: its
+    first death's box).
+
+    Unless a real agent survived there: a place stops being static once an agent was observed alive in contact
+    with its box (the safety check's contact: game.level.kill_clearance of a SHAPE_BOX < 0, the centre within BODY
+    of the DEATH_HALF box) at a wave frame more than WINDOW from every death at the place (its deaths and every
+    death within STATIC_NEAR of its first one). It then falls back to its deaths' own windowed boxes. Measured on
+    3-2 (runs/online_check03): deaths at (25.19, 216.01) frame 772 and (18.68, 217.95) frame 680 made a static
+    box on the take-off of the only way on (a run-jump over the saw row h28-h30); the stalls there grew from
+    60-100 frames to 170-345, and 44 of 110 rejected alternatives in one stall hit it. Yet agent 0 was alive in
+    contact with that box for 132 frames of wave 1 (580-771, before the death at 772), 17 frames in each of waves
+    2 and 3 (246-311) and 23 in wave 8 (456-679).
+
+    Visits are kept per death as the wave frames an agent was alive in contact with its box (`visits`, saved with
+    it), not as a refuted flag: whether a frame is outside WINDOW of every death at the place changes when a
+    death is added. They come from observe_alive, every real alive position: each is tested against the level's
+    remembered deaths (one vectorised contact test) and also kept in a bounded trail per level for the run
+    (TRAIL_KEEP samples), which add() replays for the new death. So the visits before a death count too (3-2's
+    wave 1 above, made before any death was remembered there). A previous run's positions are not kept: only
+    the visits saved with its deaths.
 
     Levels in `transient` (agent.py: the held-out levels, which with --online practise after their first life)
     keep their deaths in memory for the run, but save() never writes them."""
 
     def __init__(self, entries=()):
         self.entries: list[tuple[str, int, float, float]] = []
-        self._by_level: dict[str, np.ndarray] = {}
+        self.visits: list[set[int]] = []                # per entry: wave frames an agent was alive in its box
+        self._by_level: dict[str, tuple] = {}           # level -> (rows f x y static, live static places)
+        self._pts: dict[str, tuple] = {}                # level -> (entry indices, their boxes)
+        self._trail: dict[str, list] = {}               # level -> [float32 (n, 3) chunks, pending samples]
         self.transient: set[str] = set()
+        self.dirty = False                              # visits added since the last save()
         for e in entries:
             self.add(*e)
 
     def __len__(self):
         return len(self.entries)
 
-    def add(self, level: str, frame: int, x: float, y: float):
-        self.entries.append((str(level), int(frame), float(x), float(y)))
-        self._by_level.pop(str(level), None)
+    def add(self, level: str, frame: int, x: float, y: float, visits=()):
+        """A remembered death; its visits: the given ones (a saved file) and the level's trail in contact."""
+        level = str(level)
+        self.entries.append((level, int(frame), float(x), float(y)))
+        v = set(int(f) for f in visits)
+        t = self.trail(level)
+        if len(t):
+            box = np.array([[float(x), float(y), DEATH_HALF, DEATH_HALF, 0.0]])
+            v.update(int(f) for f in np.unique(t[kill_clearance(t[:, 1], t[:, 2], box)[:, 0] < 0, 0]))
+        self.visits.append(v)
+        self._by_level.pop(level, None)
+        self._pts.pop(level, None)
+
+    def trail(self, level: str) -> np.ndarray:
+        """(n, 3) the level's kept alive samples (wave frame, x, y), oldest first."""
+        t = self._trail.get(level)
+        if t is None:
+            return np.zeros((0, 3), np.float32)
+        chunks, pending = t
+        if pending:
+            chunks.append(np.asarray(pending, np.float32).reshape(-1, 3))
+            pending.clear()
+        return np.concatenate(chunks) if chunks else np.zeros((0, 3), np.float32)
+
+    def observe_alive(self, level: str, frame: int, xs, ys) -> bool:
+        """Real agents alive at (xs, ys) at this wave frame of this level: kept in the level's trail and counted as
+        visits of the remembered deaths whose box they touch. True when that refuted a static place (its box is
+        now windowed: worth saving)."""
+        xs, ys = np.atleast_1d(np.asarray(xs, np.float64)), np.atleast_1d(np.asarray(ys, np.float64))
+        if not len(xs):
+            return False
+        frame = int(frame)
+        chunks, pending = self._trail.setdefault(level, ([], []))
+        pending.extend((frame, x, y) for x, y in zip(xs.tolist(), ys.tolist()))
+        if len(pending) >= TRAIL_CHUNK:
+            chunks.append(np.asarray(pending, np.float32).reshape(-1, 3))
+            pending.clear()
+            while len(chunks) > 1 and sum(len(c) for c in chunks) > TRAIL_KEEP:
+                chunks.pop(0)
+        pts = self._pts.get(level)
+        if pts is None:
+            idx = np.array([i for i, e in enumerate(self.entries) if e[0] == level], np.int64)
+            b = np.zeros((len(idx), 5))
+            if len(idx):
+                b[:, :2] = [self.entries[i][2:] for i in idx]
+                b[:, 2:4] = DEATH_HALF
+            pts = self._pts[level] = (idx, b)
+        idx, b = pts
+        if not len(idx):
+            return False
+        hit = idx[(kill_clearance(xs, ys, b) < 0).any(0)]
+        if not len(hit):
+            return False
+        live = self._table(level)[1]                    # before these visits: static places' first deaths
+        refuted = False
+        for i in hit.tolist():
+            if frame in self.visits[i]:
+                continue
+            self.visits[i].add(frame)
+            self.dirty = True
+            g = live.get(i)                             # a static place's first death: its deaths' frames
+            if g is not None and (np.abs(g - frame) > WINDOW).all():
+                refuted = True
+        if refuted:
+            self._by_level.pop(level, None)
+        return refuted
+
+    def _table(self, level: str) -> tuple:
+        """The level's (rows (n, 4): wave frame, x, y, static; {first death's entry index: its place's death
+        frames} of the static places not refuted)."""
+        t = self._by_level.get(level)
+        if t is not None:
+            return t
+        idx = [i for i, e in enumerate(self.entries) if e[0] == level]
+        a = np.array([self.entries[i][1:] for i in idx], np.float64).reshape(-1, 3)
+        n = len(a)
+        static = np.zeros(n, bool)
+        live = {}
+        if n > 1:
+            near = np.hypot(a[:, None, 1] - a[None, :, 1], a[:, None, 2] - a[None, :, 2]) <= STATIC_NEAR
+            always = (near & (np.abs(a[:, None, 0] - a[None, :, 0]) > WINDOW)).any(1)
+            place = np.arange(n)                        # a static death joins the place of the first static
+            for i in np.nonzero(always)[0]:             # death near it (none: it is a place's first death)
+                j = np.nonzero(near[i, :i] & always[:i])[0]
+                if len(j):
+                    place[i] = place[j[0]]
+            keep = np.ones(n, bool)
+            for r in np.nonzero(always & (place == np.arange(n)))[0]:
+                members = always & (place == r)
+                g = a[members | near[r], 0]             # every death at the place
+                v = np.fromiter(self.visits[idx[r]], np.float64)
+                if len(v) and (np.abs(v[:, None] - g[None, :]) > WINDOW).all(1).any():
+                    continue                            # refuted: its deaths keep their own windows
+                static[r] = True
+                keep &= ~members
+                keep[r] = True
+                live[idx[r]] = g
+            a, static = a[keep], static[keep]
+        t = self._by_level[level] = (np.column_stack([a, static]), live)
+        return t
 
     def boxes(self, level: str, frame: int) -> np.ndarray:
         """(M, 5) boxes of the remembered deaths of this level active at this wave frame."""
-        a = self._by_level.get(level)
-        if a is None:
-            a = np.array([(f, x, y) for lvl, f, x, y in self.entries if lvl == level], np.float64).reshape(-1, 3)
-            always = np.zeros(len(a), bool)
-            if len(a) > 1:
-                near = np.hypot(a[:, None, 1] - a[None, :, 1], a[:, None, 2] - a[None, :, 2]) <= STATIC_NEAR
-                always = (near & (np.abs(a[:, None, 0] - a[None, :, 0]) > WINDOW)).any(1)
-                first = np.ones(len(a), bool)                     # one box per place: its first death
-                for i in np.nonzero(always)[0]:
-                    first[i] = not (near[i, :i] & always[:i]).any()
-                a = np.column_stack([a, always & first])[~always | first]
-            else:
-                a = np.column_stack([a, always])
-            self._by_level[level] = a
+        a = self._table(level)[0]
         on = a[(a[:, 3] > 0) | (np.abs(a[:, 0] - frame) <= WINDOW)]
         out = np.zeros((len(on), 5))
         out[:, 0], out[:, 1] = on[:, 1], on[:, 2]
@@ -480,20 +592,44 @@ class DeathMemory:
         return out
 
     def save(self, path: str):
+        """Every non-transient death with its visits as wave-frame ranges ("alive": [[first, last], ...])."""
         tmp = path + ".tmp"
+        deaths = []
+        for (lv, fr, x, y), v in zip(self.entries, self.visits):
+            if lv in self.transient:
+                continue
+            d = {"level": lv, "frame": fr, "x": x, "y": y}
+            if v:
+                d["alive"] = frame_ranges(v)
+            deaths.append(d)
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"about": "real deaths the geometric safety check did not explain (plan/safety.py)",
-                       "window": WINDOW, "half": DEATH_HALF,
-                       "deaths": [{"level": l, "frame": fr, "x": x, "y": y} for l, fr, x, y in self.entries
-                                  if l not in self.transient]},
-                      f, indent=1)
+            json.dump({"about": "real deaths the geometric safety check did not explain (plan/safety.py); alive: "
+                                "wave frames a real agent was alive in contact with the death's box",
+                       "window": WINDOW, "half": DEATH_HALF, "deaths": deaths}, f, indent=1)
         os.replace(tmp, path)
+        self.dirty = False
 
     @classmethod
     def load(cls, path: str) -> "DeathMemory":
-        """A saved memory; an empty one when there is no file yet (a malformed file raises)."""
+        """A saved memory; an empty one when there is no file yet (a malformed file raises). Files from before
+        the visits ("alive") load without them."""
+        m = cls()
         if not os.path.exists(path):
-            return cls()
+            return m
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
-        return cls((d["level"], d["frame"], d["x"], d["y"]) for d in raw["deaths"])
+        for d in raw["deaths"]:
+            m.add(d["level"], d["frame"], d["x"], d["y"],
+                  [f for a, b in d.get("alive", ()) for f in range(int(a), int(b) + 1)])
+        return m
+
+
+def frame_ranges(frames) -> list:
+    """Sorted wave frames as [[first, last], ...] runs of consecutive frames."""
+    out = []
+    for f in sorted(frames):
+        if out and f == out[-1][1] + 1:
+            out[-1][1] = f
+        else:
+            out.append([f, f])
+    return out

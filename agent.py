@@ -29,7 +29,8 @@ states are checked against earlier predictions (surprises) and against the moves
 moves). Plans are scored in estimated frames to the goal (plan/planner.py); --hysteresis is in frames (default 3, chosen from closed loops);
 each decision's inputs reach H + the airborne completion's 45 frames. A death of a planned agent the geometry does
 not explain (plan.safety.explain_death) is remembered (plan.safety.DeathMemory, saved to --death-memory): the
-planner avoids that place at that wave frame from then on. Every death of a planned agent (explained or not)
+planner avoids that place at that wave frame from then on (at every frame where deaths repeat at other frames,
+until a real agent is seen alive there at another time: every alive position is fed to it). Every death of a planned agent (explained or not)
 charges the move taken at its point of no return (the latest decision of the wave with a safe alternative;
 plan.planner.MoveMemory, per level in --move-memory, default smbrl/move_memory.json, saved at every wave end;
 none: off) and logs a "point of no return" event. Held-out levels (wm.buffer.eval_levels): the first life
@@ -964,10 +965,13 @@ class Runner:
         if self.proc is not None:
             self.proc_events()
         alive_before, held_before = list(self.alive), list(self.held)
+        alive_xy = []
         for i, s in enumerate(states):
             if not self.alive[i]:
                 continue
             x, y, st = float(s[0]), float(s[1]), int(s[6])
+            if st == 0:
+                alive_xy.append((x, y))
             keys = int(s[7]) if len(s) > 7 else 0
             if i < self.n_plan and pl is not None:
                 if st == 1:
@@ -989,6 +993,8 @@ class Runner:
                     self.st["ex_died"] += 1
             self.prev_xy[i] = (x, y)
             self.last_state[i] = s
+        if alive_xy and pl is not None:             # where real agents survive: a remembered place's refutation
+            self.observe_alive(lv.name, frame, alive_xy)
 
         # decisions
         C.go("planning")
@@ -1298,6 +1304,26 @@ class Runner:
             self.event(trial_ev["kind"], frame, **{a: b for a, b in trial_ev.items() if a not in ("kind", "frame")})
         return []
 
+    def observe_alive(self, level: str, frame: int, alive_xy: list):
+        """Real agents alive at alive_xy [(x, y), ...] this wave frame: DeathMemory.observe_alive. When that
+        refutes a static place, an event, and the memory is saved (not on a transient level, nor with the
+        memory off)."""
+        xy = np.asarray(alive_xy, np.float64).reshape(-1, 2)
+        if self.deaths.observe_alive(level, frame, xy[:, 0], xy[:, 1]):
+            self.event("death place refuted", frame, deaths=len(self.deaths))
+            if self.memory_on() and level not in self.deaths.transient:
+                self.save_deaths()
+
+    def save_deaths(self) -> bool:
+        """The death memory to --death-memory (its transient levels left out); False when it could not be."""
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(self.deaths_path)), exist_ok=True)
+            self.deaths.save(self.deaths_path)
+            return True
+        except OSError as e:
+            print(f"[deaths] could not save {self.deaths_path}: {e}", flush=True)
+            return False
+
     def on_death(self, i, frame, xy0, xy1, keys, rec, extra_boxes, estimated: bool):
         """A planned agent died at wave frame `frame` at xy1 (from xy0 the frame before): does the geometry
         explain it (the move against the death frame's hazards and shots, or leaving the level)? If not, the
@@ -1319,16 +1345,8 @@ class Runner:
         added = False
         if not explained and self.memory_on():
             self.deaths.add(lv.name, frame, x1, y1)
-            if lv.name in self.deaths.transient:    # practice on a held-out level: this run only, nothing to save
-                added = True
-            else:
-                try:
-                    d = os.path.dirname(os.path.abspath(self.deaths_path))
-                    os.makedirs(d, exist_ok=True)
-                    self.deaths.save(self.deaths_path)
-                    added = True
-                except OSError as e:
-                    print(f"[deaths] could not save {self.deaths_path}: {e}", flush=True)
+            # practice on a held-out level: this run only, nothing to save
+            added = lv.name in self.deaths.transient or self.save_deaths()
             self.st["memory"] += 1
         self.st["died"] += 1
         self.st["explained" if explained else "unexplained"] += 1
@@ -1654,6 +1672,8 @@ class Runner:
                 self.moves.save()
             except OSError as e:
                 print(f"[moves] could not save {self.moves.path}: {e}", flush=True)
+        if self.deaths.dirty and self.memory_on():  # the wave's visits of remembered deaths (DeathMemory.visits)
+            self.save_deaths()
         if self.planner is not None:
             if self.commit.on:
                 self.commit.tube.add(surprise_err)  # the run's followed errors, for the tube
