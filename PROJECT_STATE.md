@@ -1,5 +1,37 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## Moving platforms (4-4), human_v4 measured, tile-plat-v1 (2026-11-15)
+
+**4-4** (online_check01: 15 waves, 0 finishes):
+- The bar pf[1] parks flush with the ledge (x 150, top -100) at frames 0.. and again at 361-422. A ceiling above blocks the hop, so walking on is the only way.
+- The model predicts falling through the bar: human_v3 has 0 rows of the agent on a bar and 29 within 60 units, and removing its bar inputs barely changes its errors.
+- So the agent waits until the bar leaves, then dies in saw h4. That death itself is a wall-jump error: contact is predicted about 4 units early, and a wall jump is expected on a held key.
+
+**Changes:**
+- e2bc0f2: the viewer (viz/viewer.py, telemetry pf) draws platforms, live and in replay.
+- dd1a0f7 + 2c62016 `tile-plat-v1`:
+  - tile-accel-v1 inputs, plus each step's bars painted into the tile patch as plain full tiles (cells at least 0.5 covered; a real tile wins), in featurize / featurize_k / build / features_into. No carry.
+  - tile-accel-v1 stays loadable, because the user trained runs/experiments/human_v4_gpu with it.
+  - human_v4/features.npz was rebuilt as tile-plat-v1: 1,859,143 transitions, 4-1..4-4 added.
+  - Only 3,068 rows have a painted cell, and 38 (all 4-2) have one under the agent. So painting is a prior, not proof: the 4-4 live run is the test.
+- 5e01b83: Planner.support, landings, the map-bottom rule and the guard (bar tops; no sides, no carry) use each imagined step's bars (`bars_at(worlds, frame)`), not the bars at decision time. The 4-4 f440 phantom landing is gone. Levels without bars are unchanged.
+  - Open: plan/commit.py `Committer.decided` still uses the live bars.
+
+**human_v4 (tile-accel-v1) against human_v3** (`human_v4/accel_check.py`):
+
+| Set | Measure | human_v3 | human_v4 |
+|---|---|---|---|
+| 3-6 validation | accel-wall vy error, one step (median) | 79 | 1.7 |
+| 3-6 validation | open loop +48 | 20.3 | 2.3 |
+| 3-5 (never trained) | accel-wall vy error | 38.6 | 13.2 |
+| 3-5 | rest of the level, +48 | 9.9 | 16.5 |
+| 3-5 | plain-wall vy error, p90 | 43 | 230 |
+
+On 3-5 the transfer is partial and other frames got worse; the plain walls near accelerators may be what drives the p90. The live test is online learning on 3-5.
+
+**Surprise curiosity (deferred step 4):** stopped before any code. In online_check01 the surprising tiles are exactly where the agent is stuck (3-5 (27,14): 1,199 surprises in 9,337 frames), so counting them as new would keep it there.
+**Route field and accelerators (step 2b):** no change needed. realpath already climbs accelerator walls, and 3-5's "high jumps" route is the launch off the column top.
+
 ## online_check01 reviewed; accelerators, online acceptance, practice, best-route start (2026-11-15)
 
 **The run** (`runs/online_check01`, human_v3, `--online`; events.jsonl):
