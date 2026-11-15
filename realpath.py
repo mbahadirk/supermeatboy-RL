@@ -161,6 +161,39 @@ def tile_shape(words: np.ndarray) -> TileShape:
     return TileShape(kind, ox, oy)
 
 
+ACCEL_TILE = 98      # Salt Factory accelerator tile id (low byte), without the special bit (with it: a switch block)
+
+
+class AccelBits(NamedTuple):
+    """Per cell (bool, words' shape): accelerator tile, and its raw orientation bits (False off accelerators)."""
+    accel: np.ndarray
+    flip: np.ndarray
+    wall: np.ndarray
+    face_a: np.ndarray
+    face_b: np.ndarray
+
+
+def accel_bits(words: np.ndarray) -> AccelBits:
+    """The owner of accelerator tile detection (H x W words, row 0 = bottom): accel = low byte ACCEL_TILE and
+    the special bit 8 clear (id 98 with bit 8 set is a switch block, tile_classes), and the raw bits that orient
+    it, each only where accel: flip = bit 0x2000, wall = bit 0x1000, face_a = bit 0x1000000, face_b = bit
+    0x2000000. (0x1000 / 0x2000 are the rotation bits 12-13 of _flip_rotate; an accelerator is a full block, so
+    they carry no shape.) tile_shape counts accelerators as full blocks; this adds what they do.
+
+    Measured (runs/online_check01, 3-3..3-6):
+      floor accelerators: words 0x800062 and 0xc00062 push right, 0x802062 and 0xc02062 (flip) push left: the
+        character moves 3.33 units / frame in x without its vx changing;
+      wall accelerator 0x2001062 (wall, face_b): the wall face on the tile's LEFT side, touched from the left,
+        gives vy +14.5 / frame (a plain wall gives -5.5).
+    Not measured: 0x1001062 (wall, face_a: the face on the RIGHT side) and 0x3001062 (both faces / column ends)
+    exist in 3-5 and 3-6 but have never been touched; their effect is unknown. The bits are given raw, not as a
+    guessed push direction."""
+    t = np.asarray(words).astype(np.uint32)
+    accel = ((t & 0xff) == ACCEL_TILE) & ~((t >> 8) & 1).astype(bool)
+    bit = lambda m: accel & ((t & m) != 0)
+    return AccelBits(accel, bit(0x2000), bit(0x1000), bit(0x1000000), bit(0x2000000))
+
+
 _UNIT_SQUARE = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
 
 

@@ -14,7 +14,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from realpath import BODY, box_distance, tile_classes, tile_shape
+from realpath import ACCEL_TILE, BODY, accel_bits, box_distance, tile_classes, tile_shape   # noqa: F401 (ACCEL_TILE: re-exported)
 import contact_reach
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the smbrl folder (tools/, imported/)
@@ -30,7 +30,6 @@ PLAT_HALF = (30.0, 10.0)                  # a platform is a 60 x 20 bar (20 x 60
 PLAT_STILL = 240                          # frames: a platform seen in place this long is a fixed one (a wall for routes)
 SEALED_MAX = 150                          # cells: a pocket the player cannot get into larger than this is left open
                                           # (a moving saw at its start position could look like a seal)
-ACCEL_TILE = 98                           # Salt Factory surface tile (no special bit); what it does is not traced
 # off screen: the player dies when its centre leaves the camera's view x 1.15 (FUN_00520d30, mode 0 only); the
 # camera is clamped to the level's camera bounds, so for a followed player that is a fixed kill box per level
 # (realgame.js killBox, sent as info["kb"]). Without one (no camera bounds, unreadable): this far past the
@@ -246,7 +245,7 @@ class Level:
         pt = set(info.get("portalTypes", []))
         ends = [(x, y) for t, x, y, fl in objs if t in pt]
         self.portals = list(zip(ends[0::2], ends[1::2]))
-        self.accel = ((self.words0 & 0xff) == ACCEL_TILE) & ~(((self.words0 >> 8) & 1).astype(bool))
+        self.accel = accel_bits(self.words0).accel        # accelerator tiles (realpath.accel_bits: what they do)
         self.fans, self.orbs = [], []
         self.wind = np.zeros((self.H, self.W), dtype=bool)
         self.orb_cells = np.zeros((self.H, self.W), dtype=bool)

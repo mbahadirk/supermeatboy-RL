@@ -1,9 +1,11 @@
 """Feature semantics provenance shared by training, inference and dataset compatibility checks.
 
-Two input encodings exist (wm.features.layout gives their columns):
+Three input encodings exist (wm.features.layout gives their columns):
   per-agent-key-tiles-v1  tile patch channels full, half (no orientation), slope ((open corner + 1) / 4),
                           special; the encoding of every checkpoint before tile-shapes-v1
   tile-shapes-v1          full, half, slope, special, open x, open y (realpath.tile_shape)
+  tile-accel-v1           tile-shapes-v1's six channels, then accelerator, flip, wall, face a, face b (Salt
+                          Factory accelerator tiles and their raw orientation bits, realpath.accel_bits)
 A checkpoint's trained protocol ("feature_protocol") selects the encoding its inputs are built with
 (input_protocol); legacy-unspecified weights were trained on the per-agent-key-tiles-v1 layout (the same
 columns; key masks were added without changing the dimension). Fresh training uses FEATURE_PROTOCOL unless
@@ -12,8 +14,9 @@ it asks for another one explicitly (wm.train --feature-protocol). Nothing guesse
 
 KEY_TILES_PROTOCOL = "per-agent-key-tiles-v1"
 TILE_SHAPES_PROTOCOL = "tile-shapes-v1"
-INPUT_PROTOCOLS = (KEY_TILES_PROTOCOL, TILE_SHAPES_PROTOCOL)
-FEATURE_PROTOCOL = KEY_TILES_PROTOCOL        # fresh training's default (tile shapes: explicit opt-in)
+ACCEL_TILES_PROTOCOL = "tile-accel-v1"
+INPUT_PROTOCOLS = (KEY_TILES_PROTOCOL, TILE_SHAPES_PROTOCOL, ACCEL_TILES_PROTOCOL)
+FEATURE_PROTOCOL = KEY_TILES_PROTOCOL        # fresh training's default (tile shapes, accelerators: explicit opt-in)
 LEGACY_FEATURE_PROTOCOL = "legacy-unspecified"
 UNTRAINED_FEATURE_PROTOCOL = "untrained"
 

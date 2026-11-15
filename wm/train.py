@@ -9,7 +9,8 @@ legacy weights and manifest extensions cannot initialize it; a strict parent nee
 protocol. Strict self-correction supports step 1 only. Explicit legacy --init with no fit preserves the
 parent's trained feature protocol; inference's active protocol is reported separately.
 --feature-protocol: fresh training's input encoding (default per-agent-key-tiles-v1, the layout every
-existing checkpoint and the frozen experiment caches use; tile-shapes-v1 is an explicit opt-in). --init
+existing checkpoint and the frozen experiment caches use; tile-shapes-v1 and tile-accel-v1 (tile shapes plus
+accelerator tiles) are explicit opt-ins). --init
 always continues in the parent's encoding. The checkpoint records it (feature_protocol /
 active_feature_protocol) and every consumer builds that encoding from it.
 --prior-protocol: the physics prior the targets correct (wm/protocol.py; default gravity-v1, the prior of
@@ -281,8 +282,9 @@ def main():
                              UNTRAINED_FEATURE_PROTOCOL, feature_usage)
     ap.add_argument("--feature-protocol", choices=INPUT_PROTOCOLS, default=None,
                     help=f"input encoding (wm/protocol.py). Fresh training: default {FEATURE_PROTOCOL}; "
-                         "tile-shapes-v1 adds the open side of half blocks / slopes (explicit opt-in). --init: the "
-                         "parent's; a different value is an error")
+                         "tile-shapes-v1 adds the open side of half blocks / slopes, tile-accel-v1 also Salt Factory "
+                         "accelerator tiles and their orientation bits (explicit opt-ins). --init: the parent's; a "
+                         "different value is an error")
     ap.add_argument("--prior-protocol", choices=PRIOR_PROTOCOLS, default=None,
                     help=f"physics prior the targets correct (wm/protocol.py). Fresh training: default {PRIOR_PROTOCOL}; "
                          "gravity-fan-wind-v1 adds the measured fan wind force (explicit opt-in). --init: the parent's; "

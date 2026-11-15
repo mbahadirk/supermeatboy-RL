@@ -7,7 +7,8 @@ mutating the level. This does not predict future key pickup. The tile encoding i
 (wm.protocol): a checkpoint's recorded protocol selects its layout (model_layout), never the data; fresh
 training uses FEATURE_PROTOCOL unless it explicitly asks for another.
 
-Input (layout(protocol).feat_dim floats; FEAT_DIM = 291 for per-agent-key-tiles-v1, 389 for tile-shapes-v1):
+Input (layout(protocol).feat_dim floats; FEAT_DIM = 291 for per-agent-key-tiles-v1, 389 for tile-shapes-v1, 634
+for tile-accel-v1):
   own state   vx/400, vy/600, time step / 33 ms, jump held / 20, position inside its tile (x, y; -0.5..0.5),
               wind here (/2000, the game's formula)                                                    8
   flags       the character's 32 flag bits (+0x7b4: airborne, on a wall, facing, input bits ...)     32
@@ -18,6 +19,9 @@ Input (layout(protocol).feat_dim floats; FEAT_DIM = 291 for per-agent-key-tiles-
               (crumble / lock / switch)                                                     4 x 49 = 196
               tile-shapes-v1: full, half, slope, special, open x, open y (the open side of a half
               block, the open corner of a slope: -1 / 0 / +1 each)                          6 x 49 = 294
+              tile-accel-v1: tile-shapes-v1's six, then accelerator, flip, wall, face a, face b
+              (realpath.accel_bits: a Salt Factory accelerator and its raw orientation bits,
+              0 / 1 each; outside the map: plain solid, 0)                                11 x 49 = 539
   hazards     the 3 nearest (box edge distance): dx, dy, distance (/100), half w, half h (/50)         15
   platform    the nearest: dx, dy (/100), upright, vx, vy (/300), present                              6
 
@@ -36,10 +40,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from realpath import SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE, SHAPE_SPECIAL, box_distance, tile_shape
+from realpath import SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE, SHAPE_SPECIAL, accel_bits, box_distance, tile_shape
 from game.level import LockContext
-from wm.protocol import (FAN_WIND_PRIOR, FEATURE_PROTOCOL, GRAVITY_PRIOR, KEY_TILES_PROTOCOL, PRIOR_PROTOCOL,
-                         PRIOR_PROTOCOLS, TILE_SHAPES_PROTOCOL, input_protocol, prior_protocol)
+from wm.protocol import (ACCEL_TILES_PROTOCOL, FAN_WIND_PRIOR, FEATURE_PROTOCOL, GRAVITY_PRIOR, KEY_TILES_PROTOCOL,
+                         PRIOR_PROTOCOL, PRIOR_PROTOCOLS, TILE_SHAPES_PROTOCOL, input_protocol, prior_protocol)
 from wm.buffer import transitions, chains, load_level, load_shards
 
 TILE = 20.0
@@ -49,7 +53,7 @@ N_ACTIONS = 10
 N_HAZ = 3
 AIR, WALL, FACE = 0x2, 0x200, 0x1
 CONT_NAMES = ["vx", "vy", "dt", "held", "in-tile x", "in-tile y", "wind x", "wind y"]
-TILE_CHANNELS = {KEY_TILES_PROTOCOL: 4, TILE_SHAPES_PROTOCOL: 6}
+TILE_CHANNELS = {KEY_TILES_PROTOCOL: 4, TILE_SHAPES_PROTOCOL: 6, ACCEL_TILES_PROTOCOL: 11}
 
 
 @dataclass(frozen=True)
@@ -133,12 +137,13 @@ class LevelGeom:
         self.special0 = tile_shape(self.words0).kind == SHAPE_SPECIAL
         self.ch = self._channels(self.words0)
         self.pad = np.pad(self.ch, ((0, 0), (P, P), (P, P)))
-        self.pad[0, :, :P] = self.pad[0, :, -P:] = 1.0     # outside the map: solid
-        self.pad[0, :P, :] = self.pad[0, -P:, :] = 1.0
+        self.pad[0, :, :P] = self.pad[0, :, -P:] = 1.0     # outside the map: a plain full block (every other
+        self.pad[0, :P, :] = self.pad[0, -P:, :] = 1.0     # channel 0: nothing open, no accelerator)
         self._table = None                                 # every padded cell's patch, built on first use
 
     def _channels(self, words):
-        """The protocol's tile channels of these words, from realpath.tile_shape (the one shape owner)."""
+        """The protocol's tile channels of these words, from realpath.tile_shape (the one shape owner) and, for
+        tile-accel-v1, realpath.accel_bits (the one accelerator owner)."""
         t = tile_shape(words)
         slope = t.kind == SHAPE_SLOPE
         ch = np.zeros((self.layout.channels,) + words.shape, np.float32)
@@ -152,6 +157,8 @@ class LevelGeom:
             ch[2] = slope
             ch[4] = t.ox
             ch[5] = t.oy
+        if self.layout.protocol == ACCEL_TILES_PROTOCOL:
+            ch[6:11] = accel_bits(words)                   # accel, flip, wall, face a, face b
         return ch
 
     def reset(self):
