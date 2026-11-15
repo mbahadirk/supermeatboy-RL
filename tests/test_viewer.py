@@ -348,3 +348,122 @@ def test_score_lines_in_frames_and_older_v():
     assert "every continuation dies" in V.score_lines(q)[0]
     old = {"score": {"progress": 1.5, "progress_credit": 1.2, "risk": 0.0, "uncertainty": 0.8, "total": 1.2}}
     assert V.score_lines(old)[0].startswith("progress +1.50")
+
+
+# ---- moving platforms ---------------------------------------------------------------------------------------
+PF_AT = (80.0, 60.0)          # a flat bar clear of the synthetic run's hazard, path and goal
+
+
+def _map_point(r, surf, sc, x, y):
+    """The pixel of world (x, y) as Renderer.render maps it (no follow)."""
+    w, h = surf.get_size()
+    rect = (0, 0, max(200, w - V.PANEL_W), h - (V.TIMELINE_H if sc.timeline else 0))
+    px, py = V.Mapper(rect, r._bounds(sc), r.zoom).pt(x, y)
+    return int(round(px)), int(round(py))
+
+
+def test_replay_draws_recorded_platforms(tmp_path):
+    """Replay: the world records' "pf" ([x, y, upright]) become bars (game.level PLAT_HALF, turned when upright) and
+    are drawn filled; a record without "pf" has none; a frame without a record says so in the panel."""
+    run = tmp_path / "runs" / "plan_pf"
+    _write_run(str(run))
+    wp = run / "wm_data" / "wave_00000_world.json.gz"
+    world = json.load(gzip.open(wp, "rt", encoding="utf-8"))
+    for w in world:
+        if w["f"] < 15:                                   # from frame 15 the collector omitted an empty list
+            w["pf"] = [[PF_AT[0], PF_AT[1], 0], [120.0, 20.0 + w["f"], 1]]
+    with gzip.open(wp, "wt", encoding="utf-8") as f:
+        json.dump(world, f)
+    src = V.ReplaySource(str(run), runs_dir=str(tmp_path / "runs"))
+    sc = src.scene(10)
+    assert sc.platforms == [[80.0, 60.0, 30.0, 10.0], [120.0, 30.0, 10.0, 30.0]]
+    assert not any("platforms" in s for s in sc.status)
+    assert src.scene(16).platforms == []
+    surf = _surface()
+    r = V.Renderer()
+    r.render(surf, sc)
+    assert tuple(surf.get_at(_map_point(r, surf, sc, *PF_AT)))[:3] == V.PLATFORM
+    assert tuple(surf.get_at(_map_point(r, surf, sc, PF_AT[0] + 25.0, PF_AT[1] + 7.0)))[:3] == V.PLATFORM
+    r.render(surf, src.scene(16))                         # no platforms: the background there
+    assert tuple(surf.get_at(_map_point(r, surf, sc, *PF_AT)))[:3] != V.PLATFORM
+    # a frame the world records do not cover: no platforms, and the panel says why
+    src.seg_world, src._boxes_cache = {}, {}
+    src._cache = None
+    sc = src.scene(10)
+    assert sc.platforms == [] and any("no recorded hazards or platforms" in s for s in sc.status)
+
+
+def test_live_platforms_and_older_senders():
+    """Live: the frame message's "pf" is drawn; a message without it (an older sender) has no platforms."""
+    src = V.LiveSource(bind=False)
+    for d in _datagrams():
+        src.datagram(d)
+    rows = [[PF_AT[0], PF_AT[1], 30.0, 10.0]]
+    fm = T.decode(T.Telemetry(None).fit(T.frame_message(LEVEL, 1, 9, [], [], {}, [], rows)))
+    assert fm["pf"] == rows
+    src.handle(fm)
+    sc = src.scene()
+    assert sc.platforms == rows
+    surf = _surface()
+    r = V.Renderer()
+    r.render(surf, sc)
+    assert tuple(surf.get_at(_map_point(r, surf, sc, *PF_AT)))[:3] == V.PLATFORM
+    old = dict(fm)
+    del old["pf"]
+    src.handle(old)
+    assert src.scene().platforms == []
+    r.render(surf, src.scene())
+    assert T.frame_message(LEVEL, 1, 9, [], [], {}, [])["pf"] == []         # the sender's default: none
+
+
+ONLINE = os.path.join(HERE, "runs", "online_check01", "wm_data")
+SHARD_44 = os.path.join(ONLINE, "wave_00548")
+
+
+@pytest.mark.skipif(not (os.path.exists(SHARD_44 + ".npz") and os.path.exists(SHARD_44 + "_world.json.gz")
+                         and os.path.exists(os.path.join(ONLINE, "levels", "4-4.npz"))),
+                    reason="runs/online_check01 4-4 data not here")
+def test_replay_platforms_of_a_recorded_4_4_wave(tmp_path):
+    """A recorded 4-4 wave (runs/online_check01, two moving platforms, one upright), copied into a small run folder
+    (the whole run takes minutes to load): each step's platforms are that frame's recorded "pf"."""
+    import shutil
+    from game.level import platform_boxes
+    meta = json.loads(str(np.load(SHARD_44 + ".npz")["meta"]))
+    if meta.get("level") != "4-4":
+        pytest.skip("wave_00548 is not a 4-4 shard here")
+    run = tmp_path / "run44"
+    os.makedirs(run / "wm_data" / "levels")
+    shutil.copy(os.path.join(ONLINE, "levels", "4-4.npz"), run / "wm_data" / "levels" / "4-4.npz")
+    shutil.copy(SHARD_44 + ".npz", run / "wm_data" / "wave_00548.npz")
+    shutil.copy(SHARD_44 + "_world.json.gz", run / "wm_data" / "wave_00548_world.json.gz")
+    rows = np.load(SHARD_44 + ".npz")["rows"]
+    wave = int(meta["wave"])
+    with open(run / "states.jsonl", "w", encoding="utf-8") as f:
+        for q in rows:
+            f.write(json.dumps({"frame": int(q["frame"]), "wave": wave, "level": "4-4",
+                                "agents": [[int(q["agent"]), float(q["x"]), float(q["y"]), float(q["vx"]),
+                                            float(q["vy"]), int(q["status"])]]}) + "\n")
+    world = {w["f"]: w for w in json.load(gzip.open(SHARD_44 + "_world.json.gz", "rt", encoding="utf-8"))}
+    src = V.ReplaySource(str(run), runs_dir=str(tmp_path / "none"))
+    checked = 0
+    surf, r = _surface(), V.Renderer()
+    for idx in (0, src.n // 2, src.n - 2):
+        sc = src.scene(idx)
+        assert sc.level is not None and sc.level_name == "4-4"
+        expect = T.platform_rows(platform_boxes(world[sc.frame].get("pf")))
+        assert sc.platforms == expect and len(expect) == 2
+        raw = world[sc.frame]["pf"]
+        assert [p[:2] for p in sc.platforms] == [[round(x, 1), round(y, 1)] for x, y, _ in raw]
+        assert [(p[2], p[3]) for p in sc.platforms] == [(10.0, 30.0) if up else (30.0, 10.0) for _, _, up in raw]
+        assert sorted(up for _, _, up in raw) == [0, 1]                                  # one upright, one flat
+        r.render(surf, sc)
+        x, y, hw, hh = sc.platforms[0]
+        px, py = _map_point(r, surf, sc, x, y)
+        assert 0 <= px < surf.get_width() - V.PANEL_W and 0 <= py < surf.get_height()
+        assert tuple(surf.get_at((px, py)))[:3] == V.PLATFORM
+        checked += 1
+    assert checked == 3
+    # the wave end's final row (frame 149) has no world record: no platforms, said in the panel
+    last = src.scene(src.n - 1)
+    assert last.frame not in world and last.platforms == []
+    assert any("no recorded hazards or platforms" in t for t in last.status)

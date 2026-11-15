@@ -1496,7 +1496,7 @@ class Runner:
             future = {}
         mem = self.deaths.boxes(lv.name, frame)
         self.tel.send(T.frame_message(lv.name, self.wave_no, frame, agents, now, future,
-                                      T.box_rows(mem, S.KIND_MEMORY)))
+                                      T.box_rows(mem, S.KIND_MEMORY), T.platform_rows(lv.plats)))
         if time.time() - self.level_sent >= LEVEL_EVERY_S:
             self.send_level()
 

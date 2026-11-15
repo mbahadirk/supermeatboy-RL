@@ -13,9 +13,11 @@ Replay: runs/<name>/plans.jsonl, events.jsonl and states.jsonl, one step per log
 from the run's own wm_data/levels (--wm-collect) or else any other recording of that level under runs/*/wm_data;
 hazards from the run's wm_data world records (the recorded hazards at +8 / +16 frames stand in for the
 planner's expectation, which is not logged; waves repeat exactly under the time-step lock); remembered deaths
-from the run's death events (memory_added). Without wm_data the replay has no hazards (said in the panel).
+from the run's death events (memory_added); moving platforms from the same world records ("pf"). Without wm_data
+the replay has no hazards and no platforms (said in the panel).
 
-Drawn (map, y up): tiles (solid, special, gone), the kill box / alive box, goal and keys with the planner's
+Drawn (map, y up): tiles (solid, special, gone), moving platforms where they are now (teal bars; live from the
+frame message's "pf", replay from the world records), the kill box / alive box, goal and keys with the planner's
 contact region (outline: what counts as touching them), spawn; hazards now (red,
 rotated: the game's kill shapes), predicted at +8 / +16 (faint outlines), remembered deaths
 (purple); planned agents (white) and explore agents (small dim dots) with a velocity arrow (0.1 s); deaths
@@ -103,6 +105,7 @@ TEXT = (222, 222, 236)
 DIM = (140, 142, 162)
 FAINT = (80, 82, 100)
 HAZ = (215, 60, 60)
+PLATFORM, PLATFORM_EDGE = (40, 150, 130), (110, 230, 200)   # moving platforms: filled teal bar, light edge
 SHOT = (255, 120, 60)
 MEMORY = (170, 90, 255)
 GOAL = (245, 120, 185)
@@ -389,6 +392,7 @@ class Scene:
     status: list = field(default_factory=list)   # extra header lines
     planned: list = field(default_factory=list)  # planned agent indices
     timeline: dict | None = None                 # replay: {n, idx, marks: [(idx, colour)], decisions: [(idx, switched)]}
+    platforms: list = field(default_factory=list)  # moving platforms now: telemetry "pf" rows [x, y, hw, hh]
 
 
 def event_colour(e: dict):
@@ -691,7 +695,8 @@ class LiveSource:
                      agents, list(fm.get("hazards") or []), dict(fm.get("future") or {}), "predicted",
                      list(fm.get("memory") or []), plans, hist,
                      lambda i, f: self.real.get(int(i), {}).get(int(f)), boxes_at, list(self.deaths),
-                     list(self.events)[-EVENTS_SHOWN:], self.stats.summary(), status, planned)
+                     list(self.events)[-EVENTS_SHOWN:], self.stats.summary(), status, planned,
+                     platforms=list(fm.get("pf") or []))     # older senders: no "pf"
 
 
 # ---- replay source --------------------------------------------------------------------------------------------
@@ -879,6 +884,15 @@ class ReplaySource:
         self._boxes_cache[key] = out
         return out
 
+    def platforms(self, seg: int, frame: int) -> list | None:
+        """Recorded moving platforms (telemetry "pf" rows) at a wave frame of a segment, None when not recorded. A
+        record without "pf" has none (the collector omits an empty list)."""
+        recs = self.seg_world.get(seg)
+        if recs is None or frame not in recs:
+            return None
+        from game.level import platform_boxes
+        return T.platform_rows(platform_boxes(recs[frame][0].get("pf")))
+
     def memory_boxes(self, idx: int, level: str, frame: int) -> list:
         return [[x, y, MEMORY_HALF, MEMORY_HALF, 0.0, KIND_MEMORY] for s, lname, f, x, y in self.mem
                 if s <= idx and lname == level and abs(f - frame) <= MEMORY_WINDOW]
@@ -932,14 +946,17 @@ class ReplaySource:
         for e in evs:
             stats.event(e)
         status = ["", self.level_note.get(level, "") if level else ""]
+        plats = self.platforms(seg, frame)
         if now is None:
-            status.append("no recorded hazards (the run has no wm_data for this wave)")
+            status.append("no recorded hazards" + (" or platforms" if plats is None else "")   # (a map is missing)
+                          + " (the run has no wm_data for this wave)")
         return Scene("replay", self.name, lv, level, wave, frame, agents, now or [], future,
                      "recorded (not the planner's prediction)", mem, plans, hist,
                      lambda i, f: self.real.get((seg, int(f), int(i))), boxes_at, deaths,
                      [e for e in evs if e.get("kind") != "field"][-EVENTS_SHOWN:], stats.summary(), status,
                      list(self.planned), {"n": self.n, "idx": idx, "marks": self.marks,
-                                          "decisions": self.decision_marks})
+                                          "decisions": self.decision_marks},
+                     platforms=plats or [])
 
 
 # ---- drawing --------------------------------------------------------------------------------------------------
@@ -1054,7 +1071,7 @@ class Renderer:
         else:
             self.text(surf, "waiting for a level / frame...", 30, 30, DIM, self.big)
         self.text(surf, "green plan  yellow landing  cyan wall jump  red hazard  purple remembered death  "
-                        "o prediction", 8, 4, FAINT, self.small)
+                        "teal platform  o prediction", 8, 4, FAINT, self.small)
         if scene.timeline:
             self.draw_timeline(surf, scene, (0, map_h, map_w, TIMELINE_H))
         self.draw_panel(surf, scene, sel, map_w + 10, W - map_w - 18)
@@ -1269,6 +1286,10 @@ class Renderer:
                     pg.draw.line(surf, MEMORY, m.pt(*a[:2]), m.pt(*b_[:2]), 1)
                 except (TypeError, ValueError):
                     pass
+        for p in scene.platforms:            # moving platforms: axis-aligned bars
+            b = [p[0], p[1], p[2], p[3], 0.0]
+            self.poly(surf, m, b, PLATFORM, 0)
+            self.poly(surf, m, b, PLATFORM_EDGE, 1)
         if self.show_future:
             for key, alpha in (("16", 60), ("8", 110)):
                 for b in scene.future.get(key) or []:
@@ -1502,6 +1523,8 @@ class Renderer:
             if s:
                 small(s, DIM)
         line(f"{scene.level_name or '?'}  wave {scene.wave}  frame {scene.frame}", TEXT, self.big, 22)
+        if scene.platforms:
+            small(f"moving platforms: {len(scene.platforms)} (teal)", PLATFORM_EDGE)
         if self.show_progress and self.progress_note:
             small(self.progress_note, PROGRESS_LINE)
         plan = scene.plans.get(sel) if sel is not None else None

@@ -66,8 +66,12 @@ Message types
  "hazards": [box, ...] (the deadly boxes now: the lethal pieces' kill shapes and shots),
  "future": {"8": [box, ...], "16": [box, ...]} (the deadly boxes the planner expects 8 and 16 frames ahead,
            including remembered deaths active then; {} when there is no prediction),
- "memory": [box, ...] (remembered deaths active at this frame, kind 3)}
- Sent every frame. Shrunk when too big: "future" dropped, then the agent list cut to the first 60.
+ "memory": [box, ...] (remembered deaths active at this frame, kind 3),
+ "pf": [[x, y, hw, hh], ...] (the moving platforms now, game.level.Level.plats: axis-aligned bars, centre and half
+       sizes, 30 x 10 or 10 x 30 when upright (game.level PLAT_HALF), rounded to 0.1; [] on a level without them.
+       Older senders have no "pf": readers take it as [])}
+ Sent every frame. Shrunk when too big: "future" dropped, then the agent list cut to the first 60 ("pf", a few
+ short rows, is kept).
 
 {"t": "plan", "time", "level", "wave", "real": {x, y, vx, vy, flags, state, status, keys} (the agent's reported
  state at the decision frame), ... every field of plan.explain.Plan.to_dict() ...}
@@ -179,6 +183,13 @@ def box_rows(boxes, kind, shape=None, grow=None) -> list:
              round(float(r[4]), 3), int(kk), int(ss), round(float(g), 1)] for r, kk, ss, g in zip(b, k, sh, gr)]
 
 
+def platform_rows(plats) -> list:
+    """Moving platforms as game.level.Level.plats has them ((x, y, hw, hh, upright), ...) -> the frame message's
+    "pf" rows [[x, y, hw, hh], ...] rounded to 0.1 (the half sizes already turned for upright bars)."""
+    return [[round(float(p[0]), 1), round(float(p[1]), 1), round(float(p[2]), 1), round(float(p[3]), 1)]
+            for p in (plats or [])]
+
+
 # ---- message builders (the schema above) --------------------------------------------------------------
 def progress_payload(tbest, route_cells, key_order, build_id: int) -> dict:
     """The level message's "progress" entry (schema above) from plan.progress.best_times and the field's route."""
@@ -204,9 +215,10 @@ def level_message(lv, wave: int, planned: int, explore: int, field_summary: str 
 
 
 def frame_message(level: str, wave: int, frame: int, agents: list, hazards: list, future: dict,
-                  memory: list) -> dict:
+                  memory: list, pf: list | None = None) -> dict:
+    """pf: platform_rows of the level's moving platforms (None: [])."""
     return {"t": "frame", "time": time.time(), "level": level, "wave": int(wave), "frame": int(frame),
-            "agents": agents, "hazards": hazards, "future": future, "memory": memory}
+            "agents": agents, "hazards": hazards, "future": future, "memory": memory, "pf": list(pf or [])}
 
 
 def plan_message(level: str, wave: int, plan_dict: dict) -> dict:

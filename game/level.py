@@ -38,6 +38,13 @@ OUT_SIDE, OUT_BOTTOM = 10.0, 60.0
 
 
 # ---- level ------------------------------------------------------------------------------------------
+def platform_boxes(pf) -> list[tuple]:
+    """The game's moving platforms ([x, y, upright 0/1] per platform, realgame.js platforms()) -> their bars
+    (x, y, half width, half height, upright): PLAT_HALF, turned when upright."""
+    return [(float(x), float(y)) + ((PLAT_HALF[1], PLAT_HALF[0]) if up else PLAT_HALF) + (bool(up),)
+            for x, y, up in (pf or [])]
+
+
 def parse_kill_box(kb):
     """(left, right, bottom, top) from realgame.js `kb`, or None when absent or not a finite, non-empty box."""
     try:
@@ -329,7 +336,7 @@ class Level:
         covered new cells, started moving, or turned out to be fixed."""
         if not pf:
             return False
-        boxes = [(x, y) + ((PLAT_HALF[1], PLAT_HALF[0]) if up else PLAT_HALF) + (bool(up),) for x, y, up in pf]
+        boxes = platform_boxes(pf)
         if len(self.plats) == len(boxes):
             self.plat_vel = [((b[0] - a[0]) * HZ, (b[1] - a[1]) * HZ) for a, b in zip(self.plats, boxes)]
         else:

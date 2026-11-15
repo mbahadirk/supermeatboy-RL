@@ -54,10 +54,11 @@ def _runner(tmp_path, tel):
     return r
 
 
-def _drive_wave(r, exact: bool = True):
+def _drive_wave(r, exact: bool = True, pf=None):
     """info, N_FRAMES recorded frames (agent 1 dies at DIE_AT), wave end with agent 0 dead on the last update.
     exact: the wave_end carries the final states `s` and the hazards / shots `hz` / `sh` (realgame.js now);
-    otherwise it is the older message without them. Returns (acts, dead_xy, died_frame, end_xy): end_xy is
+    otherwise it is the older message without them. pf: a function of the frame index k giving the frame's moving
+    platforms ([x, y, upright], ...; realgame.js "pf"), None: the recording's own (1-13 has none). Returns (acts, dead_xy, died_frame, end_xy): end_xy is
     agent 0's final position sent with the wave end (None without `s`)."""
     from wm.buffer import load_level
     import glob
@@ -91,6 +92,8 @@ def _drive_wave(r, exact: bool = True):
             st.append(s)
         msg = dict(w, ev="frame", frame=f, wave=1, s=st)
         msg.pop("f")
+        if pf is not None:
+            msg["pf"] = pf(k)
         n_posts = len(r.script.posts)
         r.on_message({"type": "send", "payload": msg}, None)
         new = r.script.posts[n_posts:]
@@ -510,6 +513,44 @@ def test_telemetry_udp_roundtrip_and_never_blocks():
     tel.close()
     tel2.close()
     assert T.parse_addr("off") is None and T.parse_addr("127.0.0.1:47800") == ("127.0.0.1", 47800)
+
+
+def test_frame_message_carries_the_level_platforms():
+    """The frame message's "pf" is the level's live platforms (game.level.Level.plats), half sizes turned for an
+    upright bar, rounded to 0.1; it survives the shrink rules."""
+    from game.level import Level
+    words = np.zeros((8, 12), "<u4")
+    words[0, :] = 1
+    meta = {"name": "T-1", "W": 12, "H": 8, "ox": -100.0, "oy": -60.0, "spawn": [-60.0, -30.0], "goals": [[90.0, -30.0]],
+            "keys": [], "bandages": [], "portals": [], "objs": [], "lethalTypes": [], "kb": None}
+    lv = Level(meta, words.tobytes())
+    assert T.platform_rows(lv.plats) == []
+    lv.set_platforms([[10.04, 20.06, 0], [-50.0, 5.0, 1]])
+    rows = T.platform_rows(lv.plats)
+    assert rows == [[10.0, 20.1, 30.0, 10.0], [-50.0, 5.0, 10.0, 30.0]]
+    agents = [{"i": i, "role": "explore", "x": 1.0, "y": 2.0} for i in range(200)]
+    boxes = T.box_rows(np.random.default_rng(0).normal(0, 1000, (3000, 5)), 0)
+    for m in (T.frame_message("T-1", 1, 5, [], [], {}, [], rows),
+              T.frame_message("T-1", 1, 5, agents, boxes[:200], {"8": boxes, "16": boxes}, [], rows)):   # shrunk
+        data = T.Telemetry(None).fit(m)
+        assert data is not None and len(data) <= T.MAX_BYTES and T.decode(data)["pf"] == rows
+
+
+@need_data
+def test_runner_sends_the_platforms_in_frame_telemetry(tmp_path):
+    """agent.py's frame telemetry carries the platforms of each frame (via Level.set_platforms, the level's owner),
+    a moving flat bar and an upright one, far outside the map (no route changes)."""
+    from game.level import platform_boxes
+    tel = _CaptureTel()
+    r = _runner(tmp_path, tel)
+    pf = lambda k: [[-3000.0 + 2.0 * k, -3000.0, 0], [-3500.0, -3000.0 + 1.5 * k, 1]]
+    _drive_wave(r, pf=pf)
+    r.close()
+    frames = [m for m in map(T.decode, tel.out) if m["t"] == "frame"]
+    assert len(frames) == N_FRAMES
+    for k, m in enumerate(frames):
+        assert m["pf"] == T.platform_rows(platform_boxes(pf(k)))
+    assert frames[-1]["pf"][1][2:] == [10.0, 30.0]                     # upright: 20 x 60
 
 
 def test_frame_message_shrinks_under_the_limit():
