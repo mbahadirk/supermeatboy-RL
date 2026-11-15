@@ -171,11 +171,27 @@ def fine_tune(model, pending: dict, replay: dict, rng, old: dict | None = None) 
     return steps
 
 
+def replay_mismatch(meta: dict, model) -> str | None:
+    """Why a replay sample (its meta: make_replay.py) cannot be trained with this model, or None when it can: its
+    step, feature protocol (wm.features.model_layout) and prior protocol (wm.features.model_prior; a sample that
+    records none is gravity-v1) must all be the model's. The one owner of this rule (wm.online and agent.py --online)."""
+    from wm.features import model_layout, model_prior
+    from wm.protocol import GRAVITY_PRIOR
+    have = (int(meta.get("step", -1)), meta.get("protocol"), meta.get("prior_protocol", GRAVITY_PRIOR))
+    want = (int(model.step), model_layout(model).protocol, model_prior(model))
+    if have == want:
+        return None
+    return (f"the replay sample is step {have[0]} / {have[1] or 'no recorded feature protocol'} / {have[2]}, the "
+            f"model is step {want[0]} / {want[1]} / {want[2]} (step / feature protocol / prior): make a replay sample "
+            f"of the model's own training features (runs/experiments/human_v3/make_replay.py: tile-shapes-v1, "
+            f"runs/experiments/human_v4/make_replay.py: tile-accel-v1) and pass it with --replay / --online-replay")
+
+
 def load_replay(path: str, model) -> dict:
     z = np.load(path, allow_pickle=False)
-    meta = json.loads(str(z["meta"]))
-    if int(meta["step"]) != model.step:
-        raise SystemExit(f"replay {path}: step {meta['step']}, the model's is {model.step}")
+    why = replay_mismatch(json.loads(str(z["meta"])), model)
+    if why:
+        raise SystemExit(f"replay {path}: {why}")
     return {k: z[k] for k in z.files if k != "meta"}
 
 

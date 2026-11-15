@@ -517,6 +517,11 @@ class Runner:
                                                   args.eval_first in eval_levels(), HERE)
             else:
                 self.model = WorldModel.load(path).eval()
+                if getattr(args, "online", False):      # the online learner's replay must be of this model's encoding
+                    from wm.online import replay_mismatch
+                    why = replay_mismatch(json.loads(str(np.load(args.online_replay)["meta"])), self.model)
+                    if why:
+                        raise SystemExit(f"--online: {args.online_replay} cannot be trained with {path}: {why}")
             self.model_path = path
         self.learn = bool(getattr(args, "learn", False)) and self.model is not None
         self.learner = None                     # --learn: the wm.learner child process

@@ -129,3 +129,28 @@ def test_online_accepts_against_the_base_models_replay_loss(monkeypatch):
     assert cand is not None and steps == 7 and losses["replay"] == [0.02, 0.04] and losses["bar"] == 1.05
     cand, losses, _ = W.cycle(*args, base_replay=0.001, old_parts=[toy_parts(10, 7)])
     assert cand is None
+
+
+def test_a_replay_sample_of_another_step_feature_or_prior_protocol_is_refused():
+    """wm.online.replay_mismatch (wm.online.load_replay and agent.py --online): a replay sample is trained with a
+    model only when its step, feature protocol and prior protocol (none recorded: gravity-v1) are the model's."""
+    torch = pytest.importorskip("torch")
+    import wm.online as W
+    from wm.features import layout
+
+    def stub(protocol, step=4, prior=None):
+        info = {"feature_protocol": protocol, **({"prior_protocol": prior} if prior else {})}
+        return types.SimpleNamespace(info=info, step=step, mu=torch.zeros(layout(protocol).n_in(step)))
+
+    meta = {"step": 4, "protocol": "tile-shapes-v1", "prior_protocol": "gravity-v1"}
+    assert W.replay_mismatch(meta, stub("tile-shapes-v1")) is None
+    assert W.replay_mismatch({"step": 4, "protocol": "tile-shapes-v1"}, stub("tile-shapes-v1")) is None
+    why = W.replay_mismatch(meta, stub("tile-accel-v1"))                 # human_v4's model with human_v3's sample
+    assert why and "tile-shapes-v1" in why and "tile-accel-v1" in why and "human_v4/make_replay.py" in why
+    assert W.replay_mismatch(meta, stub("tile-shapes-v1", prior="gravity-fan-wind-v1"))
+    assert W.replay_mismatch(meta, stub("tile-shapes-v1", step=1))
+    assert W.replay_mismatch({"step": 4}, stub("tile-shapes-v1"))       # a sample recording no feature protocol
+    if os.path.exists(MODEL) and os.path.exists(REPLAY):                 # the default pair matches
+        import json
+        from wm.model import WorldModel
+        assert W.replay_mismatch(json.loads(str(np.load(REPLAY)["meta"])), WorldModel.load(MODEL)) is None
