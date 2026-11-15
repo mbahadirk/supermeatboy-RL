@@ -107,3 +107,52 @@ def test_planner_process_plans_ahead_in_order_and_cancels():
     finally:
         proc.close()
     assert not proc.proc.is_alive()
+
+
+@needs_model
+def test_ahead_start_on_the_best_route_is_the_recorded_state():
+    """A decision made ahead on the best route starts from the route's recorded state (the game repeats it),
+    not the model's guess: live (online_check01 3-1 wave 2 f152) the model's start, 0.92 units and 0.39 u/f off
+    the exact route state, priced a pass the route had survived at soft risk 0.92 and the agent left the route.
+    Off the route (another state, frame or prefix) the model's prediction stays."""
+    from mpc.candidates import act
+    from plan.planner import Planner, state_row
+    lv, field = _flat()
+    pl = Planner(MODEL, lv, field, budget_ms=None)
+    pl.trials.gain = 0.0                                              # no route trial here (test_route_trials.py)
+    x0, n, d = 10 * T + 10, 120, 8
+    pl.route.best = {"finish": 400, "f": np.arange(92, 92 + n), "x": np.full(n, x0), "y": np.full(n, 46.0),
+                     "vx": np.zeros(n), "vy": np.zeros(n), "a": np.full(n, act(0))}
+    H = pl.future_frames
+    worlds, frames = _inputs(H + d)
+    prefix = np.full(d, act(0), np.int64)
+    best = pl.route.best
+
+    def both(row, acts, frame):                                       # (with the route, the model's alone)
+        pl.route.best = None
+        alone = pl.predict_start(row, acts, worlds[:d], frame=frame)
+        pl.route.best = best
+        return pl.predict_start(row, acts, worlds[:d], frame=frame), alone
+    (pred, spread), (model_pred, _) = both(_standing(), prefix, 92)
+    assert spread == 0.0 and pred["x"][0] == x0 and pred["y"][0] == 46.0 and pred["vx"][0] == 0.0
+    assert abs(model_pred["x"][0] - x0) > 0.05                        # the model's guess is off (the stub's point)
+    assert pred["state"][0] == model_pred["state"][0]                 # the fields not recorded: the model's
+    for row, acts, frame in ((state_row(x0 + 1.0, 46.0, 0.0, 0.0, 0, 5, 0, 0), prefix, 92),   # another state
+                             (_standing(), np.full(d, act(1), np.int64), 92),                  # another prefix
+                             (_standing(), prefix, 91)):                         # a frame the route has not
+        (p, s), (m, ms) = both(row, acts, frame)
+        assert p["x"][0] == m["x"][0] and p["vx"][0] == m["vx"][0] and s == ms
+    # the decision at frame 100: a box 3 units beside the route from frame 20 on (the route stood there and lived)
+    fb = S.FrameBoxes(np.array([[x0 - 13.0, 46.0, 4.0, 4.0, 0.0]]), np.zeros(1, np.int8), ["h0"])
+    assert fb.clearance(np.array([x0]), np.array([46.0]))[0, 0] == 3.0
+    fr = [frames[k] if k < 20 else fb for k in range(H + 1)]
+    pl.new_wave()
+    mis = state_row(x0 + 0.92, 46.0, 0.39 * 60.0, 0.0, 0, 5, 0, 0)    # the model's start as live: 0.92 / 0.39 off
+    p_mis = pl.plan(mis, 100, worlds[d:], fr, recorded=H)
+    br = p_mis.best_route
+    assert br["judged"] == "real" and not br["used"] and br["why"].startswith("soft risk"), br
+    pl.new_wave()
+    p_rec = pl.plan(pred, 100, worlds[d:], fr, recorded=H)
+    br = p_rec.best_route
+    assert br["judged"] == "real" and br["used"] and p_rec.mode == "best-route", br
+    assert br["real"]["soft"] == 0.0 and br["real"]["margin"] == [0.0, 0.0]

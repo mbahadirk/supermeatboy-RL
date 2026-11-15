@@ -251,6 +251,10 @@ ROUTE_MOVE = "best route"                    # the candidate's move name (failur
 # distance 0.0; the other rejoins were 0.3 to 6 units off.
 REAL_RADIUS = 1.0
 REAL_SPEED = 0.5
+# a start predicted ahead (Planner.predict_start) is the route's recorded one when the agent is this close to the
+# route's state at the same wave frame (units, and units / frame per component): the time-step lock repeats waves
+# exactly (online_check01 3-1: waves 1-3 identical to 0.01 units through frame 152)
+AHEAD_EXACT = 0.05
 RISK_SWITCH = 0.2                            # soft risk: a previous plan riskier than the best by more is dropped
 TRIAL_GAIN = 20.0                            # frames: an unvetoed plan this much better than the best route is tried once
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
@@ -2459,7 +2463,13 @@ class Planner:
         ensemble imagines it with the collision guard: the member row nearest the members' mean position, and
         the members' largest distance from that mean (units). agent.py --async-plan plans from it while those
         frames play. worlds: at least len(actions) World (index k = row's frame + k). frame: the row's wave frame
-        (the crumble stages count from it; None: no tile is expected to break on the way)."""
+        (the crumble stages count from it; None: no tile is expected to break on the way).
+        On the best route (BestRoute): when `row` is the route's state at the same wave frame (within
+        AHEAD_EXACT units and units / frame, the same key mask where it is known) and `actions` are the route's
+        recorded contiguous actions from there, the game repeats the route (time-step lock), so its position,
+        velocity (and known mask) are the route's recorded state at frame + len(actions), spread 0; the other
+        fields stay the model's. (Live, online_check01 3-1 wave 2 f152: the model's start, 0.92 units and
+        0.39 u/f off the exact route state, priced a pass the route survived at soft risk 0.92 and left it.)"""
         row = np.asarray(row, ROW).reshape(1)
         acts = np.asarray(actions, np.int64).reshape(1, -1)
         if acts.shape[1] % self.f:
@@ -2470,7 +2480,38 @@ class Planner:
         out = imagine(self.model, slice(None), self.geom, row, acts, dt_ms, worlds, **opts)
         last = out["last"][:, 0]
         d = np.hypot(last["x"] - last["x"].mean(), last["y"] - last["y"].mean())
-        return last[int(np.argmin(d))].reshape(1).copy(), float(d.max())
+        pred = last[int(np.argmin(d))].reshape(1).copy()
+        k = self._route_ahead(row, acts[0], frame, dt_ms)
+        if k is None:
+            return pred, float(d.max())
+        b, s = self.route.best, 1000.0 / dt_ms
+        pred["x"], pred["y"], pred["vx"], pred["vy"] = b["x"][k], b["y"][k], b["vx"][k] * s, b["vy"][k] * s
+        if b.get("keys_known") is not None and bool(b["keys_known"][k]):
+            pred["keys"] = int(b["keys"][k])
+        return pred, 0.0
+
+    def _route_ahead(self, row, acts, frame, dt_ms) -> int | None:
+        """predict_start's route rule: the best wave's index at frame + len(acts), or None."""
+        b = self.route.best
+        if b is None or frame is None or not len(acts):
+            return None
+        j = int(np.searchsorted(b["f"], int(frame)))
+        n = len(acts)
+        if j >= len(b["f"]) or int(b["f"][j]) != int(frame) or self.route.run(j) <= n:
+            return None
+        known = b.get("keys_known")
+        if known is not None and bool(known[j]):
+            if int(b["keys"][j]) != int(row["keys"][0]):
+                return None
+        elif getattr(self.lv, "keys", ()):
+            return None
+        v = float(dt_ms) / 1000.0
+        if (math.hypot(float(row["x"][0]) - b["x"][j], float(row["y"][0]) - b["y"][j]) > AHEAD_EXACT
+                or abs(float(row["vx"][0]) * v - b["vx"][j]) > AHEAD_EXACT
+                or abs(float(row["vy"][0]) * v - b["vy"][j]) > AHEAD_EXACT
+                or not np.array_equal(b["a"][j:j + n], acts)):
+            return None
+        return j + n
 
     # ---- planning modes -----------------------------------------------------------------------------------
     def _judge(self, out, frames, upto, leg, keys):
