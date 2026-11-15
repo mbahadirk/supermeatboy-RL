@@ -7,14 +7,18 @@ The run records every wave (wm.buffer.Collector: wave_*.npz with its world file)
 process:
 1. builds the new wave's transitions with the model's own feature encoding (wm.features.build on that one shard),
    held-out levels included (the run's own play is what is learned from; the base model is never written);
-2. takes the newest wave as the test ("fresh") and every earlier wave of the run as the training data;
-3. fine-tunes a copy of the published model on the run's training data mixed 1:9 with a replay sample of the base
-   model's training data (--replay: runs/experiments/human_v3/make_replay.py), so it learns the new physics
-   without forgetting the rest (AdamW, lr LR, OWN_EPOCHS passes over the run's data);
-4. publishes the copy as OUT/wm_model.pt (atomic replace; its info "online": version, the losses) only when its
-   one-step loss on the fresh wave is FRESH_GAIN lower than the published model's AND its loss on the replay's
-   validation rows is at most REPLAY_SLACK higher (a model that learns the new level by forgetting the old ones
-   is refused).
+2. takes the newest wave as the test ("fresh"); the run's other waves are either absorbed (a published model was
+   trained on them) or pending (not yet);
+3. fine-tunes a copy of the published model on the pending waves, rehearsing the absorbed ones (OLD_SHARE of each
+   batch's own rows when there are any), mixed 1:9 with a replay sample of the base model's training data
+   (--replay: runs/experiments/human_v3/make_replay.py), so it learns the new physics without forgetting the rest
+   (AdamW, lr LR, OWN_EPOCHS passes over the pending rows, at most MAX_STEPS steps: a cycle's cost stays bounded
+   however long the run is);
+4. publishes the copy as OUT/wm_model.pt (atomic replace; its info "online": version, the losses, the bar) only
+   when its one-step loss on the fresh wave is FRESH_GAIN lower than the published model's AND its loss on the
+   replay's validation rows is at most REPLAY_SLACK above the base (--init) model's (a model that learns the new
+   level by forgetting the old ones is refused); the pending waves are then absorbed. A refused cycle leaves them
+   pending: they are trained on again next cycle with the newer ones.
 The fresh wave is trained on in the next cycle (the test always comes from play the candidate never saw).
 Every cycle adds a line to OUT/online.log. Below-normal priority (Windows), --threads 2: the game keeps its speed.
 
@@ -44,13 +48,18 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 LR = 3e-5
-OWN_EPOCHS = 4                     # passes over the run's own training transitions per cycle
+OWN_EPOCHS = 4                     # passes over the pending own transitions per cycle
+MAX_STEPS = 1500                   # a cycle trains at most this many steps (its cost does not grow with the run)
 BATCH = 512
 REPLAY_SHARE = 0.9                 # of each batch: rows of the base training data (the rest: the run's own)
+OLD_SHARE = 0.3                    # of a batch's own rows: rows of absorbed waves (rehearsal), when there are any
 ANCHOR = 0.0                       # weight of sum((w - w_start)^2) in the loss: keeps the copy near its start
 MIN_SAMPLES = 8192                 # a cycle trains on at least this many samples (own + replay)
 FRESH_GAIN = 0.01                  # publish when the fresh wave's loss falls by at least this share ...
-REPLAY_SLACK = 0.05                # ... and the replay validation loss rises by at most this share
+REPLAY_SLACK = 0.05                # ... and the replay validation loss is at most this share above the base model's
+# The forgetting bar is the base (--init) model's replay loss, not the published model's: the base model's replay
+# val loss is 0.0597 (train 0.0065), so the first short fine-tune dropped it to 0.0203, and in runs/online_check01
+# all 54 later candidates (replay 0.04-0.08, fresh loss much better, e.g. 2.59 -> 0.27) were refused against it.
 SETTLE_S = 1.5                     # a shard is read only when it and its world file are this old (fully written)
 POLL_S = 2.0
 KEYS = ("X", "yc", "yb", "ys", "yr", "wc")
@@ -121,22 +130,35 @@ def loss_of(model, d: dict, bs: int = 4096) -> float:
     return total / max(n, 1)
 
 
-def fine_tune(model, own: dict, replay: dict, rng) -> int:
-    """OWN_EPOCHS passes over `own`, each batch REPLAY_SHARE replay rows (training split), the rest own. Returns
-    the steps."""
+def train_steps(n_pending: int) -> int:
+    """OWN_EPOCHS passes over n_pending own rows (at least MIN_SAMPLES samples), clipped to MAX_STEPS."""
+    k_own = max(1, int(round(BATCH * (1.0 - REPLAY_SHARE))))
+    return min(MAX_STEPS, max(1, max(OWN_EPOCHS * n_pending, int(MIN_SAMPLES * (1.0 - REPLAY_SHARE))) // k_own))
+
+
+def fine_tune(model, pending: dict, replay: dict, rng, old: dict | None = None) -> int:
+    """train_steps(len(pending)) steps; each batch REPLAY_SHARE replay rows (training split), the rest own: of those,
+    OLD_SHARE from `old` (absorbed waves) when given, the rest from `pending`. Returns the steps."""
     import torch
     T = lambda a, dt=torch.float32: torch.as_tensor(a, dtype=dt)
-    n_own = len(own["X"])
+    n_pend = len(pending["X"])
+    n_old = len(old["X"]) if old is not None else 0
     k_own = max(1, int(round(BATCH * (1.0 - REPLAY_SHARE))))
-    steps = max(1, max(OWN_EPOCHS * n_own, int(MIN_SAMPLES * (1.0 - REPLAY_SHARE))) // k_own)
+    k_old = min(k_own - 1, int(round(k_own * OLD_SHARE))) if n_old else 0
+    k_pend = k_own - k_old
+    steps = train_steps(n_pend)
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.0 if ANCHOR else 1e-5)
     start = [p.detach().clone() for p in model.parameters()] if ANCHOR else None
     rtr = np.nonzero(~replay["val"])[0]
     model.train()
     for _ in range(steps):
-        a = rng.integers(0, n_own, k_own)
+        a = rng.integers(0, n_pend, k_pend)
         b = rtr[rng.integers(0, len(rtr), BATCH - k_own)]
-        batch = {k: np.concatenate([own[k][a], replay[k][b]]) for k in KEYS if k in own}
+        if k_old:
+            c = rng.integers(0, n_old, k_old)
+            batch = {k: np.concatenate([pending[k][a], old[k][c], replay[k][b]]) for k in KEYS if k in pending}
+        else:
+            batch = {k: np.concatenate([pending[k][a], replay[k][b]]) for k in KEYS if k in pending}
         loss, _ = model.loss(T(batch["X"]), T(batch["yc"]), T(batch["yb"]), T(batch["ys"], torch.long),
                              T(batch["yr"]), T(batch["wc"]) if "wc" in batch else None)
         if start is not None:
@@ -157,16 +179,26 @@ def load_replay(path: str, model) -> dict:
     return {k: z[k] for k in z.files if k != "meta"}
 
 
-def cycle(model, own_parts: list, fresh_parts: list, replay: dict, rval: dict, rng, version: int):
-    """One candidate from `model`: (candidate or None, the losses {fresh: [old, new], replay: [old, new]},
-    training steps)."""
-    own, fresh = cat(own_parts), cat(fresh_parts)
+def replay_bar(base_replay: float) -> float:
+    """The highest replay validation loss a candidate may have: REPLAY_SLACK above the base model's."""
+    return base_replay + REPLAY_SLACK * abs(base_replay)
+
+
+def cycle(model, pending_parts: list, fresh_parts: list, replay: dict, rval: dict, rng, version: int,
+          base_replay: float, old_parts: list | None = None):
+    """One candidate from `model`, trained on the pending waves (rehearsing `old_parts`, the absorbed ones):
+    (candidate or None, the losses {fresh: [old, new], replay: [old, new], bar}, training steps). Accepted when the
+    fresh loss falls by FRESH_GAIN and the replay loss is at most replay_bar(base_replay)."""
+    pending, fresh = cat(pending_parts), cat(fresh_parts)
+    old = cat(old_parts) if old_parts else None
     old_fresh, old_replay = loss_of(model, fresh), loss_of(model, rval)
     cand = copy.deepcopy(model)
-    steps = fine_tune(cand, own, replay, rng)
+    steps = fine_tune(cand, pending, replay, rng, old)
     new_fresh, new_replay = loss_of(cand, fresh), loss_of(cand, rval)
-    losses = {"fresh": [round(old_fresh, 4), round(new_fresh, 4)], "replay": [round(old_replay, 4), round(new_replay, 4)]}
-    ok = new_fresh <= old_fresh - FRESH_GAIN * abs(old_fresh) and new_replay <= old_replay + REPLAY_SLACK * abs(old_replay)
+    bar = replay_bar(base_replay)
+    losses = {"fresh": [round(old_fresh, 4), round(new_fresh, 4)], "replay": [round(old_replay, 4), round(new_replay, 4)],
+              "bar": round(bar, 4)}
+    ok = new_fresh <= old_fresh - FRESH_GAIN * abs(old_fresh) and new_replay <= bar
     return (cand if ok else None), losses, steps
 
 
@@ -192,14 +224,19 @@ def main(argv=None):
     tmp = os.path.join(args.out, "tmp")
     os.makedirs(tmp, exist_ok=True)
     pub = os.path.join(args.out, "wm_model.pt")
-    model = WorldModel.load(pub if os.path.exists(pub) else args.init).eval()
+    base = WorldModel.load(args.init).eval()
+    model = WorldModel.load(pub).eval() if os.path.exists(pub) else base
     version = int(((model.info or {}).get("online") or {}).get("version", 0))
     replay = load_replay(args.replay, model)
     rval = {k: v[replay["val"]] for k, v in replay.items() if k in KEYS}
+    base_replay = loss_of(base, rval)             # the forgetting bar is the base model's replay loss
+    del base
     rng = np.random.default_rng(0)
     parts: dict[str, dict | None] = {}            # shard -> its transitions (None: nothing usable)
+    absorbed: set[str] = set()                    # shards a published model was trained on
     log_line(args.out, f"start: model {pub if os.path.exists(pub) else args.init} (v{version}), replay "
-                       f"{len(replay['X'])} rows, data {args.data}")
+                       f"{len(replay['X'])} rows, base replay loss {base_replay:.4f} (bar {replay_bar(base_replay):.4f}), "
+                       f"data {args.data}")
     while True:
         shards = sorted(p for d in args.data for p in glob.glob(os.path.join(d, "wave_*.npz")))
         new = [p for p in shards if p not in parts and ready(p)]
@@ -212,23 +249,29 @@ def main(argv=None):
         usable = [p for p in new if parts.get(p) is not None]
         test = usable[-1:]                        # the newest wave is the test; earlier new ones are trained on
         fresh = [parts[p] for p in test]
-        own = [v for p, v in parts.items() if v is not None and p not in test]
-        if fresh and own:
+        pending = [p for p, v in parts.items() if v is not None and p not in test and p not in absorbed]
+        old = [parts[p] for p in sorted(absorbed)]
+        if fresh and pending:
             t0 = time.time()
-            cand, losses, steps = cycle(model, own, fresh, replay, rval, rng, version)
-            n_own = sum(len(p["X"]) for p in own)
+            cand, losses, steps = cycle(model, [parts[p] for p in pending], fresh, replay, rval, rng, version,
+                                        base_replay, old)
+            n_pend = sum(len(parts[p]["X"]) for p in pending)
             levels = sorted({str(lv) for p in fresh for lv in np.unique(p["level"])})
             if cand is not None:
                 version += 1
+                absorbed |= set(pending)
                 cand.info = dict(cand.info or {}, online={"version": version, "init": args.init,
-                                                          "own_transitions": n_own, "losses": losses,
+                                                          "own_transitions": n_pend, "losses": losses,
+                                                          "base_replay": round(base_replay, 4),
+                                                          "absorbed_waves": len(absorbed),
                                                           "time": time.strftime("%Y-%m-%d %H:%M:%S")})
                 cand.save(pub + ".tmp", cand.info)
                 os.replace(pub + ".tmp", pub)
                 model = cand
-            log_line(args.out, f"cycle: {len(own)} waves ({n_own} transitions) trained, fresh {len(fresh)} wave(s) of "
-                               f"{', '.join(levels)}: fresh loss {losses['fresh'][0]} -> {losses['fresh'][1]}, replay "
-                               f"{losses['replay'][0]} -> {losses['replay'][1]}, {steps} steps "
+            log_line(args.out, f"cycle: {len(pending)} pending waves ({n_pend} transitions) trained, {len(old)} absorbed "
+                               f"rehearsed, fresh {len(fresh)} wave(s) of {', '.join(levels)}: fresh loss "
+                               f"{losses['fresh'][0]} -> {losses['fresh'][1]}, replay {losses['replay'][0]} -> "
+                               f"{losses['replay'][1]} (bar {losses['bar']}), {steps} steps "
                                f"[{time.time() - t0:.1f}s]: " + (f"published v{version}" if cand is not None else "kept"))
         elif fresh:
             log_line(args.out, f"{len(fresh)} first wave(s) read: the next one is the first test")
