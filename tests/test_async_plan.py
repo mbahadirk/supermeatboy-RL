@@ -63,6 +63,97 @@ def _standing():
     return state_row(10 * T + 10, 46.0, 0.0, 0.0, 0, 5, 0, 0)
 
 
+class _FakeProc:
+    """The planner process as agent.Runner.pl_sync / ahead_take use it: calls recorded, nothing planned."""
+
+    def __init__(self, result=None):
+        self.calls = []
+        self.res = result
+
+    def cancel(self, mid):
+        self.calls.append(("cancel", mid))
+
+    def call(self, name, *a, **kw):
+        self.calls.append((name,) + a)
+
+    def send(self, name, *a, **kw):
+        self.calls.append((name,) + a)
+
+    def result(self, mid):
+        return True, self.res
+
+    def take_events(self):
+        return []
+
+
+def _pending(mode: str, target: int = 108):
+    """A Runner stub with --async-plan --async-wait `mode`: agent 0 has a committed plan and a decision for frame
+    `target` being made ahead (started at 100)."""
+    import agent
+    r = object.__new__(agent.Runner)
+    r.async_on = True
+    r.wait_kinds = agent.WAIT_KINDS.get(mode, ())
+    r.nowait = mode in agent.WAIT_KINDS
+    r.cur_plan = {0: object()}
+    r.commit = Committer(replan=8, on=True)
+    r.ahead_miss = 0
+    r.async_lead = 8
+    r.st = {}
+    r.proc = _FakeProc()
+    r.ajob = agent.AheadJob(7, 0, 100, target, None, ())
+    r.events = []
+    r.event = lambda kind, frame, **kw: r.events.append(dict(kw, kind=kind, frame=frame))
+    return r
+
+
+def test_async_wait_defaults_to_events():
+    import agent
+    assert agent.build_parser().parse_args([]).async_wait == "events"
+    assert set(agent.WAIT_KINDS["events"]) == {"danger", "start", "surprise", "support"}
+    assert set(agent.WAIT_KINDS["danger"]) == {"danger", "start"}
+
+
+@pytest.mark.parametrize("trigger", ["surprise +4 err 7.1 > 6.0", "support: on a wall (predicted ground)"])
+def test_events_drops_the_plan_being_made_and_decides_now(trigger):
+    """--async-wait events: a surprise or support trigger before the ahead job's frame drops the job (logged,
+    the trigger named) and is returned for a decision at this frame, from the real state."""
+    r = _pending("events")
+    s = [0.0] * 8
+    tr = r.route_triggers(0, 103, s, ["interval", trigger], 0, 16.667)
+    assert tr == ["interval", trigger]                              # decided now (agent.py: need[i])
+    assert r.ajob is None and ("cancel", 7) in r.proc.calls
+    ev = [e for e in r.events if e["kind"] == "ahead dropped"]
+    assert len(ev) == 1 and ev[0]["reason"].startswith(trigger.split()[0]) and "at 103" in ev[0]["reason"]
+    assert r.st.get("ahead_dropped") == 1 and not r.st.get("ahead_absorbed")
+
+
+def test_events_at_the_jobs_frame_a_surprise_is_urgent():
+    r = _pending("events")
+    r.proc.res = ("plan", 0.0, 0.0, 0.0, 0.0, 0.0)
+    tr = r.route_triggers(0, 108, [0.0] * 8, ["surprise +8 err 9.0 > 6.6"], 0, 16.667)
+    assert tr == ["surprise +8 err 9.0 > 6.6"] and r.ajob is None
+    assert ("discard", 7) in r.proc.calls and r.events[-1]["reason"].startswith("surprise")
+    assert r.ahead_miss == 0                                         # urgent: not a miss of the prediction
+
+
+@pytest.mark.parametrize("mode,trigger", [("danger", "surprise +4 err 7.1 > 6.0"),
+                                          ("danger", "support: on a wall (predicted ground)"),
+                                          ("events", "interval")])
+def test_other_triggers_before_the_jobs_frame_are_absorbed(mode, trigger):
+    """--async-wait danger (the old rule): a surprise or support trigger is answered by the plan being made; with
+    events, so is a timed one. The job stays, nothing is decided now."""
+    r = _pending(mode)
+    assert r.route_triggers(0, 103, [0.0] * 8, [trigger], 0, 16.667) == []
+    assert r.ajob is not None and r.st["ahead_absorbed"] == 1 and not r.events and not r.proc.calls
+
+
+def test_danger_still_drops_the_job_in_both_modes():
+    for mode in ("danger", "events"):
+        r = _pending(mode)
+        assert r.route_triggers(0, 103, [0.0] * 8, ["danger: h3 at +6"], 0, 16.667) == ["danger: h3 at +6"]
+        assert r.ajob is None
+
+
 @needs_model
 def test_deferred_plan_leaves_the_planner_untouched_until_committed():
     from plan.planner import Planner

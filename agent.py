@@ -284,13 +284,19 @@ ASYNC_LEAD = 8          # frames: --async-plan starts the next timed decision th
 # (commit.MIN_TUBE units) and this speed (units / frame); farther, its path broke the surprise check within 2-4
 # frames in the simulated 1-15 runs (runs/experiments/async_plan_v1)
 ASYNC_DV = 0.5
-# --async-wait danger (the default): the game waits for a decision only on a danger trigger and when the agent
-# has no plan; every other trigger's decision is made in the background for ASYNC_LEAD frames later while the
-# committed plan plays on, and is used from a start within the surprise tube at that many frames (the error the
-# surprise rule itself allows a prediction of that age). After ASYNC_MISSES such plans in a row started too far
-# off, the next decision is made at once (waiting), from the real state.
+# --async-wait events (the default): the game waits for a decision, made at once from the real state, on the
+# trigger kinds WAIT_KINDS["events"] and when the agent has no plan; a plan being made ahead is then dropped.
+# Every other trigger's decision (interval, move end, short, missed) is made in the background for ASYNC_LEAD
+# frames later while the committed plan plays on, and is used from a start within the surprise tube at that many
+# frames (the error the surprise rule itself allows a prediction of that age). Surprise (the prediction broke)
+# and support (landed early, not on the ground, on a wall) wait too: planned ahead (--async-wait danger, about
+# 95% of decisions) they were answered up to ASYNC_LEAD frames late, by a plan made before the trigger from a
+# predicted start, and a trigger before the ahead plan's frame was absorbed by it. --async-wait danger keeps that
+# old rule (danger and start only) for A/B; all: every decision not planned ahead is waited for. After
+# ASYNC_MISSES plans made ahead in a row started too far off, the next decision is made at once, from the real
+# state.
 ASYNC_MISSES = 2
-WAIT_KINDS = ("danger", "start")
+WAIT_KINDS = {"danger": ("danger", "start"), "events": ("danger", "start", "surprise", "support")}
 
 
 class AheadJob:
@@ -539,7 +545,9 @@ class Runner:
             print(f"[async] --async-plan is off: {why_not}", flush=True)
             self.async_on = False
         self.async_lead = int(getattr(args, "async_lead", ASYNC_LEAD))
-        self.nowait = self.async_on and getattr(args, "async_wait", "danger") == "danger"
+        wait_mode = getattr(args, "async_wait", "events")
+        self.wait_kinds = WAIT_KINDS.get(wait_mode, ())     # trigger kinds decided at once (--async-wait)
+        self.nowait = self.async_on and wait_mode in WAIT_KINDS
         self.ahead_miss = 0                     # plans made ahead in a row that started too far off
         self.ajob = None                        # the plan being made ahead (AheadJob) or None
         self.proc = None                        # plan.worker.PlannerProcess: the planner with its memories
@@ -549,7 +557,8 @@ class Runner:
             self.proc = PlannerProcess(args.threads)
             print(f"[async] planner process started (pid {self.proc.proc.pid}); decisions planned "
                   f"{self.async_lead} frames ahead; the game waits "
-                  + ("only for danger decisions" if self.nowait else "for every decision not planned ahead"), flush=True)
+                  + (f"only for {', '.join(self.wait_kinds)} decisions" if self.nowait
+                     else "for every decision not planned ahead"), flush=True)
         self.deaths_path = args.death_memory
         self.deaths = S.DeathMemory() if first else S.DeathMemory.load(self.deaths_path)
         mm = getattr(args, "move_memory", DEFAULT_MOVES)
@@ -1015,18 +1024,7 @@ class Runner:
                 s = states[i]
                 tr = self.commit.triggers(i, frame, float(s[0]), float(s[1]), int(s[7]) if len(s) > 7 else 0, tiles,
                                           pl, fboxes_now)
-                j = self.ajob
-                wait = (not self.nowait or self.cur_plan.get(i) is None or self.ahead_miss >= ASYNC_MISSES
-                        or any(kind_of(t) in WAIT_KINDS for t in tr))
-                if j is not None and j.agent == i:
-                    if frame >= j.target or (tr and wait):
-                        tr = self.ahead_take(i, frame, s, tr)
-                    elif tr:                            # the plan being made answers it: the committed one plays on
-                        self.st["ahead_absorbed"] = self.st.get("ahead_absorbed", 0) + 1
-                        tr = []
-                if tr and not wait and self.ajob is None and self.ahead_miss < ASYNC_MISSES and \
-                        self.ahead_start(i, frame, s, held_before[i], dt, frame + self.async_lead, tr):
-                    tr = []                             # decided in the background, for async_lead frames on
+                tr = self.route_triggers(i, frame, s, tr, held_before[i], dt)
                 if tr:
                     need[i] = tr
             self.st["agent_frames"] += len(live_plan)
@@ -1229,9 +1227,29 @@ class Runner:
         self.proc.call("ping")
         self.proc_events()
 
+    def route_triggers(self, i: int, frame: int, s, tr: list, held: int, dt: float) -> list:
+        """What agent i's triggers of this frame lead to: the triggers to decide on now, from the real state, or []
+        (nothing now). With --async-plan: a trigger of a waiting kind (--async-wait: self.wait_kinds), no plan, or
+        too many misses waits: a plan being made ahead is dropped (ahead_take) and the decision is made now. Any
+        other trigger before the ahead plan's frame is absorbed by it (the committed plan plays on), else its
+        decision starts in the background for async_lead frames on. Without --async-plan: tr as it is."""
+        j = self.ajob
+        wait = (not self.nowait or self.cur_plan.get(i) is None or self.ahead_miss >= ASYNC_MISSES
+                or any(kind_of(t) in self.wait_kinds for t in tr))
+        if j is not None and j.agent == i:
+            if frame >= j.target or (tr and wait):
+                tr = self.ahead_take(i, frame, s, tr)
+            elif tr:                                    # the plan being made answers it: the committed one plays on
+                self.st["ahead_absorbed"] = self.st.get("ahead_absorbed", 0) + 1
+                tr = []
+        if tr and not wait and self.ajob is None and self.ahead_miss < ASYNC_MISSES and \
+                self.ahead_start(i, frame, s, held, dt, frame + self.async_lead, tr):
+            tr = []                                     # decided in the background, for async_lead frames on
+        return tr
+
     def ahead_start(self, i: int, frame: int, s, held: int, dt: float, target: int | None = None, why=()) -> bool:
         """Start planning a decision of agent i in the planner process: its next timed one (Committer.due), or
-        the one for frame `target` that answers the triggers `why` (--async-wait danger). Only a whole number of
+        the one for frame `target` that answers the triggers `why` (a kind not waited for). Only a whole number of
         model steps away, at most --async-lead frames, within the committed plan's actions: from the state those
         actions are imagined to reach then (Planner.predict_start), with this frame's view of the future shifted.
         True when it started."""
@@ -1256,16 +1274,17 @@ class Runner:
         frame of the predicted start (its path is then moved onto the real start); returns [] then. Otherwise (or a trigger before its frame) the job is dropped and
         the triggers that need a decision now are returned."""
         j = self.ajob
-        if frame != j.target:
-            self.pl_sync(drop=f"{tr[0] if tr else 'frame'} at {frame}, before its frame {j.target}")
+        if frame != j.target:                       # named by the trigger that waits (danger, surprise, support)
+            why = next((t_ for t_ in tr if kind_of(t_) in self.wait_kinds), tr[0] if tr else "frame")
+            self.pl_sync(drop=f"{why} at {frame}, before its frame {j.target}")
             return tr or ["start"]
         t = time.perf_counter()
         ok, res = self.proc.result(j.mid)
         self.st["ahead_wait_ms"] = self.st.get("ahead_wait_ms", 0.0) + 1000 * (time.perf_counter() - t)
         self.ajob = None
-        # --async-wait danger: the plan was made as the answer to every trigger but danger; its start may be as
-        # far off as the surprise rule lets a prediction of that age be
-        urgent = [t_ for t_ in tr if (kind_of(t_) in WAIT_KINDS if self.nowait else
+        # --async-wait events / danger: the plan was made as the answer to every trigger but the waiting kinds
+        # (self.wait_kinds); its start may be as far off as the surprise rule lets a prediction of that age be
+        urgent = [t_ for t_ in tr if (kind_of(t_) in self.wait_kinds if self.nowait else
                                       kind_of(t_) not in ("interval", "move end", "short"))]
         lead = j.target - j.start
         tube = max(self.commit.tube_factor * self.commit.tube.at(lead), MIN_TUBE) if self.nowait else MIN_TUBE
@@ -2131,10 +2150,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="world-model members that must touch a hazard within the first 16 frames for a plan to be "
                          "vetoed (default 1: any of the 5; 3: a majority). With more than 1, a touch by fewer members "
                          "is soft risk (their share). Bolder near hazards: tight passes are no longer forbidden")
-    ap.add_argument("--async-wait", choices=("danger", "all"), default="danger",
-                    help="--async-plan: danger (default) = the game waits only for a danger decision (and the first "
-                         "one); any other trigger's decision is made in the background for --async-lead frames later "
-                         "while the committed plan plays on. all = every decision not planned ahead is waited for")
+    ap.add_argument("--async-wait", choices=("events", "danger", "all"), default="events",
+                    help="--async-plan: events (default) = the game waits for a danger, surprise or support decision "
+                         "(and the first one), made at once from the real state (a plan being made ahead is dropped); "
+                         "an interval, move end or short decision is made in the background for --async-lead frames "
+                         "later while the committed plan plays on. danger = the old rule: only danger waits (surprise "
+                         "and support are planned ahead or absorbed). all = every decision not planned ahead is "
+                         "waited for")
     ap.add_argument("--async-lead", type=int, default=ASYNC_LEAD,
                     help=f"--async-plan: frames ahead a decision starts (whole model steps; default {ASYNC_LEAD})")
     ap.add_argument("--route-trial-gain", type=float, default=TRIAL_GAIN,
