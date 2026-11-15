@@ -184,7 +184,8 @@ def replay_mismatch(meta: dict, model) -> str | None:
     return (f"the replay sample is step {have[0]} / {have[1] or 'no recorded feature protocol'} / {have[2]}, the "
             f"model is step {want[0]} / {want[1]} / {want[2]} (step / feature protocol / prior): make a replay sample "
             f"of the model's own training features (runs/experiments/human_v3/make_replay.py: tile-shapes-v1, "
-            f"runs/experiments/human_v4/make_replay.py: tile-plat-v1) and pass it with --replay / --online-replay")
+            f"runs/experiments/human_v4/make_replay.py --model <the model>: tile-accel-v1 -> replay.npz, tile-plat-v1 "
+            f"-> replay_plat.npz, once that model exists) and pass it with --replay / --online-replay")
 
 
 def load_replay(path: str, model) -> dict:

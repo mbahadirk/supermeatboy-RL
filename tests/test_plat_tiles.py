@@ -18,7 +18,8 @@ sys.path.insert(0, HERE)
 from game.level import platform_boxes                                                  # noqa: E402
 from wm import features as F                                                         # noqa: E402
 from wm.buffer import ROW, transitions                                               # noqa: E402
-from wm.protocol import KEY_TILES_PROTOCOL, PLAT_TILES_PROTOCOL, TILE_SHAPES_PROTOCOL  # noqa: E402
+from wm.protocol import (ACCEL_TILES_PROTOCOL, KEY_TILES_PROTOCOL, PLAT_TILES_PROTOCOL,   # noqa: E402
+                         TILE_SHAPES_PROTOCOL)
 
 T = 20.0
 C = 11
@@ -132,7 +133,7 @@ def test_cells_just_out_of_reach_are_not_painted():
     assert painted(g, at(*AGENT), [[20.0, 70.0, 0]])[0] == [(1, 0)]
 
 
-@pytest.mark.parametrize("protocol", [TILE_SHAPES_PROTOCOL, KEY_TILES_PROTOCOL])
+@pytest.mark.parametrize("protocol", [TILE_SHAPES_PROTOCOL, KEY_TILES_PROTOCOL, ACCEL_TILES_PROTOCOL])
 def test_other_protocols_never_paint(protocol):
     g = geom(protocol=protocol)
     s = at(*AGENT)

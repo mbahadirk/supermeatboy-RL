@@ -147,8 +147,10 @@ def test_a_replay_sample_of_another_step_feature_or_prior_protocol_is_refused():
     assert W.replay_mismatch({"step": 4, "protocol": "tile-shapes-v1"}, stub("tile-shapes-v1")) is None
     why = W.replay_mismatch(meta, stub("tile-plat-v1"))                  # human_v4's model with human_v3's sample
     assert why and "tile-shapes-v1" in why and "tile-plat-v1" in why and "human_v4/make_replay.py" in why
-    stale = {"step": 4, "protocol": "tile-accel-v1", "prior_protocol": "gravity-v1"}     # the replaced protocol's
-    assert W.replay_mismatch(stale, stub("tile-plat-v1"))                # sample never feeds a tile-plat-v1 model
+    accel = {"step": 4, "protocol": "tile-accel-v1", "prior_protocol": "gravity-v1"}     # human_v4/replay.npz's
+    assert W.replay_mismatch(accel, stub("tile-accel-v1")) is None       # feeds its own tile-accel-v1 model
+    why = W.replay_mismatch(accel, stub("tile-plat-v1"))                 # never a tile-plat-v1 one (same width)
+    assert why and "tile-accel-v1" in why and "replay_plat.npz" in why
     assert W.replay_mismatch(meta, stub("tile-shapes-v1", prior="gravity-fan-wind-v1"))
     assert W.replay_mismatch(meta, stub("tile-shapes-v1", step=1))
     assert W.replay_mismatch({"step": 4}, stub("tile-shapes-v1"))       # a sample recording no feature protocol
@@ -156,3 +158,9 @@ def test_a_replay_sample_of_another_step_feature_or_prior_protocol_is_refused():
         import json
         from wm.model import WorldModel
         assert W.replay_mismatch(json.loads(str(np.load(REPLAY)["meta"])), WorldModel.load(MODEL)) is None
+    v4, v4_replay = (os.path.join(HERE, "runs", "experiments", "human_v4_gpu", "wm_model.pt"),
+                     os.path.join(HERE, "runs", "experiments", "human_v4", "replay.npz"))
+    if os.path.exists(v4) and os.path.exists(v4_replay):                 # the trained tile-accel-v1 pair matches
+        import json
+        from wm.model import WorldModel
+        assert W.replay_mismatch(json.loads(str(np.load(v4_replay)["meta"])), WorldModel.load(v4)) is None

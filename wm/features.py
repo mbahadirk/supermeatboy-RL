@@ -8,7 +8,7 @@ mutating the level. This does not predict future key pickup. The tile encoding i
 training uses FEATURE_PROTOCOL unless it explicitly asks for another.
 
 Input (layout(protocol).feat_dim floats; FEAT_DIM = 291 for per-agent-key-tiles-v1, 389 for tile-shapes-v1, 634
-for tile-plat-v1):
+for tile-accel-v1 and tile-plat-v1):
   own state   vx/400, vy/600, time step / 33 ms, jump held / 20, position inside its tile (x, y; -0.5..0.5),
               wind here (/2000, the game's formula)                                                    8
   flags       the character's 32 flag bits (+0x7b4: airborne, on a wall, facing, input bits ...)     32
@@ -19,11 +19,11 @@ for tile-plat-v1):
               (crumble / lock / switch)                                                     4 x 49 = 196
               tile-shapes-v1: full, half, slope, special, open x, open y (the open side of a half
               block, the open corner of a slope: -1 / 0 / +1 each)                          6 x 49 = 294
-              tile-plat-v1: tile-shapes-v1's six, then accelerator, flip, wall, face a, face b
+              tile-accel-v1: tile-shapes-v1's six, then accelerator, flip, wall, face a, face b
               (realpath.accel_bits: a Salt Factory accelerator and its raw orientation bits,
               0 / 1 each; outside the map: plain solid, 0)                                11 x 49 = 539
-              and the frame's moving platforms painted in as plain full tiles (paint_platforms: a cell
-              at least half covered by bars, if no real tile is there)
+              tile-plat-v1: tile-accel-v1's, with the frame's moving platforms painted in as plain full
+              tiles (paint_platforms: a cell at least half covered by bars, if no real tile is there)
   hazards     the 3 nearest (box edge distance): dx, dy, distance (/100), half w, half h (/50)         15
   platform    the nearest: dx, dy (/100), upright, vx, vy (/300), present                              6
 
@@ -44,8 +44,9 @@ import numpy as np
 
 from realpath import SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE, SHAPE_SPECIAL, accel_bits, box_distance, tile_shape
 from game.level import LockContext, platform_boxes
-from wm.protocol import (FAN_WIND_PRIOR, FEATURE_PROTOCOL, GRAVITY_PRIOR, KEY_TILES_PROTOCOL, PLAT_TILES_PROTOCOL,
-                         PRIOR_PROTOCOL, PRIOR_PROTOCOLS, TILE_SHAPES_PROTOCOL, input_protocol, prior_protocol)
+from wm.protocol import (ACCEL_TILES_PROTOCOL, FAN_WIND_PRIOR, FEATURE_PROTOCOL, GRAVITY_PRIOR, KEY_TILES_PROTOCOL,
+                         PLAT_TILES_PROTOCOL, PRIOR_PROTOCOL, PRIOR_PROTOCOLS, TILE_SHAPES_PROTOCOL, input_protocol,
+                         prior_protocol)
 from wm.buffer import transitions, chains, load_level, load_shards
 
 TILE = 20.0
@@ -88,6 +89,7 @@ class Layout:
 
 
 LAYOUTS = {KEY_TILES_PROTOCOL: Layout(KEY_TILES_PROTOCOL, 4), TILE_SHAPES_PROTOCOL: Layout(TILE_SHAPES_PROTOCOL, 6),
+           ACCEL_TILES_PROTOCOL: Layout(ACCEL_TILES_PROTOCOL, 11, accel=True),
            PLAT_TILES_PROTOCOL: Layout(PLAT_TILES_PROTOCOL, 11, accel=True, platforms=True)}
 
 
@@ -148,7 +150,7 @@ class LevelGeom:
 
     def _channels(self, words):
         """The protocol's tile channels of these words, from realpath.tile_shape (the one shape owner) and, for
-        tile-plat-v1, realpath.accel_bits (the one accelerator owner)."""
+        tile-accel-v1 / tile-plat-v1 (Layout.accel), realpath.accel_bits (the one accelerator owner)."""
         t = tile_shape(words)
         slope = t.kind == SHAPE_SLOPE
         ch = np.zeros((self.layout.channels,) + words.shape, np.float32)

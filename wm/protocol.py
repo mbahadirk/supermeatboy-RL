@@ -1,14 +1,16 @@
 """Feature semantics provenance shared by training, inference and dataset compatibility checks.
 
-Three input encodings exist (wm.features.layout gives their columns):
+Four input encodings exist (wm.features.layout gives their columns):
   per-agent-key-tiles-v1  tile patch channels full, half (no orientation), slope ((open corner + 1) / 4),
                           special; the encoding of every checkpoint before tile-shapes-v1
   tile-shapes-v1          full, half, slope, special, open x, open y (realpath.tile_shape)
-  tile-plat-v1            tile-shapes-v1's six channels, then accelerator, flip, wall, face a, face b (Salt
-                          Factory accelerator tiles and their raw orientation bits, realpath.accel_bits), with the
-                          moving platforms (game.level.platform_boxes) painted into the patch as plain full tiles
-                          (wm.features.paint_platforms). It replaces tile-accel-v1 (the same columns without the
-                          platforms), which no longer loads: its inputs would be silently painted.
+  tile-accel-v1           tile-shapes-v1's six channels, then accelerator, flip, wall, face a, face b (Salt
+                          Factory accelerator tiles and their raw orientation bits, realpath.accel_bits); moving
+                          platforms are never painted (runs/experiments/human_v4_gpu)
+  tile-plat-v1            tile-accel-v1's channels and columns, with the moving platforms
+                          (game.level.platform_boxes) painted into the patch as plain full tiles
+                          (wm.features.paint_platforms). The same width as tile-accel-v1: only the recorded
+                          protocol tells them apart, never the data
 A checkpoint's trained protocol ("feature_protocol") selects the encoding its inputs are built with
 (input_protocol); legacy-unspecified weights were trained on the per-agent-key-tiles-v1 layout (the same
 columns; key masks were added without changing the dimension). Fresh training uses FEATURE_PROTOCOL unless
@@ -17,8 +19,9 @@ it asks for another one explicitly (wm.train --feature-protocol). Nothing guesse
 
 KEY_TILES_PROTOCOL = "per-agent-key-tiles-v1"
 TILE_SHAPES_PROTOCOL = "tile-shapes-v1"
+ACCEL_TILES_PROTOCOL = "tile-accel-v1"
 PLAT_TILES_PROTOCOL = "tile-plat-v1"
-INPUT_PROTOCOLS = (KEY_TILES_PROTOCOL, TILE_SHAPES_PROTOCOL, PLAT_TILES_PROTOCOL)
+INPUT_PROTOCOLS = (KEY_TILES_PROTOCOL, TILE_SHAPES_PROTOCOL, ACCEL_TILES_PROTOCOL, PLAT_TILES_PROTOCOL)
 FEATURE_PROTOCOL = KEY_TILES_PROTOCOL        # fresh training's default (the others: explicit opt-ins)
 LEGACY_FEATURE_PROTOCOL = "legacy-unspecified"
 UNTRAINED_FEATURE_PROTOCOL = "untrained"

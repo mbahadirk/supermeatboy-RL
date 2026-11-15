@@ -9,8 +9,8 @@ legacy weights and manifest extensions cannot initialize it; a strict parent nee
 protocol. Strict self-correction supports step 1 only. Explicit legacy --init with no fit preserves the
 parent's trained feature protocol; inference's active protocol is reported separately.
 --feature-protocol: fresh training's input encoding (default per-agent-key-tiles-v1, the layout every
-existing checkpoint and the frozen experiment caches use; tile-shapes-v1 and tile-plat-v1 (tile shapes plus
-accelerator tiles, moving platforms painted in as solid tiles) are explicit opt-ins). --init
+existing checkpoint and the frozen experiment caches use; tile-shapes-v1, tile-accel-v1 (tile shapes plus
+accelerator tiles) and tile-plat-v1 (also moving platforms painted in as solid tiles) are explicit opt-ins). --init
 always continues in the parent's encoding. The checkpoint records it (feature_protocol /
 active_feature_protocol) and every consumer builds that encoding from it.
 --prior-protocol: the physics prior the targets correct (wm/protocol.py; default gravity-v1, the prior of
@@ -282,9 +282,10 @@ def main():
                              UNTRAINED_FEATURE_PROTOCOL, feature_usage)
     ap.add_argument("--feature-protocol", choices=INPUT_PROTOCOLS, default=None,
                     help=f"input encoding (wm/protocol.py). Fresh training: default {FEATURE_PROTOCOL}; "
-                         "tile-shapes-v1 adds the open side of half blocks / slopes, tile-plat-v1 also Salt Factory "
-                         "accelerator tiles and their orientation bits and the moving platforms painted in as solid "
-                         "tiles (explicit opt-ins). --init: the parent's; a different value is an error")
+                         "tile-shapes-v1 adds the open side of half blocks / slopes, tile-accel-v1 also Salt Factory "
+                         "accelerator tiles and their orientation bits, tile-plat-v1 also the moving platforms painted "
+                         "in as solid tiles (explicit opt-ins). --init: the parent's; --load-features: the file's; a "
+                         "different value is an error")
     ap.add_argument("--prior-protocol", choices=PRIOR_PROTOCOLS, default=None,
                     help=f"physics prior the targets correct (wm/protocol.py). Fresh training: default {PRIOR_PROTOCOL}; "
                          "gravity-fan-wind-v1 adds the measured fan wind force (explicit opt-in). --init: the parent's; "
@@ -471,6 +472,9 @@ def train_from_features(args):
     except ValueError:
         raise SystemExit(f"{args.load_features}: feature protocol {meta.get('protocol')!r} is not one of "
                          f"{', '.join(INPUT_PROTOCOLS)}: rebuild the features (--save-features)") from None
+    if args.feature_protocol and args.feature_protocol != lay.protocol:
+        raise SystemExit(f"{args.load_features} holds {lay.protocol} features, not --feature-protocol "
+                         f"{args.feature_protocol}: rebuild them with that protocol (--save-features)")
     d = {k: z[f"d_{k}"] for k in meta["keys"]}
     if d["X"].shape[1] != lay.n_in(int(meta["step"])):
         raise SystemExit(f"{args.load_features}: X has {d['X'].shape[1]} columns; {lay.protocol} step "
