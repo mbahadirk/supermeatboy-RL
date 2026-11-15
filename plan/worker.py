@@ -10,7 +10,8 @@ stops it at its next model step. Plans come back without their deferred effects 
 child under the call's id until "commit" or "discard").
 
 The child holds its own Level copy (frame_level applies the frame's tile, field, kill box, platform and lethal
-changes as agent.py does), the Planner with its memories, the MoveMemory (saved by the child) and the route /
+changes as agent.py does), the Planner with its memories, the MoveMemory (saved by the child; "moves_learn" turns
+its charging on / off, "moves_transient" names the levels it never saves: agent.py's held-out levels) and the route /
 trial state. The game loop keeps its own Planner for geometry only (support, bounds, terrain, H, f)."""
 from __future__ import annotations
 
@@ -91,6 +92,9 @@ def serve(conn, cancel, threads: int):
             elif name == "moves_learn":
                 if moves is not None:
                     moves.learn = bool(a[0])
+            elif name == "moves_transient":                    # level names never saved (agent.py: held-out)
+                if moves is not None:
+                    moves.transient = set(a[0])
             elif name == "moves_save":
                 if moves is not None and moves.dirty:
                     moves.save()

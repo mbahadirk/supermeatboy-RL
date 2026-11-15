@@ -434,11 +434,15 @@ class DeathMemory:
     The exception: deaths within STATIC_NEAR units of each other at wave frames more than WINDOW apart. The agent
     came back when the window had passed and died there again, so the place kills at any time (2-1: a pile whose
     kill shape reaches further than the one read from the game; the agent died there once per wave, 48 frames
-    later each time). Those boxes are on at every frame (one per place)."""
+    later each time). Those boxes are on at every frame (one per place).
+
+    Levels in `transient` (agent.py: the held-out levels, which with --online practise after their first life)
+    keep their deaths in memory for the run, but save() never writes them."""
 
     def __init__(self, entries=()):
         self.entries: list[tuple[str, int, float, float]] = []
         self._by_level: dict[str, np.ndarray] = {}
+        self.transient: set[str] = set()
         for e in entries:
             self.add(*e)
 
@@ -476,7 +480,8 @@ class DeathMemory:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"about": "real deaths the geometric safety check did not explain (plan/safety.py)",
                        "window": WINDOW, "half": DEATH_HALF,
-                       "deaths": [{"level": l, "frame": fr, "x": x, "y": y} for l, fr, x, y in self.entries]},
+                       "deaths": [{"level": l, "frame": fr, "x": x, "y": y} for l, fr, x, y in self.entries
+                                  if l not in self.transient]},
                       f, indent=1)
         os.replace(tmp, path)
 

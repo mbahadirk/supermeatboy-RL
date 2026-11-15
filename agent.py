@@ -32,7 +32,12 @@ not explain (plan.safety.explain_death) is remembered (plan.safety.DeathMemory, 
 planner avoids that place at that wave frame from then on. Every death of a planned agent (explained or not)
 charges the move taken at its point of no return (the latest decision of the wave with a safe alternative;
 plan.planner.MoveMemory, per level in --move-memory, default smbrl/move_memory.json, saved at every wave end;
-none: off; held-out levels: nothing charged) and logs a "point of no return" event.
+none: off) and logs a "point of no return" event. Held-out levels (wm.buffer.eval_levels): the first life
+charges nothing and adds no death; with --online, after this run has played one full wave of the level (its
+first life is over) the level practises: moves are charged and unexplained deaths remembered as on training
+levels, for this run only (both memories keep held-out levels transient: never written to their files, also not
+by the planner process), so a later run's first life stays clean. Without --online, and in a first-life
+evaluation, nothing is learned on them.
 
 Logs in runs/<name>/: plans.jsonl (one Plan.to_dict() per decision, with the level, wave and the real state),
 events.jsonl (surprises, deaths, failed moves, points of no return, level / kill box / hazard / field messages,
@@ -543,6 +548,13 @@ class Runner:
         self.deaths = S.DeathMemory() if first else S.DeathMemory.load(self.deaths_path)
         mm = getattr(args, "move_memory", DEFAULT_MOVES)
         self.moves = None if first or mm is None or str(mm).lower() == "none" else MoveMemory.load(mm)
+        from wm.buffer import eval_levels
+        self.held_out = set(eval_levels())      # never saved in either memory (practice is for this run only)
+        self.deaths.transient = set(self.held_out)
+        if self.moves is not None:
+            self.moves.transient = set(self.held_out)
+        self.level_waves: dict[str, int] = {}   # level -> full waves played in this run (on_wave_end)
+        self.practising: set[str] = set()       # held-out levels whose practice was announced
         self.f_plans = open(os.path.join(self.run_dir, "plans.jsonl"), "a", encoding="utf-8")
         self.f_events = open(os.path.join(self.run_dir, "events.jsonl"), "a", encoding="utf-8")
         self.f_states = open(os.path.join(self.run_dir, "states.jsonl"), "a", encoding="utf-8")
@@ -688,6 +700,8 @@ class Runner:
         self.cost.reset()
         from wm.buffer import eval_levels
         self.protected = self.evaluation is not None or info["name"] in eval_levels()
+        if self.practice_on(info["name"]):         # back on a level whose first life this run already played
+            self.start_practice(info["name"])
         for c in (self.wm, self.wm_held):           # the other collector's wave in progress ends with its level
             if c is not None and c is not self.rec_for(self.protected):
                 c.cut("level change")
@@ -708,10 +722,16 @@ class Runner:
                  else "no agent best yet; ")
               + (f"kill box x {kb[0]:.0f}..{kb[1]:.0f}, y {kb[2]:.0f}..{kb[3]:.0f}" if kb else "no kill box")
               + (" - first-life evaluation: no training or persistent memories" if self.evaluation is not None else
-                 (" - held-out evaluation level: no world-model data, no death memory" if self.protected else "")),
+                 (" - held-out evaluation level: " + ("practising (move and death memory on, not saved)"
+                                                       if self.practice_on(lv.name) else
+                                                       "first life clean; recorded to wm_heldout, after it move and "
+                                                       "death memory on for this run (not saved)"
+                                                       if getattr(self.args, "online", False) else
+                                                       "no world-model data, no death memory")
+                  if self.protected else "")),
               flush=True)
         self.event("level", None, name=lv.name, W=lv.W, H=lv.H, kill_box=list(kb) if kb else None,
-                   protected=self.protected, agents=info["agents"],
+                   protected=self.protected, practice=self.practice_on(lv.name), agents=info["agents"],
                    features=feature_usage(self.model.info)
                             if self.model is not None else None,
                    tube=self.commit.tube.summary() if self.commit.on else None,
@@ -810,7 +830,7 @@ class Runner:
                 self.planner.set_field(field)
                 self.planner.bounds = S.level_bounds(lv)
             if self.moves is not None:
-                self.moves.learn = not self.protected      # held-out levels: no charges, no tries
+                self.moves.learn = self.memory_on()       # held-out first life: no charges, no tries
             if self.proc is not None:               # the planner process: the same level, field and settings
                 from plan.worker import TubeFn
                 tube = TubeFn(self.commit.tube, self.commit.tube_factor, MIN_TUBE)
@@ -832,7 +852,8 @@ class Runner:
                     self.proc.call("set_level", lv, field, tube)
                 else:
                     self.proc.call("set_field", field, S.level_bounds(lv))
-                self.proc.call("moves_learn", not self.protected)
+                self.proc.call("moves_transient", sorted(self.held_out))   # idempotent: never saved there either
+                self.proc.call("moves_learn", self.memory_on())
             self.planner_level = lv
         self.field_built, self.field_dirty = True, False
         dt = time.time() - t
@@ -840,6 +861,29 @@ class Runner:
               f"moving, {len(sweeps)} sweep boxes [{dt:.2f}s]", flush=True)
         self.event("field", None, why=why, summary=self.field_summary, fixed=len(static), moving=len(self.moving),
                    seconds=round(dt, 3))
+
+    def practice_on(self, name) -> bool:
+        """A held-out level (eval_levels) practises with --online once this run has played a full wave of it (its
+        first life is over); never in a first-life evaluation or without --online."""
+        return (self.evaluation is None and bool(getattr(self.args, "online", False)) and name in self.held_out
+                and self.level_waves.get(name, 0) >= 1)
+
+    def memory_on(self) -> bool:
+        """The current level's move charges / tries and death memory are on: a training level, or a held-out level
+        in practice (their entries then stay transient: not saved)."""
+        return not self.protected or (self.level is not None and self.practice_on(self.level.name))
+
+    def start_practice(self, name: str):
+        """Practice starts (between waves, or at the level's load): the move memory learns in both processes."""
+        if self.moves is not None:
+            self.moves.learn = True
+        if self.proc is not None and self.proc_ready:
+            self.proc.call("moves_learn", True)
+        if name in self.practising:
+            return
+        self.practising.add(name)
+        print(f"[practice] {name}: first life over; move and death memory on for this run (not saved)", flush=True)
+        self.event("practice", None, name=name, waves=self.level_waves.get(name, 0))
 
     def send_level(self):
         if self.tel is None or self.level is None:
@@ -1252,7 +1296,8 @@ class Runner:
     def on_death(self, i, frame, xy0, xy1, keys, rec, extra_boxes, estimated: bool):
         """A planned agent died at wave frame `frame` at xy1 (from xy0 the frame before): does the geometry
         explain it (the move against the death frame's hazards and shots, or leaving the level)? If not, the
-        place goes into the death memory (not on held-out levels) and is saved."""
+        place goes into the death memory and is saved (held-out levels: not in the first life; with --online
+        after it, kept for this run only: DeathMemory.transient)."""
         self.pl_sync(drop="the agent died")
         lv = self.level
         x1, y1 = xy1
@@ -1267,15 +1312,18 @@ class Runner:
                 explained = True
                 cause = "predicted " + S.KIND_NAMES[int(k2[0])] + (f" {extra_boxes.ids[int(b2[0])]}" if b2[0] >= 0 else "")
         added = False
-        if not explained and not self.protected:
+        if not explained and self.memory_on():
             self.deaths.add(lv.name, frame, x1, y1)
-            try:
-                d = os.path.dirname(os.path.abspath(self.deaths_path))
-                os.makedirs(d, exist_ok=True)
-                self.deaths.save(self.deaths_path)
+            if lv.name in self.deaths.transient:    # practice on a held-out level: this run only, nothing to save
                 added = True
-            except OSError as e:
-                print(f"[deaths] could not save {self.deaths_path}: {e}", flush=True)
+            else:
+                try:
+                    d = os.path.dirname(os.path.abspath(self.deaths_path))
+                    os.makedirs(d, exist_ok=True)
+                    self.deaths.save(self.deaths_path)
+                    added = True
+                except OSError as e:
+                    print(f"[deaths] could not save {self.deaths_path}: {e}", flush=True)
             self.st["memory"] += 1
         self.st["died"] += 1
         self.st["explained" if explained else "unexplained"] += 1
@@ -1587,6 +1635,10 @@ class Runner:
             self.stopping = True
             self.flush()
             return                              # never promote this life's recording or start another plan
+        if lv is not None:                          # a full wave of this level (its deaths above: still the old rule)
+            self.level_waves[lv.name] = self.level_waves.get(lv.name, 0) + 1
+            if self.practice_on(lv.name):           # a held-out level's first life is over: practice from the next
+                self.start_practice(lv.name)
         if self.proc is not None:                   # the process holds the move memory: it saves it
             try:
                 self.proc.call("moves_save")
@@ -2088,7 +2140,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--live-dir", default=LIVE_DIR, help="--learn: the learner's folder (default runs/wm_live)")
     ap.add_argument("--online", action="store_true",
                     help="learn between waves: wm.online fine-tunes a copy of the world model on this run's own waves "
-                         "(held-out levels too, recorded to runs/<name>/wm_heldout, never used offline) mixed with a "
+                         "(held-out levels too, recorded to runs/<name>/wm_heldout, never used offline; after a "
+                         "held-out level's first life the move and death memory are on there for this run, never "
+                         "saved) mixed with a "
                          "replay of the base training data, and the planner takes it between waves when it predicts "
                          "the newest wave better and the replay no worse (runs/<name>/online). Turns on --wm-collect")
     ap.add_argument("--online-replay", default=os.path.join(HERE, "runs", "experiments", "human_v3", "replay.npz"),

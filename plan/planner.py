@@ -933,7 +933,10 @@ class MoveMemory:
     max(T_support(spawn) - T(start), DEAD_END_FRAMES) (the progress the death throws away, at least a dead
     end's charge). Keyed by cell and move only, not by the wave frame (moving hazards' timing is not part of
     the key). Persisted per level in a JSON file (save(): atomic; load(): a malformed file raises). learn False
-    (agent.py on held-out evaluation levels): decisions are kept, nothing is charged or counted."""
+    (agent.py on held-out evaluation levels during the first life, and always without --online): decisions are
+    kept, nothing is charged or counted. With --online a held-out level practises after its first life (agent.py
+    Runner.practice_on: learn True from its second wave on); its entries are transient: kept in memory for the
+    run, never written by save() (the levels in `transient`), so no later run's first life sees them."""
 
     VERSION = 1
 
@@ -944,7 +947,8 @@ class MoveMemory:
         self.wave: dict[int, list] = {}                     # agent -> [(frame, cell, move, safe alternatives)]
         self.seen: dict[str, list] = {}                     # level -> [(death frame, x, y)] this run (not saved)
         self.dirty = False
-        self.learn = True                                   # False (held-out levels): nothing charged or counted
+        self.learn = True                                   # False (held-out first life): nothing charged or counted
+        self.transient: set[str] = set()                    # levels whose entries save() leaves out (held-out)
 
     @classmethod
     def load(cls, path: str) -> "MoveMemory":
@@ -970,7 +974,7 @@ class MoveMemory:
             return
         d = {"version": self.VERSION, "levels": {
             name: [[c, r, mv, n[0], n[1]] for (c, r, mv), n in sorted(ents.items())] for name, ents in
-            sorted(self.levels.items())}}
+            sorted(self.levels.items()) if name not in self.transient}}
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
