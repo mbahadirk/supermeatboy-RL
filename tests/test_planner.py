@@ -503,9 +503,9 @@ def test_lookups_on_the_1_14_half_floor_stay_out_of_solid():
         got = []
         orig = pl.time_to_go
 
-        def logged(x, y, keys=0, leg=None, vy=None):
+        def logged(x, y, keys=0, leg=None, vy=None, **kw):
             got.append((np.ravel(x).astype(float), np.ravel(y).astype(float)))
-            return orig(x, y, keys, leg, vy)
+            return orig(x, y, keys, leg, vy, **kw)
         pl.time_to_go = logged
         worlds, frames = empty_inputs(pl.H)
         pl.plan(state_row(r["x"], r["y"], r["vx"], r["vy"], r["flags"], r["state"], r["keys"], r["held"]), 10,

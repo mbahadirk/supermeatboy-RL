@@ -226,8 +226,10 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Sweep:
     the hazards at trajectory frame k (frames[0] is not used: the start is a fact). bounds: level_bounds(lv)
     for the out-of-level rule, or None. floor: a plan.geometry.Terrain (or None): a step ending on the padding
     below the map (Terrain.on_padding: the world model's false floor) has left the level too, a contact of kind
-    KIND_FLOOR (clearance -1 at that step: the same verdict and risk as the kill box). step: frames per column
-    (frames[k] then holds the boxes of frame k x step; the segment test covers the motion between columns)."""
+    KIND_FLOOR (clearance -1 at that step: the same verdict and risk as the kill box). A floor with at(frame)
+    (plan.planner's per-step rule, its moving platforms where the column's frame has them) gives each column's
+    rule: at(k x step). step: frames per column (frames[k] then holds the boxes of frame k x step; the segment
+    test covers the motion between columns)."""
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
     E, n, K1 = xs.shape
     K = K1 - 1
@@ -252,6 +254,7 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Sweep:
     contact_kind = np.full(P, KIND_NONE, np.int8)
     contact_box = np.full(P, -1, np.int64)
     X, Y = xs.reshape(P, K1), ys.reshape(P, K1)
+    floor_at = getattr(floor, "at", None)
     for k in range(1, K1):
         fb = frames[k]
         clear, oc = segment_clearance(X[:, k - 1], Y[:, k - 1], X[:, k], Y[:, k], fb, bounds)
@@ -265,7 +268,8 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Sweep:
         else:
             j = np.zeros(P, np.int64)
             cbest = np.full(P, np.inf)
-        pad = floor.on_padding(X[:, k], Y[:, k], dy=Y[:, k] - Y[:, k - 1]) if floor is not None else None
+        fl = floor_at(k * step) if floor_at is not None else floor
+        pad = fl.on_padding(X[:, k], Y[:, k], dy=Y[:, k] - Y[:, k - 1]) if fl is not None else None
         if pad is not None and pad.any():
             oc = np.where(pad, np.minimum(oc, -1.0), oc)
         better = oc < out_min

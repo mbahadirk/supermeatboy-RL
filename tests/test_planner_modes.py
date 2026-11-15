@@ -71,8 +71,8 @@ def test_long_safe_excludes_plans_with_soft_risk_over_the_limit(flat, monkeypatc
     pen = np.zeros(len(pl.lib))
 
     def risky(soft):
-        def judge(out, frames_, upto, leg, keys):
-            j = real(out, frames_, upto, leg, keys)
+        def judge(out, frames_, upto, leg, keys, worlds):
+            j = real(out, frames_, upto, leg, keys, worlds)
             j["veto"][:] = False
             j["soft"] = np.full(len(j["soft"]), soft)
             return j
@@ -134,7 +134,7 @@ def test_explore_picks_the_safe_plan_the_members_disagree_on_most(flat, monkeypa
         x[1, :, -1] = np.arange(len(s0), dtype=float)       # candidate i: the members disagree by i units
         return {"x": x, "y": np.zeros_like(x), "vy": np.zeros_like(x)}
 
-    def fake_judge(out, frames, upto, leg, keys):
+    def fake_judge(out, frames, upto, leg, keys, worlds):
         veto = np.zeros(n, bool)
         veto[n - 1] = True                                   # the most disagreeing one is vetoed
         return {"veto": veto, "veto_frame": np.where(veto, 5, -1), "soft": np.zeros(n), "succ": np.zeros(n, bool),

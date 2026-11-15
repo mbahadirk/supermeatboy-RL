@@ -140,8 +140,25 @@ per axis to contact (collide's docstring). The tolerance from recorded real stat
 2,305 rows (at 1 unit, as many at any tolerance) are deep inside full blocks, nearly all from one wave recorded
 without the time-step lock (real_20261102-035612, dt up to 64 ms).
 Slope cells are left out: real agents are recorded inside the modelled triangles of some (1-13: 5,900 rows,
-1-7, 1-6). Moving platforms are not tiles: not in the guard. Plan.model_clipped: the chosen plan's clipped
-frames; counts[stage]["clipped"]: candidates clipped. Planner(collide_tol=None): no guard (as before).
+1-7, 1-6). Plan.model_clipped: the chosen plan's clipped frames; counts[stage]["clipped"]: candidates clipped.
+Planner(collide_tol=None): no guard (as before).
+
+Moving platforms (bars, game.level.platform_boxes: 60 x 20, 20 x 60 upright) are not tiles. Every imagined step
+sees them where the step's world has them (bars_at(worlds, frame): the world model's input, the mpc.future
+recording or extrapolation, worlds[k] = decision frame + k), never where they were at the decision: the support
+rule (Planner.support with at / worlds: T at every stage's ends, the completion's landings, the explanation's
+landings and wall jumps, the start state), the map-bottom rule (Planner.floor_for) and the guard (collide_bars:
+after the tile guard, the bars of the step's end frame). The guard has the bars' TOP only: a body whose feet go
+from above a bar's top (its position at the step's start) to more than the tolerance below it (its position at
+the step's end), with the end x within the bar plus the body's half width, is put back on top (vy 0). Sides and
+bottoms are open to the guard (a body can pass up through a bar or into an upright bar's side as the model puts
+it). No carry: a body on a bar keeps the model's x (the bar's push on what stands on it is unmeasured); a bar
+rising into the feet pushes them up through the top rule. (Until 2026-11-15 the support rule used the bars at
+the decision frame for every step and the guard had none: online_check01 4-4 wave 15, the f440 plan's "ground"
+landing at +16 at (141.7, -97.3) stood on the bar's f432 position, which had moved on.) Real states (observe, the
+committer's support trigger on the real state) use the live bars (Level.plats). Not yet per step: the
+committer's predicted support of the chosen path (plan.commit.Committer.decided: live bars at adoption; it has
+no worlds) and plan/search.py.
 
 Supported rule (plan/geometry.py, checked by `python -m plan.geometry runs/real_20261102-165351/wm_data --shards 3`
 on 3 waves each of 1-5 and 1-13, 331,000 rows): of the frames at rest (vy == 0 now and the next frame) the rule
@@ -175,7 +192,7 @@ from wm.model import N_CONT
 from wm.protocol import GRAVITY_PRIOR
 from wm.model import WorldModel
 from wm.rollout import World, advance, step_actions, _stacked
-from game.level import key_pickup_policy
+from game.level import key_pickup_policy, platform_boxes
 
 H_DEFAULT, B1_DEFAULT, BRANCH_DEFAULT, S_DEFAULT, BUDGET_MS = 48, 8, 16, 16, 120.0
 
@@ -296,8 +313,9 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     ROW: the rows after the last step run; alive (E, n, K+1) (the learned
     death head: a second opinion only), finish (E, n, K+1) (the learned finish head's probability per step:
     a cross-check only), rows (E, n, K+1) when keep_rows, and steps (K: every step runs). terrain: the collision guard (collide) after every step
-    against these tiles with tolerance tol (default COLLIDE_TOL); clip (E, n, K+1) says which steps it moved
-    (None without a terrain).
+    against these tiles with tolerance tol (default COLLIDE_TOL), then against the tops of the moving platforms
+    of each row's step (collide_bars: worlds' bars at the step's start and end frame); clip (E, n, K+1) says
+    which steps it moved (None without a terrain).
     stages: [(frame, geom, terrain, terrain_for_mask)] in frame order (frames from the start, as offsets): a
     row's model steps that start at or after `frame` (its offset counted) use these in place of geom, terrain and
     terrain_for_mask (Planner.crumble_stages: crumble tiles expected to be gone by then).
@@ -343,6 +361,7 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     al = np.ones(E * n, np.float32)
     done = K
     last = len(worlds) - 1
+    bars = clip is not None and has_bars(worlds)     # the guard on bars (collide_bars); none: nothing to do
     pp = model_prior(model)
     for k in range(K):
         if CANCEL is not None and CANCEL.is_set():
@@ -385,6 +404,15 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
                         private = s2[idx].copy()
                         clipped[idx] = collide(tr, s[idx], private, tol)
                         s2[idx] = private
+            if bars:                                 # each group's bars where its step starts and ends
+                for o, gi in groups:
+                    b0, b1 = bars_at(worlds, o + k * f), bars_at(worlds, o + (k + 1) * f)
+                    if len(groups) == 1:
+                        clipped |= collide_bars(s, s2, b0, b1, tol)
+                    else:
+                        private = s2[gi]
+                        clipped[gi] |= collide_bars(s[gi], private, b0, b1, tol)
+                        s2[gi] = private
             clip[:, :, k + 1] = clipped.reshape(E, n)
         if key_pickup:
             # Guard uses the INCOMING mask for the whole model step. Pickup is post-update; coarse-step
@@ -461,6 +489,52 @@ def collide(ter: Terrain, prev: np.ndarray, s: np.ndarray, tol: float = COLLIDE_
     np.copyto(s["y"], ny, casting="unsafe", where=moved)
     np.copyto(s["vx"], 0.0, casting="unsafe", where=cut_x)
     np.copyto(s["vy"], 0.0, casting="unsafe", where=cut_y)
+    return moved
+
+
+# ---- moving platforms at each imagined step ---------------------------------------------------------------
+def bars_at(worlds, frame) -> list:
+    """The moving platforms' bars (game.level.platform_boxes: x, y, half width, half height, upright) of an
+    imagined step `frame` frames after the rollout's start: worlds[frame], the last given one beyond them (as
+    imagine() feeds the model). [] without platforms. The one source of bars for imagined steps: the support
+    rule (Planner.support), the map-bottom rule (Planner.floor_for) and the guard (collide_bars)."""
+    if not worlds:
+        return []
+    return platform_boxes(worlds[min(max(int(frame), 0), len(worlds) - 1)].pf)
+
+
+def has_bars(worlds) -> bool:
+    """Does any of these worlds have a moving platform (the fast path: none, nothing changes)?"""
+    return bool(worlds) and any(w.pf for w in worlds)
+
+
+def collide_bars(prev: np.ndarray, s: np.ndarray, before: list, after: list, tol: float = COLLIDE_TOL) -> np.ndarray:
+    """The collision guard's moving platforms, their top only: rows s (just stepped from prev) whose feet (y -
+    BODY) were at most `tol` below a bar's top at the step's start (the bar in `before`, the same bar by order;
+    `after` when the counts differ) and are more than `tol` below its top at the step's end (`after`), with the
+    end x within the bar's half width plus the body's (BODY - tol, the tile guard's shrunk box), are put back on
+    top: y = top + BODY - CONTACT_EPS (CONTACT_EPS of overlap, as collide), vy 0, x kept (x moves first, as the
+    tile guard's free-x case). A body falling through a bar in one step lands on it. Sides and bottoms are open:
+    a body below a bar can rise through it, one beside an upright bar can move into its side. No carry: the bar's
+    motion does not move what stands on it (unmeasured); a top rising into the feet pushes them up. In place;
+    returns which rows were moved."""
+    moved = np.zeros(len(s), bool)
+    if not after:
+        return moved
+    if len(before) != len(after):
+        before = after
+    y0 = prev["y"].astype(np.float64)
+    x1, y1 = s["x"].astype(np.float64), s["y"].astype(np.float64)
+    ny = y1.copy()
+    for (_, by0, _, hh0, _), (bx, by, hw, hh, _) in zip(before, after):
+        top0, top = by0 + hh0, by + hh
+        hit = (y0 - BODY >= top0 - tol) & (y1 - BODY < top - tol) & (np.abs(x1 - bx) < hw + BODY - tol)
+        if hit.any():
+            ny = np.where(hit, np.maximum(ny, top + BODY - CONTACT_EPS), ny)
+            moved |= hit
+    if moved.any():
+        np.copyto(s["y"], ny, casting="unsafe", where=moved)
+        np.copyto(s["vy"], 0.0, casting="unsafe", where=moved)
     return moved
 
 
@@ -1298,13 +1372,29 @@ def continuations(a_last: int) -> list[tuple[str, int]]:
 
 class _Floor:
     """The safety sweep's map-bottom rule (plan.geometry.Terrain.on_padding) on the planner's live tiles and
-    moving platforms (a body on a platform at the map's bottom has ground)."""
+    moving platforms (a body on a platform at the map's bottom has ground): the live bars (Level.plats, read at
+    each call) by default, else the given ones (None: no bars)."""
 
-    def __init__(self, planner):
-        self.pl = planner
+    LIVE = object()
+
+    def __init__(self, planner, plats=LIVE):
+        self.pl, self.plats = planner, plats
 
     def on_padding(self, x, y, dy=None):
-        return self.pl.terrain.on_padding(x, y, self.pl.lv.plats or None, dy=dy)
+        plats = (self.pl.lv.plats or None) if self.plats is _Floor.LIVE else self.plats
+        return self.pl.terrain.on_padding(x, y, plats, dy=dy)
+
+
+class _StepFloor:
+    """The map-bottom rule for an imagined rollout (Planner.floor_for): plan.safety.sweep asks at(frame) for
+    each column's rule, frame counted from the rollout's first column; its bars are the world's at offset +
+    frame (bars_at)."""
+
+    def __init__(self, planner, worlds, offset: int = 0):
+        self.pl, self.worlds, self.offset = planner, worlds, int(offset)
+
+    def at(self, frame: int) -> _Floor:
+        return _Floor(self.pl, bars_at(self.worlds, self.offset + frame) or None)
 
 
 class Planner:
@@ -1562,24 +1652,50 @@ class Planner:
     def cell(self, x, y) -> tuple:
         return int((x - self.lv.ox) // 20.0), int((y - self.lv.oy) // 20.0)
 
-    def support(self, x, y, vy=None, keys=0):
+    def floor_for(self, worlds, offset: int = 0):
+        """The safety sweep's map-bottom rule for a rollout whose first column is `offset` frames after the
+        decision, over the decision's worlds: each column with the bars of its frame (_StepFloor, bars_at);
+        worlds without bars: the rule without bars. None when the planner has no floor rule."""
+        if self.floor is None:
+            return None
+        if not has_bars(worlds):
+            return _Floor(self, None)
+        return _StepFloor(self, worlds, offset)
+
+    def support(self, x, y, vy=None, keys=0, at=None, worlds=None):
         """The scoring's support rule at positions (arrays): (supported, ground, wall side). Ground, or a wall
         (plan/geometry.py's probe) while the downward speed -vy (units / frame; None: unknown, any speed) is at
-        most CLING_SPEED. The explanation's landings / wall jumps and the safety check use the geometry alone."""
+        most CLING_SPEED. The explanation's landings / wall jumps and the safety check use the geometry alone.
+        Moving platforms: for imagined positions `worlds` (the decision's, index k = decision frame + k) and `at`
+        (frames after the decision of each position, broadcast with x): the bars of the world at that frame
+        (bars_at), none when the worlds have none; worlds None: the live bars (Level.plats), for real states
+        now."""
         x, y, masks = np.broadcast_arrays(np.asarray(x, np.float64), np.asarray(y, np.float64), np.asarray(keys))
         g, side = np.zeros(x.shape, bool), np.zeros(x.shape, np.int8)
-        for mask in np.unique(masks):
-            idx = masks == mask
-            g[idx], side[idx] = self.support_terrain(mask).support(x[idx], y[idx], self.lv.plats or None)
+        if worlds is None:
+            parts = [(None, self.lv.plats or None)]
+        elif not has_bars(worlds):
+            parts = [(None, None)]
+        else:
+            if at is None:
+                raise ValueError("support with worlds needs the positions' frames (at)")
+            at = np.broadcast_to(np.asarray(at, np.int64), x.shape)
+            parts = [(at == a, bars_at(worlds, a) or None) for a in np.unique(at)]
+        for sel, plats in parts:
+            ms = masks if sel is None else masks[sel]
+            for mask in np.unique(ms):
+                idx = masks == mask if sel is None else sel & (masks == mask)
+                g[idx], side[idx] = self.support_terrain(mask).support(x[idx], y[idx], plats)
         wall = side != 0
         if vy is not None and math.isfinite(CLING_SPEED):
             wall = wall & (-np.asarray(vy, np.float64) <= CLING_SPEED)
         return g | wall, g, side
 
-    def value(self, x, y, keys=0, leg=None, vy=None):
+    def value(self, x, y, keys=0, leg=None, vy=None, at=None, worlds=None):
         """V at positions (arrays) for an agent holding `keys`, or on leg `leg` (an int or one per position):
         (V, supported, ground, wall side, leg). Supported: Planner.support (vy: the bodies' vertical velocity in
-        units / frame, for the cling rule).
+        units / frame, for the cling rule; at, worlds: imagined positions' frames and the decision's worlds, for
+        the moving platforms there).
 
         Points inside solid: ProgressField.values gives a point in a wall cell its best open 3 x 3 neighbour,
         which can be across a floor. With the collision guard the score's points (every stage's end points, per
@@ -1590,18 +1706,19 @@ class Planner:
         field, so it still takes the best neighbour, which there is the cell below the floor (1-14: V 13.1 on the
         floor at x 110 from the cell below, 22.4 just above it)."""
         x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
-        sup, g, side = self.support(x, y, vy, keys=keys)
+        sup, g, side = self.support(x, y, vy, keys=keys, at=at, worlds=worlds)
         if leg is None:
             leg = self.field.leg_of(np.asarray(keys, np.int64))
             leg = int(leg) if np.ndim(leg) == 0 else leg
         return self.field.values(x, y, leg, sup), sup, g, side, leg
 
-    def time_to_go(self, x, y, keys=0, leg=None, vy=None):
+    def time_to_go(self, x, y, keys=0, leg=None, vy=None, at=None, worlds=None):
         """T (frames to the goal, plan/progress.py) at positions for an agent holding `keys` or on leg `leg`:
-        (T, supported, ground, wall side, leg). Supported by Planner.support (cling rule with vy); airborne
-        bodies take T_rise when vy > 0 (units / frame), else T_fall (vy None: the better of the two)."""
+        (T, supported, ground, wall side, leg). Supported by Planner.support (cling rule with vy; at, worlds: the
+        moving platforms of imagined positions' frames); airborne bodies take T_rise when vy > 0 (units /
+        frame), else T_fall (vy None: the better of the two)."""
         x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
-        sup, g, side = self.support(x, y, vy, keys=keys)
+        sup, g, side = self.support(x, y, vy, keys=keys, at=at, worlds=worlds)
         if leg is None:
             leg = self.field.leg_of(np.asarray(keys, np.int64))
             leg = int(leg) if np.ndim(leg) == 0 else leg
@@ -1716,7 +1833,8 @@ class Planner:
         at = np.full(n, -1, np.int64)
         hit = [None] * n
         vy0 = s["vy"].astype(np.float64) * dt_ms / 1000.0
-        sup0, g0, side0 = self.support(s["x"].astype(np.float64), s["y"].astype(np.float64), vy0, keys=s["keys"])
+        sup0, g0, side0 = self.support(s["x"].astype(np.float64), s["y"].astype(np.float64), vy0, keys=s["keys"],
+                                       at=H, worlds=worlds)
         state[sup0] = 1
         at[sup0] = 0
         on = np.where(g0, "ground", "wall").astype(object)
@@ -1739,12 +1857,13 @@ class Planner:
             x, y, vy = out["x"][0], out["y"][0], out["vy"][0]               # (a, Kc+1)
             fr = [frames[min(H + done + k * f, len(frames) - 1)] if k else None for k in range(Kc + 1)]
             fr = _near_frames(fr, x[None], y[None])
-            sw = S.sweep(x[None], y[None], fr, self.bounds, self.floor, f)
+            sw = S.sweep(x[None], y[None], fr, self.bounds, self.floor_for(worlds, H + done), f)
             cf = sw.contact_frame[0]
             tg = S.first_contact(x[None], y[None], self.goal_boxes, step=f)[0][0] if len(self.goal_boxes) else \
                 np.full(len(act_i), -1)
             masks = out["keys"][0, :, 1:] if self.key_pickup else np.broadcast_to(s["keys"][act_i, None], x[:, 1:].shape)
-            sup, g, side = self.support(x[:, 1:], y[:, 1:], vy[:, 1:], keys=masks)
+            sup, g, side = self.support(x[:, 1:], y[:, 1:], vy[:, 1:], keys=masks,
+                                        at=H + done + f * np.arange(1, Kc + 1)[None, :], worlds=worlds)
             land = np.where(sup.any(1), (sup.argmax(1) + 1) * f, -1)
             for j, r in enumerate(act_i):
                 ev = [(t, kd) for t, kd in ((int(land[j]), 1), (int(tg[j]), 2), (int(cf[j]), 3)) if t > 0]
@@ -1830,7 +1949,7 @@ class Planner:
         return float(out) if out.ndim == 0 else out
 
     def _route_real(self, j: int, dist: float, vx0: float, vy0: float, frame: int, frames: list, recorded,
-                    keys: int, leg: int):
+                    keys: int, leg: int, worlds=None):
         """The best route's verdict on its recorded REAL path (the best wave's states from index j), or (None, why
         the model judges it). With the time-step lock the game repeats that path from the same state, so it is
         judged by plan.safety's geometry against this decision's deadly boxes, not by the world model:
@@ -1879,7 +1998,7 @@ class Planner:
                "x": np.asarray(xs, np.float64), "y": np.asarray(ys, np.float64)}
         if W >= 1:
             X, Y = xs[None, None, :], ys[None, None, :]
-            sw = S.sweep(X, Y, _near_frames(frames[:W + 1], X, Y), self.bounds, self.floor, 1)
+            sw = S.sweep(X, Y, _near_frames(frames[:W + 1], X, Y), self.bounds, self.floor_for(worlds), 1)
             cf = int(sw.contact_frame[0, 0])
             c = sw.step_clear[0, 0]
             ks = np.arange(1, W + 1)
@@ -1906,7 +2025,7 @@ class Planner:
             if masks is not None and known is not None and bool(known[endpoint]):
                 end_keys = int(masks[endpoint])
                 end_leg = int(self.field.leg_of(end_keys))
-            t, sup, _, _, _ = self.time_to_go(xs[-1:], ys[-1:], end_keys, end_leg, vy)
+            t, sup, _, _, _ = self.time_to_go(xs[-1:], ys[-1:], end_keys, end_leg, vy, at=W, worlds=worlds)
             out.update(t_end=float(self._tt(t[0])), frames=int(W), supported=bool(sup[0]))
         return out, None
 
@@ -1930,11 +2049,11 @@ class Planner:
         row = np.asarray(row, ROW).reshape(1)
         x0, y0, keys = float(row["x"][0]), float(row["y"][0]), int(row["keys"][0])
         vy0 = np.array([float(row["vy"][0]) * dt_ms / 1000.0])
-        t0a, sup0, g0, side0, leg = self.time_to_go(np.array([x0]), np.array([y0]), keys, vy=vy0)
+        t0a, sup0, g0, side0, leg = self.time_to_go(np.array([x0]), np.array([y0]), keys, vy=vy0, at=0, worlds=worlds)
         T0 = float(t0a[0])
         T0_ok = math.isfinite(T0)
         self._dead_t = T0 + DEAD_END_FRAMES if T0_ok else DEAD_FAR
-        v0 = float(self.value(np.array([x0]), np.array([y0]), keys, vy=vy0)[0][0])
+        v0 = float(self.value(np.array([x0]), np.array([y0]), keys, vy=vy0, at=0, worlds=worlds)[0][0])
         v0_ok = math.isfinite(v0)
         cell0 = self.cell(x0, y0)
         scale = max(self.t_spawn - T0, self.death_min) if T0_ok and math.isfinite(self.t_spawn) else self.death_min
@@ -1949,8 +2068,8 @@ class Planner:
             (c if upto is None else c & (np.arange(c.shape[2])[None, None, :] <= np.asarray(upto)[None, :, None]))
             .any(axis=(0, 2)).sum())
 
-        def ends_time(xe, ye, vye, legs=None, masks=keys):
-            return self.time_to_go(xe, ye, masks, legs, vye)[0]
+        def ends_time(xe, ye, vye, legs, masks, at):
+            return self.time_to_go(xe, ye, masks, legs, vye, at=at, worlds=worlds)[0]
 
         def success_total(t, pen):
             # earlier touch first; the penalty frames (up to the touch) only break ties (< 1 frame)
@@ -1979,7 +2098,8 @@ class Planner:
         uc1 = up1 // f
         end1 = steps1 * f                            # one end frame for every move (rolled to the same length)
         fr1 = _near_frames(_cols(frames, steps1 + 1, f), out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1])
-        sw1 = S.sweep(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], fr1, self.bounds, self.floor, f)
+        floor0 = self.floor_for(worlds)              # the map-bottom rule of rollouts from the decision frame
+        sw1 = S.sweep(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], fr1, self.bounds, floor0, f)
         tg1, legs1, _ = self._contacts(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1],
                                        None, sw1.contact_frame, leg, keys)
         tg1, legs1 = tg1[0], legs1[0]
@@ -1996,7 +2116,7 @@ class Planner:
                                                                          np.where(succ1, tg1, end1), keys))
         xe1, ye1, vye1 = out1["x"][0, :, steps1], out1["y"][0, :, steps1], out1["vy"][0, :, steps1]
         masks1 = self._path_keys(out1["x"], out1["y"], keys, death=sw1.contact_frame)[0][0, :, -1]
-        tend1 = ends_time(xe1, ye1, vye1, legs1, masks1)
+        tend1 = ends_time(xe1, ye1, vye1, legs1, masks1, end1)
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
         death1 = np.array([death_of(m.name) for m in self.lib])
         pen1 = scale * soft1 + fail1 + death1
@@ -2055,7 +2175,7 @@ class Planner:
             vye2[c] = out2["vy"][0, c, m] if m > 0 else out1["vy"][0, i, L]
         K = int(up2.max()) // f
         fr2 = _near_frames(_cols(frames, K + 1, f), xs2[:, :, :K + 1], ys2[:, :, :K + 1])
-        sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds, self.floor, f)
+        sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds, floor0, f)
         tg2, legs2, _ = self._contacts(xs2[:, :, :K + 1], ys2[:, :, :K + 1], up2, sw2.contact_frame, leg, keys)
         tg2, legs2 = tg2[0], legs2[0]
         succ2 = tg2 > 0
@@ -2063,7 +2183,7 @@ class Planner:
         veto2, vf2, _, _, soft2, _ = _verdict(sw2, win2, early_margin=self.early_margin,
                                               corner=self._corner(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, win2, keys))
         masks2 = self._path_keys(xs2[:, :, :K + 1], ys2[:, :, :K + 1], keys, up2, sw2.contact_frame)[0][0, :, -1]
-        tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2, masks2)
+        tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2, masks2, up2)
         pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
         pen2 = pen2 + np.where(succ2, 0.0, stall_penalty(stalled, t_best, self._tt(tend2))
                                * (1.0 - self.novelty(xs2[0, :, :K + 1], ys2[0, :, :K + 1])))
@@ -2198,7 +2318,7 @@ class Planner:
         out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds, **ck)
         E = out3["x"].shape[0]
         fr3 = _near_frames(_cols(frames, Hc + 1, f), out3["x"], out3["y"])
-        saf = S.check(out3["x"], out3["y"], fr3, self.bounds, self.floor, f)
+        saf = S.check(out3["x"], out3["y"], fr3, self.bounds, floor0, f)
         tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], None, saf.sweep.contact_frame, leg, keys)
         n_goal = (tg_e > 0).sum(0)                                   # members touching the goal safely
         succ3 = 2 * n_goal > E
@@ -2215,8 +2335,8 @@ class Planner:
         saf = replace(saf, veto=vv, veto_frame=vfr, veto_kind=vkd, veto_id=vid, soft_risk=vsoft, soft_frame=vsf)
         xe, ye, vye = out3["x"][:, :, Hc], out3["y"][:, :, Hc], out3["vy"][:, :, Hc]
         masks3 = self._path_keys(out3["x"], out3["y"], keys, death=saf.sweep.contact_frame)[0][..., -1]
-        tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, masks3, legs_e, vye)   # private mask per member/candidate
-        vend_e = self.value(xe, ye, masks3, legs_e, vye)[0]                    # V: display only
+        tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, masks3, legs_e, vye, at=H, worlds=worlds)   # private mask
+        vend_e = self.value(xe, ye, masks3, legs_e, vye, at=H, worlds=worlds)[0]    # V: display only
         lands = 2 * sup_e.sum(0) > E                                 # a majority of members supported at H
         tend3 = self._tt(tend_e).mean(0)
         base3 = H + tend3                                            # frames used + T at the end
@@ -2227,7 +2347,7 @@ class Planner:
         real = None
         if gi is not None:
             real, why_model = self._route_real(route_j[0], route_j[1], vx0f, float(vy0[0]), frame, frames, recorded,
-                                               keys, leg)
+                                               keys, leg, worlds)
             if real is None:
                 route["judged"] = f"model: {why_model}"
             else:
@@ -2363,7 +2483,8 @@ class Planner:
         mx, my = out3["x"][:, best].mean(0), out3["y"][:, best].mean(0)            # per column (step)
         spread = np.sqrt(out3["x"][:, best].var(0) + out3["y"][:, best].var(0))
         display_keys = self._path_keys(mx[None], my[None], keys)[0][0, ::f]
-        _, g, side = self.support(mx, my, keys=display_keys)
+        cols = np.arange(Hc + 1) * f                 # the columns' frames (the bars there)
+        _, g, side = self.support(mx, my, keys=display_keys, at=cols, worlds=worlds)
         sup = g | (side != 0)
         landings = [{"frame": k * f, "x": float(mx[k]), "y": float(my[k]), "on": "ground" if g[k] else "wall"}
                     for k in range(1, Hc + 1) if sup[k] and not sup[k - 1]]
@@ -2378,7 +2499,7 @@ class Planner:
             k = np.minimum(np.arange(H + 1), len(real["x"]) - 1)
             mx, my, spread = real["x"][k], real["y"][k], np.zeros(H + 1)
             display_keys = self.geom.lock_context.pickup_path(mx[None], my[None], keys, step=1)[0][0, ::f]
-            _, g, side = self.support(mx[::f], my[::f], keys=display_keys)
+            _, g, side = self.support(mx[::f], my[::f], keys=display_keys, at=cols, worlds=worlds)
             sup = g | (side != 0)
             landings = [{"frame": k * f, "x": float(mx[k * f]), "y": float(my[k * f]), "on": "ground" if g[k] else "wall"}
                         for k in range(1, Hc + 1) if sup[k] and not sup[k - 1]]
@@ -2520,7 +2641,7 @@ class Planner:
         return j + n
 
     # ---- planning modes -----------------------------------------------------------------------------------
-    def _judge(self, out, frames, upto, leg, keys):
+    def _judge(self, out, frames, upto, leg, keys, worlds):
         """Sweep, goal / key contact and the decision rule for an imagine() result (any members) judged on
         frames 1..upto (n,): {veto, veto_frame, soft, succ, tg, tend (T at the end, members' mean, dead ends
         charged), sweep}. A success: every member touches the goal before any deadly contact."""
@@ -2528,7 +2649,7 @@ class Planner:
         x, y = out["x"], out["y"]
         E, n, K1 = x.shape
         fr = _near_frames(_cols(frames, K1, f), x, y)
-        sw = S.sweep(x, y, fr, self.bounds, self.floor, f)
+        sw = S.sweep(x, y, fr, self.bounds, self.floor_for(worlds), f)
         tg_e, legs_e, _ = self._contacts(x, y, upto, sw.contact_frame, leg, keys)
         succ = (tg_e > 0).all(0)
         tg = np.where(succ, tg_e.max(0), -1)
@@ -2540,7 +2661,8 @@ class Planner:
         ar = np.arange(n)
         xe, ye, vye = x[:, ar, uc], y[:, ar, uc], out["vy"][:, ar, uc]
         masks = self._path_keys(x, y, keys, upto, sw.contact_frame)[0][..., -1]
-        tend = self._tt(self.time_to_go(xe, ye, masks, legs_e, vye)[0]).mean(0)
+        tend = self._tt(self.time_to_go(xe, ye, masks, legs_e, vye, at=np.broadcast_to(upto, xe.shape),
+                                        worlds=worlds)[0]).mean(0)
         return {"veto": veto, "veto_frame": vf, "soft": soft, "succ": succ, "tg": tg, "tend": tend, "sweep": sw}
 
     def _long_safe(self, row, worlds, frames, dt_ms, ck, leg, keys, pen_first, scale):
@@ -2554,7 +2676,7 @@ class Planner:
         mem = slice(MEMBERS["long-safe"], MEMBERS["long-safe"] + 1)
         n1 = len(self.lib)
         out1 = imagine(self.model, mem, self.geom, np.repeat(row, n1), self.lib_actions, dt_ms, worlds, **ck)
-        j1 = self._judge(out1, frames, self.lib_end, leg, keys)
+        j1 = self._judge(out1, frames, self.lib_end, leg, keys, worlds)
         est1 = self.lib_end + j1["tend"] + scale * j1["soft"] + pen_first
         ok1 = ~j1["veto"] & (j1["soft"] <= LONG_RISK)
         key1 = np.where(j1["succ"], SUCCESS_SCORE - j1["tg"], -est1)
@@ -2580,7 +2702,7 @@ class Planner:
         acts = np.stack(acts)
         out2 = imagine(self.model, mem, self.geom, np.repeat(row, len(acts)), acts, dt_ms, worlds, **ck)
         up = np.full(len(acts), HL, np.int64)
-        j2 = self._judge(out2, frames, up, leg, keys)
+        j2 = self._judge(out2, frames, up, leg, keys, worlds)
         est2 = HL + j2["tend"] + scale * j2["soft"] + pen_first[[i for _, i in cands]]
         ok2 = ~j2["veto"] & (j2["soft"] <= LONG_RISK)
         cnt.update(candidates=len(acts), qualified=int(ok2.sum()))
@@ -2619,7 +2741,7 @@ class Planner:
         acts = self.lib_actions[idx][:, :REFLEX_MAX]
         upto = self.lib_end[idx]
         out = imagine(self.model, mem, self.geom, np.repeat(row, len(idx)), acts, dt_ms, worlds, **ck)
-        j = self._judge(out, frames, upto, leg, keys)
+        j = self._judge(out, frames, upto, leg, keys, worlds)
         risk = np.where(j["veto"], 1.0, early_risk(j["sweep"], upto))
         est = upto + j["tend"] + pen_first[idx]
         b = int(np.lexsort((est, risk, j["veto"]))[0])
@@ -2637,7 +2759,7 @@ class Planner:
         row = np.asarray(row, ROW).reshape(1)
         x0, y0, keys = float(row["x"][0]), float(row["y"][0]), int(row["keys"][0])
         vy0 = np.array([float(row["vy"][0]) * dt_ms / 1000.0])
-        t0a, sup0, g0, side0, leg = self.time_to_go(np.array([x0]), np.array([y0]), keys, vy=vy0)
+        t0a, sup0, g0, side0, leg = self.time_to_go(np.array([x0]), np.array([y0]), keys, vy=vy0, at=0, worlds=worlds)
         T0 = float(t0a[0])
         self._dead_t = T0 + DEAD_END_FRAMES if math.isfinite(T0) else DEAD_FAR
         if getattr(self, "_explore_acts", None) is None or self._explore_acts.shape[1] != H:
@@ -2650,7 +2772,7 @@ class Planner:
         ck = self.imagine_options(keys)
         out = imagine(self.model, mem, self.geom, np.repeat(row, n), acts, dt_ms, worlds, **ck)
         up = np.full(n, H, np.int64)
-        j = self._judge(out, frames, up, leg, keys)
+        j = self._judge(out, frames, up, leg, keys, worlds)
         x, y = out["x"], out["y"]
         dis = np.hypot(x[0, :, -1] - x[-1, :, -1], y[0, :, -1] - y[-1, :, -1])
         est = H + j["tend"]
