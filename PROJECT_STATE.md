@@ -20,7 +20,7 @@ Every gain came from level memory (route trials, move memory, best route). The w
 **Accelerators** (tile low byte 98; 3-3..3-6) were measured from the run:
 - Floor accelerators are conveyors. They move the character 3.33 units/frame without changing vx; bit 0x2000 = left.
 - Wall accelerator 0x2001062 (face on the tile's left side) gives vy +14.5/frame; a plain wall gives -5.5.
-- 0x1001062 (right face) and 0x3001062 have never been touched, so they are unmeasured.
+- 0x1001062 (right face) also gives vy +14.5/frame (40 contacts in later 3-6 waves). 0x3001062 (3-5 only) has never been touched.
 - `realpath.tile_shape` counted all of them as plain full blocks, so the world model could not see them.
 - The blocking ones are the walls (3-5, 3-6). Floors in 3-3 / 3-4 are finished.
 - The online fresh loss on 3-3 / 3-4 was 1.2-3.0, against 0.01-0.18 on 3-1 / 3-2.

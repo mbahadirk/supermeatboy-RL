@@ -185,8 +185,9 @@ def accel_bits(words: np.ndarray) -> AccelBits:
         character moves 3.33 units / frame in x without its vx changing;
       wall accelerator 0x2001062 (wall, face_b): the wall face on the tile's LEFT side, touched from the left,
         gives vy +14.5 / frame (a plain wall gives -5.5).
-    Not measured: 0x1001062 (wall, face_a: the face on the RIGHT side) and 0x3001062 (both faces / column ends)
-    exist in 3-5 and 3-6 but have never been touched; their effect is unknown. The bits are given raw, not as a
+      wall accelerator 0x1001062 (wall, face_a): the face on the tile's RIGHT side, touched from the right, also
+        gives vy +14.5 / frame (40 contacts, 3-6, later online_check01 waves).
+    Not measured: 0x3001062 (both faces / column ends; 3-5 only, never touched). The bits are given raw, not as a
     guessed push direction."""
     t = np.asarray(words).astype(np.uint32)
     accel = ((t & 0xff) == ACCEL_TILE) & ~((t >> 8) & 1).astype(bool)
