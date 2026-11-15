@@ -1,5 +1,52 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## online_check01 reviewed; accelerators, online acceptance, practice, best-route start (2026-11-15)
+
+**The run** (`runs/online_check01`, human_v3, `--online`; events.jsonl):
+
+| Level | Waves | Finishes | Notes |
+|---|---|---|---|
+| 2-10 | 49 | 33, all A+ | 8.35 s on the first life, 6.4 s best |
+| 3-1 | 32 | 31, all A+ | 6.3 s on wave 1, then 6.75 / 7.17 s |
+| 3-2 | 25 | 12 | 13 deaths; best 7.75 s, A+ 3 times |
+| 3-3 | 23 | 9 | A+ 4 times |
+| 3-4 | 51 | 35 | 8.88 s -> 7.07 s, beat the previous best |
+| 3-5 | 44 | 0 | 10 falls, then 34 time-outs |
+| 3-6 | 130 | 0 | every wave a death; never left the first shaft (max y about -375, goal at 707) |
+| 2-6 (held out) | 36 | 0 | 35 time-outs; 18 of 37 waves identical to the previous one |
+
+Every gain came from level memory (route trials, move memory, best route). The world model was not involved: the online learner published v1 once and refused the other 54 cycles.
+
+**Accelerators** (tile low byte 98; 3-3..3-6) were measured from the run:
+- Floor accelerators are conveyors. They move the character 3.33 units/frame without changing vx; bit 0x2000 = left.
+- Wall accelerator 0x2001062 (face on the tile's left side) gives vy +14.5/frame; a plain wall gives -5.5.
+- 0x1001062 (right face) and 0x3001062 have never been touched, so they are unmeasured.
+- `realpath.tile_shape` counted all of them as plain full blocks, so the world model could not see them.
+- The blocking ones are the walls (3-5, 3-6). Floors in 3-3 / 3-4 are finished.
+- The online fresh loss on 3-3 / 3-4 was 1.2-3.0, against 0.01-0.18 on 3-1 / 3-2.
+
+**Changes:**
+- **ae7076c `wm/online.py`:**
+  - The forgetting bar is the base (--init) model's replay loss, 0.0597 (bar 0.0626). v1 had dropped it to 0.0203, which then refused everything.
+  - Training is incremental: pending waves, with absorbed ones rehearsed at 30% of own rows, at most 1500 steps.
+  - Offline replay of 40 online_check01 shards through the real main: 32 of 39 cycles published, replay loss stayed 0.04-0.06, cycles took 2-16 s, and the 3-6 fresh loss fell 0.90 -> 0.11.
+  - With the accel-blind human_v3 this teaches "walls push up" to every wall, so use `--online` on accelerator levels with a tile-accel-v1 model.
+- **a6cc655 `tile-accel-v1`:**
+  - realpath.accel_bits is the one owner of accelerator detection (accel, flip 0x2000, wall 0x1000, face_a 0x1000000, face_b 0x2000000); game/level.py uses it.
+  - The new input protocol has 11 tile channels, feat_dim 634, step-4 n_in 664. tile-shapes-v1 inputs are byte-identical to before.
+  - human_v4 (`runs/experiments/human_v4`, README there):
+    - human_v3 plus human_v3_check01 and online_check01 wm_data (432 shards). 3-5 is left out entirely, as the test of transfer to an unseen level.
+    - features.npz: 139 MB, 1,839,438 transitions. Colab training is pending (the user).
+- **4546320 practice:** with `--online`, a held-out level's move memory and death memory are on after its first full wave in the run. Held-out entries are never written to the json files (MoveMemory/DeathMemory.transient), so a later run's first life stays clean.
+- **2937600 best-route ahead start:**
+  - 3-1's 6.3 s route was lost at wave 2 f152. The ahead decision started from the model's guess (0.92 units off), and the margin made a 2.7-unit pass of wave 1 look like soft risk 0.92.
+  - On the best route with its recorded actions, `Planner.predict_start` now returns the route's recorded state.
+  - Open: a death while playing the route's actions under a library candidate's mode is not reported as "best route died" (the died_at rule for late replays is undecided).
+
+**Not done:**
+- The route field (realpath) still ignores accelerators. 3-5 fell back to "high jumps". This waits for a live human_v4 test.
+- Surprise-driven exploration when stalled is deferred until the same test.
+
 ## Learning from its own play: online learning, curiosity, daring (2026-11-14)
 
 **The user's report** (`runs/human_v3_check01`, human_v3): 3-2 stuck at the same place, 2-10 could not do a long jump away from the goal, 2-6 (wind, held out) not understood. The agent must learn from its tries, as PPO did, a general skill rather than the level.
