@@ -46,6 +46,8 @@ class Plan:
     their last action held (no jump); from_prev: the chosen plan is the previous one, shifted; actions: H
     ACTIONS indices.
     path: predicted mean (x, y) per frame 0..H over the ensemble members; spread: their position std per frame.
+    path_step: frames between directly predicted samples, relative to frame. Other path entries are linear
+    interpolation, not independent model predictions. Recorded real paths and one-frame models use 1.
     landings: frames where predicted support starts after being airborne {frame, x, y, on: ground | wall};
     wall_jumps: frames on a wall (not on the ground) where a new jump press follows {frame, x, y, side: the side
     the wall is on, L | R}.
@@ -68,7 +70,7 @@ class Plan:
     frames), stage, reason}, and from Planner.plan also
     path (predicted [[x, y], ...]: final-stage ones the members' mean over frames 0..H, stage-1 ones member 0
     over their move's frames) and vetoed (bool).
-    predictions: {1: [x, y], 4: ..., 8: ..., 16: ...} for the surprise check.
+    predictions: {horizon: [x, y]} at HORIZONS divisible by path_step, for the surprise check and error report.
     death_model: the learned death output (probability of dying within the plan, max over members): a second
     opinion only, never used for the decision.
     goal_touch: None, or where the plan touches the goal {frame (the members' median), x, y (mean touch point),
@@ -124,6 +126,7 @@ class Plan:
     #                                                   finish, used, why (when not used)} (plan.planner.BestRoute)
     trial_frames: int = 0                             # mode "route-trial": frames played exactly, no new decision
     #                                                   (plan.planner.RouteTrials, plan.commit.Committer.triggers)
+    path_step: int = 1                                # direct samples at 0, path_step, 2 * path_step, ...
 
     @property
     def name(self) -> str:

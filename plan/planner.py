@@ -2518,6 +2518,7 @@ class Planner:
             fr_c, fr_all = np.arange(Hc + 1) * f, np.arange(H + 1)
             mx, my, spread = (np.interp(fr_all, fr_c, v) for v in (mx, my, spread))
         real_best = real is not None and best == gi
+        path_step = 1 if real_best else f
         if real_best:                                # the route's recorded real path is the prediction
             k = np.minimum(np.arange(H + 1), len(real["x"]) - 1)
             mx, my, spread = real["x"][k], real["y"][k], np.zeros(H + 1)
@@ -2558,7 +2559,8 @@ class Planner:
                    "cell": list(cell0)},
             chosen=[nm for nm, a, b in segs if nm != "pad"], actions=[int(a) for a in acts],
             pad=int(sum(b - a for nm, a, b in segs if nm == "pad")), from_prev=best == prev_idx,
-            path=[[float(a), float(b)] for a, b in zip(mx, my)], spread=[float(v) for v in spread],
+            path=[[float(a), float(b)] for a, b in zip(mx, my)], path_step=path_step,
+            spread=[float(v) for v in spread],
             landings=landings, wall_jumps=wall_jumps, nearest=saf.nearest[best], veto=veto,
             soft_risk=float(soft3[best]), soft_frame=int(saf.soft_frame[best]),
             score={"frames_used": int(frames_used[best]), "t_start": T0 if T0_ok else None,
@@ -2571,7 +2573,7 @@ class Planner:
             v_start=v0 if v0_ok else None, v_end=vend_mean, dead_end_members=int((~fin_e).sum()), leg=leg,
             end_supported=bool(sup[Hc]),
             alternatives=alts,
-            predictions={h: [float(mx[h]), float(my[h])] for h in HORIZONS if h <= H},
+            predictions={h: [float(mx[h]), float(my[h])] for h in HORIZONS if h <= H and h % path_step == 0},
             death_model=float(1.0 - out3["alive"][:, best, Hc].min()),
             goal_touch=goal_touch, key_touches=key_touches,
             finish_model=float(out3["finish"][:, best].max()),
@@ -2818,7 +2820,8 @@ class Planner:
             state={"x": x0, "y": y0, "vx": float(row["vx"][0]), "vy": float(row["vy"][0]), "keys": keys,
                    "supported": bool(sup0[0])},
             chosen=[name], actions=[int(v) for v in acts[c]], pad=H - L, from_prev=False,
-            path=[[float(p), float(q)] for p, q in zip(mx, my)], spread=[], landings=[], wall_jumps=[], nearest=[],
+            path=[[float(p), float(q)] for p, q in zip(mx, my)], path_step=f,
+            spread=[], landings=[], wall_jumps=[], nearest=[],
             veto=veto, soft_risk=float(j["soft"][c]), soft_frame=-1,
             score={"estimate": float(est[c]), "disagreement": float(dis[c]),
                    "t_start": T0 if math.isfinite(T0) else None},

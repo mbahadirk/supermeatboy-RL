@@ -159,6 +159,7 @@ def slim(d: dict) -> dict:
     rivals = [a for a in alts if (a > SUCCESS_SCORE / 2) == succ]      # successes against successes only
     sw = d.get("switch")
     path = d.get("path") or []
+    path_step = int(d.get("path_step", 1))           # older logs retain their historical per-frame analysis
     c2 = (d.get("counts") or {}).get("stage2") or {}
     chosen = d.get("chosen") or []
     frames = "estimate" in sc                                          # scored in frames (else older V units)
@@ -168,7 +169,7 @@ def slim(d: dict) -> dict:
     else:
         progress = sc.get("progress")
     return {"frame": int(d["frame"]), "actions": [int(a) for a in d.get("actions") or []],
-            "path": {h: path[h] for h in HORIZONS if h < len(path) and path[h] is not None},
+            "path": {h: path[h] for h in HORIZONS if h < len(path) and path[h] is not None and h % path_step == 0},
             "air": not bool((d.get("state") or {}).get("supported")),
             "end_supported": bool(d.get("end_supported")), "unc": sc.get("uncertainty"),
             "progress": progress, "frames": frames, "total": total, "best_alt": max(rivals) if rivals else None,

@@ -1,0 +1,2059 @@
+{
+  "scope": "online_check06 4-1 wave 5 and 4-2 wave 50; fixed committed plans and actual actions",
+  "limitations": [
+    "No counterfactual actions, model retraining, success-rate or FPS claim.",
+    "Causal hazard forecast reconstructed; DeathMemory omitted.",
+    "Rule timings exclude forecast construction and planner inference; single pass."
+  ],
+  "baseline_commit": "a1e7f343e6f610dfff9d4ca5c575f500eef8b70b",
+  "unconditional_source_sha256": "b1e08fa2f403e304067c8d2c62fa56299137cc55befa92a449cb95af7dbf35e6",
+  "corrected_source_sha256": "215c3bd076da20cfebe43cf25c65c571f706ac37e13dfeceac80adb3ff6b8481",
+  "inputs": [
+    {
+      "file": "wave_00000.npz",
+      "sha256": "e98a32306f8ffc274e23a3ce2559d0a6c7cf4040442ef6e98f1109cbfd9de498",
+      "world_sha256": "5e2cb4d2730691c2efea0422a37a04748289492fb9b509ed47f3bdc129959e22"
+    },
+    {
+      "file": "wave_00001.npz",
+      "sha256": "70e7e7981094cea20a0fa1ca9267d66c22fab90f71ebfcf8e83141e4500eef45",
+      "world_sha256": "f71c151bc83f9b41c82df1cf50b858c3fabee146e1c449e6162be67c33b1be2d"
+    },
+    {
+      "file": "wave_00002.npz",
+      "sha256": "c17584261f157eb627b4e22ea99944c56e6554e30583dc3255f1a6f8c7a15d8a",
+      "world_sha256": "40aa7b3cac3a9339e6fb277aef31b1ca476157529c3e33360ab47ec39775314c"
+    },
+    {
+      "file": "wave_00003.npz",
+      "sha256": "02fc38127afb7160f226a7055c31e3ce04d8a5794a309a34f7c5b14315094cf9",
+      "world_sha256": "e7fe4d7443f7c0e4a47bcb470b9cd51e8136ac906d98dd38110ed9dc5e065bfe"
+    },
+    {
+      "file": "wave_00004.npz",
+      "sha256": "2a37c3c15941cd0cdbee366f366d30141916662ac0d08857a7d69d4c022d04a4",
+      "world_sha256": "f6f8c05d02a094c4e9fd6d6af51b99a0fd7d58008ee576a90af4d1ef2b77ebd2"
+    },
+    {
+      "file": "wave_00005.npz",
+      "sha256": "c75295699847f7365404fefc0e0148e3850ae842cc268c74ee1de97c59f0e941",
+      "world_sha256": "490e33c794cf0431a7d8d3e3792cc6dc53a5178376224f368859ecfdf38ec68f"
+    },
+    {
+      "file": "wave_00006.npz",
+      "sha256": "57bcc0f4e9c82a16d9021ca53729f1b60d82042279837e5c89847dcb9e35228b",
+      "world_sha256": "b1eee893cc1f632e1c500eb03c142271d180115995b0b462f0e50736798a6f70"
+    },
+    {
+      "file": "wave_00007.npz",
+      "sha256": "6e5b524fbb74534b3929d0d4661cbfe9b1d204643e26ad7d0af97d958d8ac217",
+      "world_sha256": "aebfafc9d10718b67bd941f0747390a17d0b90dc857c17f07c34228712ea2312"
+    },
+    {
+      "file": "wave_00008.npz",
+      "sha256": "b30d638f0687e4ef7b93290bded07c8131567d707d33722751adc222a059a943",
+      "world_sha256": "29666ee6e149973724327a6ce5c73b6c04d9ca94f0f3e525cc6c80947552ab87"
+    },
+    {
+      "file": "wave_00009.npz",
+      "sha256": "fd3081c7ea8829fbb5c94c5d86709581f4b1f02094a99f75694231fb0f76b147",
+      "world_sha256": "7f8e34de3ea1e6fd5f4430cb947af0a32944a582b0c06fa528db034a7c5879c7"
+    },
+    {
+      "file": "wave_00010.npz",
+      "sha256": "48bded3f23adc1fa00af0106c17a87bcdea8e4d306c84b050caae141e4adb482",
+      "world_sha256": "04f0d886e12b790e0b3010883e4c62bfad9235f5ee8cae3c9fc59965e6c213be"
+    },
+    {
+      "file": "wave_00011.npz",
+      "sha256": "64490a832c9e2ed73b37b21b193d8dde607a48780892f3ba061ac9a1521bfff8",
+      "world_sha256": "a633703b9ec54d5b02bd44282f62f6b2e24ddbfedabe4a75c55b7d7c1f90432a"
+    },
+    {
+      "file": "wave_00012.npz",
+      "sha256": "ef986755b24859f011c49ea307e57916322a1b1ea3c085dbe864e771259f00f1",
+      "world_sha256": "8de818d229e7e35736ad7dd4b7d97e5da6f6ef59ea980a74b4b9e7673a7d7ff7"
+    },
+    {
+      "file": "wave_00013.npz",
+      "sha256": "aa3cd061f20a86889b96ee3a09596eb92f214e5b430c899fd0d3da645bcc67ef",
+      "world_sha256": "93116c5a63893ad614e88917f2003b3bffda3e8d89ddf1bfab3f10fce72ded0f"
+    },
+    {
+      "file": "wave_00014.npz",
+      "sha256": "3fd5819471127cc28144286d9609126ed44781b5baef0a5daf1a7227c0bd0274",
+      "world_sha256": "010f72d81de2ef71afc76f854d6554297e14f63b6643392d6a0cbdfe277f8bbb"
+    },
+    {
+      "file": "wave_00015.npz",
+      "sha256": "2496e7abfb4a7ac1ab0329dcc6fd2576f89f71fa9a6b0dfac11e6bde72a2df60",
+      "world_sha256": "746987420c5036cd7ac2fa33a27e16b64d6f8864ca2604fbd99a5e9dc5e68752"
+    },
+    {
+      "file": "wave_00016.npz",
+      "sha256": "3023ed8985f5e6fb4b3f0dad999a00e26adf3768d627ce76b10a7c5f6154080c",
+      "world_sha256": "76cc5f662a87cd471bada668c4044bf097d2a95619aebc2e377bfb03e3199aab"
+    },
+    {
+      "file": "wave_00017.npz",
+      "sha256": "8b9a19b7f299803acfd7fe83a9b770fdf8fe79b0878ee781fd94826f987198ff",
+      "world_sha256": "c9f868949f623611de9442dc4f45b35c4bfb2073275d6cf7e5dea16f0bbff38d"
+    },
+    {
+      "file": "wave_00018.npz",
+      "sha256": "1ec4d9b2e11aedd281582d54e7e9ab77e82fab120a620862818cc7ecf2f19cd5",
+      "world_sha256": "c39de45ad12ec89b6bb94171bf35f5d1d20ebf815cefac031d344551bf5f2f32"
+    },
+    {
+      "file": "wave_00019.npz",
+      "sha256": "8da33a15332145885254b72a6292bb9b8fec033e0d76b3fcc7fb4efe5c529a77",
+      "world_sha256": "b4a82601da0aeba273b16c0c6c63c66182f3c23e7f68ac0abf7bb3167a5ec6d5"
+    },
+    {
+      "file": "wave_00020.npz",
+      "sha256": "0413291774593168393818a60e1548dafdd59437d75ee4aba58227a6f5aa9493",
+      "world_sha256": "d87bfe070e3f7faa49536df8fcf5979715fc1fc375c9168d135574be1a06688f"
+    },
+    {
+      "file": "wave_00021.npz",
+      "sha256": "a648c6aa18e20a505639e7b95134cef0138c1dd5b2bd345d78e3008b27e99062",
+      "world_sha256": "73c8dff645741620dfee8687d2ee89f02813dfa8b76eabcb05b94e4eefc54284"
+    },
+    {
+      "file": "wave_00022.npz",
+      "sha256": "a4cf15cb71157e4b460249f9ee08a1a304a6352d39c66e67c824b99c68967d18",
+      "world_sha256": "4594f850940c053c4f668e2146967a67cfd295409d66f7118861581647709925"
+    },
+    {
+      "file": "wave_00023.npz",
+      "sha256": "47c7282dfe354b5b72f372f561364a99b0e3a8a537c0399c1a80e998062413fe",
+      "world_sha256": "22dc9f44e0be30795e9b2f11751ac833045739f97e1904a50959d681e1c5e6f5"
+    },
+    {
+      "file": "wave_00024.npz",
+      "sha256": "7f5a82be93c415d7993a2b1b794d45a25f5f35b7edc1fd39c3db723fbadb4b31",
+      "world_sha256": "ff66ba050f9b7bd070fe94f25f488c44b1eb91db37afeff483bf0faf8e731436"
+    },
+    {
+      "file": "wave_00025.npz",
+      "sha256": "126a39cc357a6fa343686bffe443237dba153f9f5e2bc8c4126e6ea9896a1e92",
+      "world_sha256": "c7b7c8937b12062e2371cfc8a223aa01d50f4c155353deb25d3780a39f7565aa"
+    },
+    {
+      "file": "wave_00026.npz",
+      "sha256": "45f3cdd11620c4328568c1d426c1c5fa69adcaf131c95a5eb4bc6a7023e35081",
+      "world_sha256": "afcf8fb4b8925ece75be26df414ef2193c9a52337977d7856350ba14e5523cb8"
+    },
+    {
+      "file": "wave_00027.npz",
+      "sha256": "7b7859ed73b1dae8d139325e5d8bb1090b6475a5aa209e118ce913b6aac88269",
+      "world_sha256": "bf698c51279c829aaa6f13709dc964c15b91de3d75f2c8b30f909977dc16bac4"
+    },
+    {
+      "file": "wave_00028.npz",
+      "sha256": "48adc38196d53b4b876129bf08d3c133274cb309c79bb4a5220013441ff0e6c4",
+      "world_sha256": "008b30f5dadee1644c1ca0a7c57521565f6e94c53a3703b0843aceed057bcf9e"
+    },
+    {
+      "file": "wave_00029.npz",
+      "sha256": "0c903403c59430d4d5a7f82c8b35550757f1afc86018447a964cac12259a7a29",
+      "world_sha256": "d8fd88be636f905c0c8053f4d8f81c80f09e50fc988b15207a38d49b6c230222"
+    },
+    {
+      "file": "wave_00030.npz",
+      "sha256": "29fd37baef773fbdf91a98fe7c9b9d4e387980c1cd37e5a7e7f72f9bc91897e1",
+      "world_sha256": "c3f70e7bd06c0fb4d967d012f144fb4e339d18e31cdb05641a10a0c3b8eef6ce"
+    },
+    {
+      "file": "wave_00031.npz",
+      "sha256": "1c79096963afa58309c61165ca2fa5b04c0c40d7fc58d7542a6fc976ec9538fa",
+      "world_sha256": "903a0741bd57e67c2b64510c6b3c10d8722bd9a1396ae25f601c67c9bd9e0c0a"
+    },
+    {
+      "file": "wave_00032.npz",
+      "sha256": "2ffac0f1232bacbdce2cee3720f6605e32dfc3acc6ca0fb4dc0a0ea7f634ab35",
+      "world_sha256": "33dd1dfbb4bd59609c9ed19a7dbc6ff162f8a8f9c7e69df5891a78c5b29c3110"
+    },
+    {
+      "file": "wave_00033.npz",
+      "sha256": "5789efa0582a64427d12298c168d7e57f0805f2a0247a8c913b8895e0a5a51bf",
+      "world_sha256": "77e6eb59c60d6684167f39dcc807c8d24494023ea3027dce7a0ba5946ee27c57"
+    },
+    {
+      "file": "wave_00034.npz",
+      "sha256": "e2ef5738fef8545d59e538033c5270ff169ec32c3a96cadc9c36488e4f907ebd",
+      "world_sha256": "bd2fc0b18e7d31a48c256b283ff55ad4b360e8f8d8c0491fc1b0b0d7aaecd5a8"
+    },
+    {
+      "file": "wave_00035.npz",
+      "sha256": "590fdafa487d4e0899f4d658c7b70c5e9a4a5d2bf3f267d030af96941af9542d",
+      "world_sha256": "74ac40f944e8a123a7f4e17561c8c302a80b72af57c359944a5a3803632d8a2c"
+    },
+    {
+      "file": "wave_00036.npz",
+      "sha256": "ec062f139006855e889eae051cf78efe9a35daa73a77acd52da0252e8f581fde",
+      "world_sha256": "f11b929aa9fba38e963c93f0dfc7634e2a2ecd58c31a5cf43365d76cacf349cb"
+    },
+    {
+      "file": "wave_00037.npz",
+      "sha256": "0f4a280d9bd432ad9c2b78f222acc0ccfa9af8dbb574276eb7755c722e0f893f",
+      "world_sha256": "55194a67249e71a1d58ed4e4b02d97391524174f5c92358fcfe149466ac22cb9"
+    },
+    {
+      "file": "wave_00038.npz",
+      "sha256": "80eeaddda3ec49332cb8fccb16f6cf8dadbcb6e3b630319ebc9a9d9583f6032b",
+      "world_sha256": "5877b5042f169f90ea70623bdf5a7995bc9c53c3d34ed9ad50cef34bdeca6edf"
+    },
+    {
+      "file": "wave_00039.npz",
+      "sha256": "41db4becde4aed8476463ef9b58927506051d72e41fb858bda9398969f4149c5",
+      "world_sha256": "56cf167b41d7060d72ba8232717239d0dc155f8a1d1bcc51689cc8c60e1345d7"
+    },
+    {
+      "file": "wave_00040.npz",
+      "sha256": "fac0f619e754b7e69d8f73cb889f2dee1488791ab63ccf2873abdbbdf7afb89e",
+      "world_sha256": "d0988ea3d70058295f3e36d50ea9263bb9bd7b3fabd56f692725825f42aaa80d"
+    },
+    {
+      "file": "wave_00041.npz",
+      "sha256": "e6ff2f7319bdc9496ab52e776d7a1f57c8737dd1adad76a8d49b5798b5f773c8",
+      "world_sha256": "973e6d19c90827ca2059f3324d2b2493ea27e25e35a9e7d78daf86ced748d988"
+    },
+    {
+      "file": "wave_00042.npz",
+      "sha256": "902dd0242d99473647c9b17e4398f205b520ddee87418f3d4e6a7dc87ad3c288",
+      "world_sha256": "eb8b2aac1ba10bf19b5be7d3256523c101ae9fe3f25de04a1968a0747b52d21a"
+    },
+    {
+      "file": "wave_00043.npz",
+      "sha256": "7c8d78f33c67a063537ffb176c62b9ef67c4d4af6bd51722159eac64c42b047b",
+      "world_sha256": "a0002efbe9c3ba1d75dc24b7356694b587d3173aeb77074400f831be4ba42da2"
+    },
+    {
+      "file": "wave_00044.npz",
+      "sha256": "b231bc3c3327b689c0bc2e5db3e0c1a0fd0db45b1e00d9fc640e3a028fb6bd7b",
+      "world_sha256": "7d38512299314c49b5777b998f029e9856491504cca12f466a4968d4107d263f"
+    },
+    {
+      "file": "wave_00045.npz",
+      "sha256": "0b6d7ec57bf58142cb15f4e575c425fe79c30ed922a44c9d795fb407ce02a319",
+      "world_sha256": "6d482238db616f58e2a0fa22fde135cb27a4dcd4c46031c94fef53292c9ee201"
+    },
+    {
+      "file": "wave_00046.npz",
+      "sha256": "bc21f9720b0250d65ad07fdd627cde808fa90f70400900a10b4d77811dd96b99",
+      "world_sha256": "53194433a9ad225c0b3c45d94ac6597756b973781d3164b9026a50df2fc2a1de"
+    },
+    {
+      "file": "wave_00047.npz",
+      "sha256": "c4ec8af7df7fb118210982927790b6fb51b7e3a4e584c812abfe93d5797563ae",
+      "world_sha256": "8c1e111ccb5e4e7c9dd1c5170c41af1fb16ff7a4411720608edac279dc703009"
+    },
+    {
+      "file": "wave_00048.npz",
+      "sha256": "c3e77b43ae7be4f46b6a469e1ed456b17f17cd4593f109e01b153952886c2e1f",
+      "world_sha256": "921c991784df0c73ba9ff095006309e9d2f63cb2cb4d66aa1b48f59e28fea39a"
+    },
+    {
+      "file": "wave_00049.npz",
+      "sha256": "0129e0f0b54dd5b12adf1a03cd43520fe5f3ea21aebb20f51bbbdbaf6c6ab201",
+      "world_sha256": "e6dfcf34bb562229d66a2d81a9551c85edc84aaced5d3ffa598d940b974a122d"
+    },
+    {
+      "file": "wave_00050.npz",
+      "sha256": "703c2323677bab012cde2267bda4c588c8195fc804678e5e547d1eda67139054",
+      "world_sha256": "9262004d084809a35b9866ca5b6ac4d937549068efbbc73e590a1230270e0839"
+    },
+    {
+      "file": "wave_00051.npz",
+      "sha256": "d0db3ea2a757cbb14d5073a5a17fef889eb9633bf914ae2051229f25dced35dc",
+      "world_sha256": "f48d1e7425af9256561cea787ba5973229565213113d4d8786e920a99db2f507"
+    },
+    {
+      "file": "wave_00052.npz",
+      "sha256": "64d8afe8fed8fb2f8f9226229c7aee06c7ebcfd7031f2ed4272a37216273ef15",
+      "world_sha256": "20ab35916c16e351deccbac8d7baf1014a86490661278c09f73ea9b8a0d55bbd"
+    },
+    {
+      "file": "wave_00053.npz",
+      "sha256": "316d3ee0a3c11978c6ca160b06c2bc7ee554130cf266494ddd971162a672021e",
+      "world_sha256": "fa3f21f6847a2eefe0823aff2477cf2bc2c285d3ba88c6cc487798945a60f228"
+    },
+    {
+      "file": "wave_00054.npz",
+      "sha256": "ad28cd60d8fb63de57d30d58c2af0da2e389e75353116731f98dda6a4cdd4165",
+      "world_sha256": "0c252b957b10d0d93bd32bb1a4cb82e47f66a6522f19ecc32f4fb6a406ce6e0f"
+    },
+    {
+      "file": "wave_00055.npz",
+      "sha256": "b929efefd55c78be3080748947876b366e497d68b65086e0b8336b9ac5db2481",
+      "world_sha256": "1daafe945d2ffa13e8533b88230b354e135b02bdd867ba590f0c6b9d2a8bc937"
+    },
+    {
+      "file": "wave_00056.npz",
+      "sha256": "b81c17c9ec159321d6ecaf8b74feddb10f69e9737073c9b4aa763bb9098ccb6c",
+      "world_sha256": "70b718e22b3475507fe8b58e9f398eef5d13c43382f5cca6d32a55cb6b1aff9a"
+    },
+    {
+      "file": "wave_00057.npz",
+      "sha256": "2aa6a49999215c9f903a0dbbcfe1b16b06e22a7971c81330cda630485c8f243d",
+      "world_sha256": "7fa7d17659ad1ae2db6d8311a9870a6ec5b25152e8abe2dc0244acb48ed9ed1e"
+    },
+    {
+      "file": "wave_00058.npz",
+      "sha256": "665f12625cbd7c849829c9478412329d0832484f642e269624e9ac79f6600864",
+      "world_sha256": "8e2123b6d041717e5cdfa24c9460ab67c2daee07ba49201eea3302f6e3a72f08"
+    },
+    {
+      "file": "wave_00059.npz",
+      "sha256": "751901e6c8fa8edde439a62229cd819d2f3486467d21d9f02e66ffb193aa674a",
+      "world_sha256": "37b8553e15fb212914558d8368d9809125cbaffad11f76ea5c130c47be5f3d99"
+    }
+  ],
+  "totals": {
+    "original": {
+      "checks": 133,
+      "trigger_frames": 6,
+      "surprise": 6,
+      "danger": 0,
+      "cpu_s": 0.75,
+      "wall_s": 0.7426039996789768
+    },
+    "unconditional": {
+      "checks": 133,
+      "trigger_frames": 0,
+      "surprise": 0,
+      "danger": 0,
+      "cpu_s": 0.796875,
+      "wall_s": 0.7628656999440864
+    },
+    "corrected": {
+      "checks": 133,
+      "trigger_frames": 6,
+      "surprise": 6,
+      "danger": 0,
+      "cpu_s": 0.703125,
+      "wall_s": 0.7370218000141904
+    }
+  },
+  "restored_early_surprises": [
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 49,
+      "plan_frame": 48,
+      "age": 1,
+      "death_in": 47,
+      "position_error": 4.554300308227539,
+      "original": [
+        "surprise +1 err 4.6 > 3.0"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +1 err 4.6 > 3.0"
+      ]
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 89,
+      "plan_frame": 88,
+      "age": 1,
+      "death_in": 7,
+      "position_error": 4.719799518585205,
+      "original": [
+        "surprise +1 err 4.7 > 3.0"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +1 err 4.7 > 3.0"
+      ]
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 90,
+      "plan_frame": 88,
+      "age": 2,
+      "death_in": 6,
+      "position_error": 9.591597557067871,
+      "original": [
+        "surprise +2 err 9.6 > 3.0"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +2 err 9.6 > 3.0"
+      ]
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 91,
+      "plan_frame": 88,
+      "age": 3,
+      "death_in": 5,
+      "position_error": 14.617159843444824,
+      "original": [
+        "surprise +3 err 14.6 > 3.0"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +3 err 14.6 > 3.0"
+      ]
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 26,
+      "plan_frame": 24,
+      "age": 2,
+      "death_in": 33,
+      "position_error": 6.428461074829102,
+      "original": [
+        "surprise +2 err 6.4 > 3.6"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +2 err 6.4 > 3.6"
+      ]
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 27,
+      "plan_frame": 24,
+      "age": 3,
+      "death_in": 32,
+      "position_error": 4.593939781188965,
+      "original": [
+        "surprise +3 err 4.6 > 3.6"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +3 err 4.6 > 3.6"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 1,
+      "plan_frame": 0,
+      "age": 1,
+      "death_in": 95,
+      "position_error": 0.614441990852356,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 2,
+      "plan_frame": 0,
+      "age": 2,
+      "death_in": 94,
+      "position_error": 0.7688241004943848,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 3,
+      "plan_frame": 0,
+      "age": 3,
+      "death_in": 93,
+      "position_error": 0.6746621131896973,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 4,
+      "plan_frame": 0,
+      "age": 4,
+      "death_in": 92,
+      "position_error": 0.3952210247516632,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 5,
+      "plan_frame": 0,
+      "age": 5,
+      "death_in": 91,
+      "position_error": 0.7393057346343994,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 6,
+      "plan_frame": 0,
+      "age": 6,
+      "death_in": 90,
+      "position_error": 0.887572169303894,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 7,
+      "plan_frame": 0,
+      "age": 7,
+      "death_in": 89,
+      "position_error": 0.8599663972854614,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 9,
+      "plan_frame": 8,
+      "age": 1,
+      "death_in": 87,
+      "position_error": 0.3601204454898834,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 10,
+      "plan_frame": 8,
+      "age": 2,
+      "death_in": 86,
+      "position_error": 0.4824455976486206,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 11,
+      "plan_frame": 8,
+      "age": 3,
+      "death_in": 85,
+      "position_error": 0.43960216641426086,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 12,
+      "plan_frame": 8,
+      "age": 4,
+      "death_in": 84,
+      "position_error": 0.5656581521034241,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 13,
+      "plan_frame": 8,
+      "age": 5,
+      "death_in": 83,
+      "position_error": 0.6516774296760559,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 14,
+      "plan_frame": 8,
+      "age": 6,
+      "death_in": 82,
+      "position_error": 0.7967860102653503,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 15,
+      "plan_frame": 8,
+      "age": 7,
+      "death_in": 81,
+      "position_error": 0.9120253324508667,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 17,
+      "plan_frame": 16,
+      "age": 1,
+      "death_in": 79,
+      "position_error": 0.38967111706733704,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 18,
+      "plan_frame": 16,
+      "age": 2,
+      "death_in": 78,
+      "position_error": 0.514136791229248,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 19,
+      "plan_frame": 16,
+      "age": 3,
+      "death_in": 77,
+      "position_error": 0.3734862208366394,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 20,
+      "plan_frame": 16,
+      "age": 4,
+      "death_in": 76,
+      "position_error": 0.03091817907989025,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 21,
+      "plan_frame": 16,
+      "age": 5,
+      "death_in": 75,
+      "position_error": 0.3581584692001343,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 22,
+      "plan_frame": 16,
+      "age": 6,
+      "death_in": 74,
+      "position_error": 0.4831759035587311,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 23,
+      "plan_frame": 16,
+      "age": 7,
+      "death_in": 73,
+      "position_error": 0.34395721554756165,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 25,
+      "plan_frame": 24,
+      "age": 1,
+      "death_in": 71,
+      "position_error": 0.32177478075027466,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 26,
+      "plan_frame": 24,
+      "age": 2,
+      "death_in": 70,
+      "position_error": 0.3533357083797455,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 27,
+      "plan_frame": 24,
+      "age": 3,
+      "death_in": 69,
+      "position_error": 0.23241645097732544,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 28,
+      "plan_frame": 24,
+      "age": 4,
+      "death_in": 68,
+      "position_error": 0.6702221035957336,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 29,
+      "plan_frame": 24,
+      "age": 5,
+      "death_in": 67,
+      "position_error": 0.3513607680797577,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 30,
+      "plan_frame": 24,
+      "age": 6,
+      "death_in": 66,
+      "position_error": 0.3125554025173187,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 31,
+      "plan_frame": 24,
+      "age": 7,
+      "death_in": 65,
+      "position_error": 0.38446176052093506,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 33,
+      "plan_frame": 32,
+      "age": 1,
+      "death_in": 63,
+      "position_error": 0.41993921995162964,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 34,
+      "plan_frame": 32,
+      "age": 2,
+      "death_in": 62,
+      "position_error": 0.537776529788971,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 35,
+      "plan_frame": 32,
+      "age": 3,
+      "death_in": 61,
+      "position_error": 0.36481955647468567,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 36,
+      "plan_frame": 32,
+      "age": 4,
+      "death_in": 60,
+      "position_error": 0.27141398191452026,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 37,
+      "plan_frame": 32,
+      "age": 5,
+      "death_in": 59,
+      "position_error": 0.3205326497554779,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 38,
+      "plan_frame": 32,
+      "age": 6,
+      "death_in": 58,
+      "position_error": 0.40439265966415405,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 39,
+      "plan_frame": 32,
+      "age": 7,
+      "death_in": 57,
+      "position_error": 0.2873534560203552,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 41,
+      "plan_frame": 40,
+      "age": 1,
+      "death_in": 55,
+      "position_error": 0.2848268449306488,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 42,
+      "plan_frame": 40,
+      "age": 2,
+      "death_in": 54,
+      "position_error": 0.3650515675544739,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 43,
+      "plan_frame": 40,
+      "age": 3,
+      "death_in": 53,
+      "position_error": 0.2440127730369568,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 44,
+      "plan_frame": 40,
+      "age": 4,
+      "death_in": 52,
+      "position_error": 0.08145246654748917,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 45,
+      "plan_frame": 40,
+      "age": 5,
+      "death_in": 51,
+      "position_error": 0.25518104434013367,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 46,
+      "plan_frame": 40,
+      "age": 6,
+      "death_in": 50,
+      "position_error": 0.38756415247917175,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 47,
+      "plan_frame": 40,
+      "age": 7,
+      "death_in": 49,
+      "position_error": 0.33822256326675415,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 49,
+      "plan_frame": 48,
+      "age": 1,
+      "death_in": 47,
+      "position_error": 4.554300308227539,
+      "original": [
+        "surprise +1 err 4.6 > 3.0"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +1 err 4.6 > 3.0"
+      ]
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 51,
+      "plan_frame": 50,
+      "age": 1,
+      "death_in": 45,
+      "position_error": 0.1997688114643097,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 52,
+      "plan_frame": 50,
+      "age": 2,
+      "death_in": 44,
+      "position_error": 0.18217992782592773,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 53,
+      "plan_frame": 50,
+      "age": 3,
+      "death_in": 43,
+      "position_error": 0.05611465871334076,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 54,
+      "plan_frame": 50,
+      "age": 4,
+      "death_in": 42,
+      "position_error": 0.5041350722312927,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 55,
+      "plan_frame": 50,
+      "age": 5,
+      "death_in": 41,
+      "position_error": 2.53102970123291,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 57,
+      "plan_frame": 56,
+      "age": 1,
+      "death_in": 39,
+      "position_error": 0.3162309229373932,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 58,
+      "plan_frame": 56,
+      "age": 2,
+      "death_in": 38,
+      "position_error": 0.4294132590293884,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 59,
+      "plan_frame": 56,
+      "age": 3,
+      "death_in": 37,
+      "position_error": 0.3405340909957886,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 60,
+      "plan_frame": 56,
+      "age": 4,
+      "death_in": 36,
+      "position_error": 0.07843416929244995,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 61,
+      "plan_frame": 56,
+      "age": 5,
+      "death_in": 35,
+      "position_error": 0.41833075881004333,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 62,
+      "plan_frame": 56,
+      "age": 6,
+      "death_in": 34,
+      "position_error": 0.5824531316757202,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 63,
+      "plan_frame": 56,
+      "age": 7,
+      "death_in": 33,
+      "position_error": 0.5472717881202698,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 65,
+      "plan_frame": 64,
+      "age": 1,
+      "death_in": 31,
+      "position_error": 0.37415775656700134,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 66,
+      "plan_frame": 64,
+      "age": 2,
+      "death_in": 30,
+      "position_error": 0.5355817675590515,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 67,
+      "plan_frame": 64,
+      "age": 3,
+      "death_in": 29,
+      "position_error": 0.5882635712623596,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 68,
+      "plan_frame": 64,
+      "age": 4,
+      "death_in": 28,
+      "position_error": 0.8029617667198181,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 69,
+      "plan_frame": 64,
+      "age": 5,
+      "death_in": 27,
+      "position_error": 0.7875114679336548,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 70,
+      "plan_frame": 64,
+      "age": 6,
+      "death_in": 26,
+      "position_error": 0.8350614905357361,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 71,
+      "plan_frame": 64,
+      "age": 7,
+      "death_in": 25,
+      "position_error": 0.8597130179405212,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 73,
+      "plan_frame": 72,
+      "age": 1,
+      "death_in": 23,
+      "position_error": 0.2999718487262726,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 74,
+      "plan_frame": 72,
+      "age": 2,
+      "death_in": 22,
+      "position_error": 0.3394933044910431,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 75,
+      "plan_frame": 72,
+      "age": 3,
+      "death_in": 21,
+      "position_error": 0.14434249699115753,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 76,
+      "plan_frame": 72,
+      "age": 4,
+      "death_in": 20,
+      "position_error": 0.4206331968307495,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 77,
+      "plan_frame": 72,
+      "age": 5,
+      "death_in": 19,
+      "position_error": 0.18612897396087646,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 78,
+      "plan_frame": 72,
+      "age": 6,
+      "death_in": 18,
+      "position_error": 0.19689545035362244,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 79,
+      "plan_frame": 72,
+      "age": 7,
+      "death_in": 17,
+      "position_error": 0.33730894327163696,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 81,
+      "plan_frame": 80,
+      "age": 1,
+      "death_in": 15,
+      "position_error": 0.3312961161136627,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 82,
+      "plan_frame": 80,
+      "age": 2,
+      "death_in": 14,
+      "position_error": 0.39861851930618286,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 83,
+      "plan_frame": 80,
+      "age": 3,
+      "death_in": 13,
+      "position_error": 0.21298423409461975,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 84,
+      "plan_frame": 80,
+      "age": 4,
+      "death_in": 12,
+      "position_error": 0.09490539133548737,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 85,
+      "plan_frame": 80,
+      "age": 5,
+      "death_in": 11,
+      "position_error": 1.013189673423767,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 86,
+      "plan_frame": 80,
+      "age": 6,
+      "death_in": 10,
+      "position_error": 0.46556270122528076,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 87,
+      "plan_frame": 80,
+      "age": 7,
+      "death_in": 9,
+      "position_error": 1.9267857074737549,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 89,
+      "plan_frame": 88,
+      "age": 1,
+      "death_in": 7,
+      "position_error": 4.719799518585205,
+      "original": [
+        "surprise +1 err 4.7 > 3.0"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +1 err 4.7 > 3.0"
+      ]
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 90,
+      "plan_frame": 88,
+      "age": 2,
+      "death_in": 6,
+      "position_error": 9.591597557067871,
+      "original": [
+        "surprise +2 err 9.6 > 3.0"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +2 err 9.6 > 3.0"
+      ]
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 91,
+      "plan_frame": 88,
+      "age": 3,
+      "death_in": 5,
+      "position_error": 14.617159843444824,
+      "original": [
+        "surprise +3 err 14.6 > 3.0"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +3 err 14.6 > 3.0"
+      ]
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 93,
+      "plan_frame": 92,
+      "age": 1,
+      "death_in": 3,
+      "position_error": 0.24042537808418274,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 94,
+      "plan_frame": 92,
+      "age": 2,
+      "death_in": 2,
+      "position_error": 0.33505159616470337,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-1",
+      "wave": 5,
+      "frame": 95,
+      "plan_frame": 92,
+      "age": 3,
+      "death_in": 1,
+      "position_error": 0.29712700843811035,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 1,
+      "plan_frame": 0,
+      "age": 1,
+      "death_in": 58,
+      "position_error": 0.5393978953361511,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 2,
+      "plan_frame": 0,
+      "age": 2,
+      "death_in": 57,
+      "position_error": 0.6196593046188354,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 3,
+      "plan_frame": 0,
+      "age": 3,
+      "death_in": 56,
+      "position_error": 0.4409348666667938,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 4,
+      "plan_frame": 0,
+      "age": 4,
+      "death_in": 55,
+      "position_error": 0.09347875416278839,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 5,
+      "plan_frame": 0,
+      "age": 5,
+      "death_in": 54,
+      "position_error": 0.36777979135513306,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 6,
+      "plan_frame": 0,
+      "age": 6,
+      "death_in": 53,
+      "position_error": 0.4741739332675934,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 7,
+      "plan_frame": 0,
+      "age": 7,
+      "death_in": 52,
+      "position_error": 0.3978537619113922,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 9,
+      "plan_frame": 8,
+      "age": 1,
+      "death_in": 50,
+      "position_error": 0.3863706588745117,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 10,
+      "plan_frame": 8,
+      "age": 2,
+      "death_in": 49,
+      "position_error": 0.6036588549613953,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 11,
+      "plan_frame": 8,
+      "age": 3,
+      "death_in": 48,
+      "position_error": 0.7106265425682068,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 12,
+      "plan_frame": 8,
+      "age": 4,
+      "death_in": 47,
+      "position_error": 0.8450182676315308,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 13,
+      "plan_frame": 8,
+      "age": 5,
+      "death_in": 46,
+      "position_error": 1.3475135564804077,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 14,
+      "plan_frame": 8,
+      "age": 6,
+      "death_in": 45,
+      "position_error": 1.6750730276107788,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 15,
+      "plan_frame": 8,
+      "age": 7,
+      "death_in": 44,
+      "position_error": 1.8117939233779907,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 17,
+      "plan_frame": 16,
+      "age": 1,
+      "death_in": 42,
+      "position_error": 0.3911542594432831,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 18,
+      "plan_frame": 16,
+      "age": 2,
+      "death_in": 41,
+      "position_error": 0.516532301902771,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 19,
+      "plan_frame": 16,
+      "age": 3,
+      "death_in": 40,
+      "position_error": 0.3773576021194458,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 20,
+      "plan_frame": 16,
+      "age": 4,
+      "death_in": 39,
+      "position_error": 0.04847221076488495,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 21,
+      "plan_frame": 16,
+      "age": 5,
+      "death_in": 38,
+      "position_error": 0.37811702489852905,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 22,
+      "plan_frame": 16,
+      "age": 6,
+      "death_in": 37,
+      "position_error": 0.517479419708252,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 23,
+      "plan_frame": 16,
+      "age": 7,
+      "death_in": 36,
+      "position_error": 0.39584892988204956,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 25,
+      "plan_frame": 24,
+      "age": 1,
+      "death_in": 34,
+      "position_error": 0.6134710311889648,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 26,
+      "plan_frame": 24,
+      "age": 2,
+      "death_in": 33,
+      "position_error": 6.428461074829102,
+      "original": [
+        "surprise +2 err 6.4 > 3.6"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +2 err 6.4 > 3.6"
+      ]
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 27,
+      "plan_frame": 24,
+      "age": 3,
+      "death_in": 32,
+      "position_error": 4.593939781188965,
+      "original": [
+        "surprise +3 err 4.6 > 3.6"
+      ],
+      "unconditional": [],
+      "corrected": [
+        "surprise +3 err 4.6 > 3.6"
+      ]
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 28,
+      "plan_frame": 24,
+      "age": 4,
+      "death_in": 31,
+      "position_error": 2.9912686347961426,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 29,
+      "plan_frame": 24,
+      "age": 5,
+      "death_in": 30,
+      "position_error": 2.3407461643218994,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 30,
+      "plan_frame": 24,
+      "age": 6,
+      "death_in": 29,
+      "position_error": 1.8494621515274048,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 31,
+      "plan_frame": 24,
+      "age": 7,
+      "death_in": 28,
+      "position_error": 1.4780980348587036,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 33,
+      "plan_frame": 32,
+      "age": 1,
+      "death_in": 26,
+      "position_error": 0.7005640864372253,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 34,
+      "plan_frame": 32,
+      "age": 2,
+      "death_in": 25,
+      "position_error": 1.2477681636810303,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 35,
+      "plan_frame": 32,
+      "age": 3,
+      "death_in": 24,
+      "position_error": 1.6433697938919067,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 36,
+      "plan_frame": 32,
+      "age": 4,
+      "death_in": 23,
+      "position_error": 1.8853851556777954,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 37,
+      "plan_frame": 32,
+      "age": 5,
+      "death_in": 22,
+      "position_error": 2.585423707962036,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 38,
+      "plan_frame": 32,
+      "age": 6,
+      "death_in": 21,
+      "position_error": 3.133896589279175,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 39,
+      "plan_frame": 32,
+      "age": 7,
+      "death_in": 20,
+      "position_error": 3.5287911891937256,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 41,
+      "plan_frame": 40,
+      "age": 1,
+      "death_in": 18,
+      "position_error": 0.22575168311595917,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 42,
+      "plan_frame": 40,
+      "age": 2,
+      "death_in": 17,
+      "position_error": 0.29954347014427185,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 43,
+      "plan_frame": 40,
+      "age": 3,
+      "death_in": 16,
+      "position_error": 0.22012878954410553,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 45,
+      "plan_frame": 44,
+      "age": 1,
+      "death_in": 14,
+      "position_error": 0.22545383870601654,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 46,
+      "plan_frame": 44,
+      "age": 2,
+      "death_in": 13,
+      "position_error": 0.29852503538131714,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 47,
+      "plan_frame": 44,
+      "age": 3,
+      "death_in": 12,
+      "position_error": 0.2199815809726715,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 48,
+      "plan_frame": 44,
+      "age": 4,
+      "death_in": 11,
+      "position_error": 0.04883802682161331,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 49,
+      "plan_frame": 44,
+      "age": 5,
+      "death_in": 10,
+      "position_error": 0.2099183201789856,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 50,
+      "plan_frame": 44,
+      "age": 6,
+      "death_in": 9,
+      "position_error": 0.2819538414478302,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 51,
+      "plan_frame": 44,
+      "age": 7,
+      "death_in": 8,
+      "position_error": 0.2068609744310379,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 53,
+      "plan_frame": 52,
+      "age": 1,
+      "death_in": 6,
+      "position_error": 0.2678307890892029,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 54,
+      "plan_frame": 52,
+      "age": 2,
+      "death_in": 5,
+      "position_error": 0.44065165519714355,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 55,
+      "plan_frame": 52,
+      "age": 3,
+      "death_in": 4,
+      "position_error": 0.5790637135505676,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 56,
+      "plan_frame": 52,
+      "age": 4,
+      "death_in": 3,
+      "position_error": 0.774668276309967,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 57,
+      "plan_frame": 52,
+      "age": 5,
+      "death_in": 2,
+      "position_error": 0.749427318572998,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    },
+    {
+      "level": "4-2",
+      "wave": 50,
+      "frame": 58,
+      "plan_frame": 52,
+      "age": 6,
+      "death_in": 1,
+      "position_error": 0.7432324886322021,
+      "original": [],
+      "unconditional": [],
+      "corrected": []
+    }
+  ]
+}

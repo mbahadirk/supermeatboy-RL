@@ -83,12 +83,13 @@ Message types
  plan/explain.py Plan) include:
  "frame" (the decision's wave frame), "agent", "state" {x, y, vx, vy, flags, state, held, keys, ground,
  wall_side, supported, cell}, "chosen" [move names], "actions" [H ACTIONS indices, index k = frame + k],
- "path" [[x, y] for frames 0..H] (predicted, ensemble mean), "spread" [units per frame], "landings"
+ "path" [[x, y] for frames 0..H] (predicted, ensemble mean), "path_step" (direct sample spacing; intervening
+ path entries are interpolation; recorded real routes use 1), "spread" [units per frame], "landings"
  [{frame, x, y, on: ground | wall}] (frame = frames after the decision), "wall_jumps" [{frame, x, y, side}],
  "nearest" [{id, kind, clearance, frame}], "veto" null | {frame, id, kind}, "soft_risk", "soft_frame",
  "score" {progress, progress_credit, risk, uncertainty, spread_end, failure, total}, "v_start", "v_end",
  "alternatives" [{moves, total, progress, stage, reason, path [[x, y], ...], vetoed: bool}],
- "predictions" {"1": [x, y], "4": ..., "8": ..., "16": ...}, "timing" {stage1, stage2, final, total} (ms),
+ "predictions" {horizon: [x, y]} (1/4/8/16 when divisible by path_step), "timing" {stage1, stage2, final, total} (ms),
  "counts", "segments" [[move, from frame, to frame]],
  "trigger" [str] (why this decision was made, plan/commit.py: "start", "start: tiles", "interval", "move end",
  "surprise +8 err 14.2 > 11.0", "support: landed early +5", "danger h12 f10", "danger: risk 0.10 -> 0.60",

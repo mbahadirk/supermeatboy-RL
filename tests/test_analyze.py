@@ -91,6 +91,19 @@ def test_clipped_share(tmp_path):
     assert "clipped (the model's path went into solid tiles): 50%" in A.report(r)
 
 
+def test_position_error_report_excludes_interpolated_samples(tmp_path):
+    run = tmp_path / "coarse"
+    _write(str(run))
+    with open(run / "plans.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({**_plan(0, 1, dx=10), "path_step": 4}) + "\n")
+    r = A.analyze(str(run))
+    assert r["position_error"]["1"]["followed"][2] == 0
+    assert r["position_error"]["4"]["followed"] == [10.0, 10.0, 1]
+    # A recorded per-frame route still has a measured +1 prediction, even with a coarse world model.
+    assert 1 in A.slim({**_plan(0, 1), "path_step": 1})["path"]
+    assert 1 in A.slim(_plan(0, 1))["path"]            # historical logs without metadata
+
+
 def test_still_share(tmp_path):
     """Still: the chosen plan has no moves other than wait / pad (empty chosen: pad only); kept: from_prev too."""
     assert A.is_still([]) and A.is_still(["wait 8f", "wait 16f"])

@@ -9,7 +9,9 @@ Triggers, checked every frame (Committer.triggers), each recorded with the decis
 - surprise: the real position is off the committed plan's prediction for this frame by more than
   max(tube x the 90% error of followed predictions at that horizon, MIN_TUBE) (ErrorTube: the run's own
   followed errors once a horizon has MIN_SAMPLES of them, else plan.explain.ERR90_AT; the table is frozen for a
-  level at its start, so identical waves of a level replan identically);
+  level at its start, so identical waves of a level replan identically). Checked EVERY frame, including
+  interpolated path samples: an intermediate error can be a failed jump, not interpolation noise. path_step
+  describes prediction accuracy reports; it must not silence the live controller's feedback;
 - support: the real support (plan/geometry.py rule on the real position: ground, wall or air) matches none of
   the plan's predicted ones for this frame and the frames just before and after (landed early, not landed,
   lost the wall, on a wall);
@@ -17,7 +19,8 @@ Triggers, checked every frame (Committer.triggers), each recorded with the decis
   deadly boxes (the planner's own: plan.planner.future_inputs), touches something within plan.safety.VETO_FRAMES
   frames that the plan did not already accept at its decision (a plan chosen while vetoed fires again only
   when the contact comes earlier), or its soft risk rose by more than DANGER_RISE over its value at the
-  decision. Checked only when no other trigger fired (it is the only one that costs a little: about 1-2 ms);
+  decision. The remaining path is translated onto the observed position for this check. A timed trigger
+  cannot mask danger: it may be handled asynchronously, whereas danger needs a decision now;
 - short: fewer than SHORT_FRAMES frames of the plan remain;
 - missed: the plan touched the princess or picked a key in its prediction and the touch frame (+1 frame for
   the game's report) passed without it.
@@ -286,10 +289,14 @@ class Committer:
             if k > int(kt["frame"]) + 1 and not (int(keys) >> int(kt["key"])) & 1:
                 out.append(f"missed: key {int(kt['key'])} f{int(kt['frame'])}")
                 break
-        if not out and fboxes_fn is not None and c.xs is not None and planner is not None:
+        if (not out or all(kind_of(t) in ("interval", "move end", "short", "missed") for t in out)) and \
+                fboxes_fn is not None and c.xs is not None and planner is not None:
             fb = fboxes_fn()
             if fb is not None:
-                cf, hid, risk = path_check(c.xs[k:], c.ys[k:], fb, planner.bounds)
+                # Request a new plan when the actual offset makes the old path dangerous. This is only
+                # a safety check, not a new dynamics prediction or a change to the committed actions.
+                xs, ys = c.xs[k:] + (x - c.xs[k]), c.ys[k:] + (y - c.ys[k])
+                cf, hid, risk = path_check(xs, ys, fb, planner.bounds)
                 if 0 < cf <= S.VETO_FRAMES and (c.base_contact is None or frame + cf < c.base_contact - 1):
                     out.append(f"danger {hid} f{cf}")
                 elif risk - c.base_risk > DANGER_RISE:

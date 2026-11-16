@@ -149,9 +149,10 @@ def test_other_triggers_before_the_jobs_frame_are_absorbed(mode, trigger):
 
 def test_danger_still_drops_the_job_in_both_modes():
     for mode in ("danger", "events"):
-        r = _pending(mode)
-        assert r.route_triggers(0, 103, [0.0] * 8, ["danger: h3 at +6"], 0, 16.667) == ["danger: h3 at +6"]
-        assert r.ajob is None
+        for triggers in (["danger: h3 at +6"], ["interval", "danger: h3 at +6"]):
+            r = _pending(mode)
+            assert r.route_triggers(0, 103, [0.0] * 8, triggers, 0, 16.667) == triggers
+            assert r.ajob is None
 
 
 @needs_model
@@ -161,9 +162,17 @@ def test_deferred_plan_leaves_the_planner_untouched_until_committed():
     pl = Planner(MODEL, lv, field, budget_ms=None)
     worlds, frames = _inputs(pl.future_frames)
     p = pl.plan(_standing(), 0, worlds, frames, defer=True)
+    assert p.path_step == 4 and p.to_dict()["path_step"] == 4
+    assert set(p.predictions) == {4, 8, 16}       # +1 is only display interpolation
     assert 0 not in pl.prev and not pl.surprise.plans
     p.commit_fn()
     assert pl.prev[0] is p and pl.surprise.plans
+    for k in range(4):
+        pl.surprise.played(0, k, p.actions[k])
+    assert pl.surprise.observe(0, 1, p.path[1][0] + 100, p.path[1][1]) == []
+    assert pl.surprise.err[1] == []
+    events = pl.surprise.observe(0, 4, p.path[4][0] + 100, p.path[4][1])
+    assert len(events) == 1 and events[0]["horizon"] == 4
     pred, spread = pl.predict_start(_standing(), np.asarray(p.actions[:8]), worlds[:8])
     assert pred.shape == (1,) and pred["x"][0] > 10 * T and spread >= 0.0     # it runs right
     with pytest.raises(ValueError):
@@ -246,4 +255,5 @@ def test_ahead_start_on_the_best_route_is_the_recorded_state():
     p_rec = pl.plan(pred, 100, worlds[d:], fr, recorded=H)
     br = p_rec.best_route
     assert br["judged"] == "real" and br["used"] and p_rec.mode == "best-route", br
+    assert p_rec.path_step == 1 and set(p_rec.predictions) == {1, 4, 8, 16}
     assert br["real"]["soft"] == 0.0 and br["real"]["margin"] == [0.0, 0.0]

@@ -194,6 +194,76 @@ def test_surprise_tube_has_a_minimum_width():
     assert c.triggers(0, 108, 16.0 + thr8 + 0.5, 0.0, planner=pl) == [f"surprise +8 err {thr8 + 0.5:.1f} > {thr8:.1f}"]
 
 
+def test_failed_jump_is_detected_before_the_next_model_sample():
+    """online_check06, 4-1 wave 5 at frame 88: the model predicts a jump, the character keeps falling.
+    The step-4 gate waited until frame 92 (19.8 units off), only four frames before death. Even a clear
+    nominal hazard corridor cannot justify silence: it assumes the jump whose execution just failed."""
+    predicted = [[-205.117, -244.143], [-198.55, -239.729], [-191.983, -235.316],
+                 [-185.416, -230.902], [-178.849, -226.489]]
+    actual = [[-205.117, -244.143], [-198.617, -244.448], [-192.117, -244.907],
+              [-185.617, -245.518], [-179.117, -246.282]]
+    pl = _stub_planner()
+    p = _stub_plan(frame=88, path=predicted + [predicted[-1]] * 44, first=0)
+    p.path_step = 4
+    c = CM.Committer(replan=48, step=4)
+    c.decided(0, p, 88, planner=pl)
+    for k, err in enumerate([4.7, 9.6, 14.6, 19.8], start=1):
+        assert c.triggers(0, 88 + k, *actual[k], planner=pl, fboxes_fn=lambda: _boxes(48)) == [
+            f"surprise +{k} err {err:.1f} > 3.0"]
+
+
+def test_coarse_path_keeps_contact_danger_and_other_triggers_between_samples():
+    pl = _stub_planner()
+    p = _stub_plan(first=0, goal={"frame": 1}, keys=[{"frame": 1, "key": 1}])
+    p.path_step = 4
+    c = CM.Committer(replan=48, step=4)
+    c.decided(0, p, 100, _boxes(48), pl)
+    assert c.triggers(0, 101, 2.0, 1.0, planner=pl) == ["support: not on the ground +1"]
+    assert c.triggers(0, 101, 2.0, 0.0, tiles=True, planner=pl) == ["start: tiles"]
+    assert c.triggers(0, 103, 6.0, 0.0, planner=pl) == ["missed: princess f1", "missed: key 1 f1"]
+    hazard = lambda: _boxes(48, (6.0, 0.0, 2.0, 2.0, 0.0), at=(1, 2, 3))
+    assert c.triggers(0, 101, 2.0, 0.0, planner=pl, fboxes_fn=hazard) == ["danger h0 f1"]
+    p.first_move_frames = 2
+    c.decided(0, p, 100, planner=pl)
+    assert c.triggers(0, 102, 4.0, 0.0, planner=pl) == ["move end"]
+
+
+def test_coarse_surprise_is_immediate_near_a_hazard_or_unknown_future():
+    pl = _stub_planner()
+    p = _stub_plan(first=0)
+    p.path_step = 4
+    c = CM.Committer(replan=48, step=4)
+    c.decided(0, p, 100, _boxes(48), pl)
+    # Actual x=12 versus predicted x=2: interpolation is not an excuse to continue toward this hazard.
+    expected = ["surprise +1 err 10.0 > 3.0"]
+    box = (24., 0., 2., 2., 0.)
+    assert c.triggers(0, 101, 12., 0., planner=pl, fboxes_fn=lambda: _boxes(48, box, at=(8,))) == expected
+    assert c.triggers(0, 101, 12., 0., planner=pl) == expected
+    assert c.triggers(0, 101, 12., 0., planner=pl, fboxes_fn=lambda: _boxes(2)) == expected
+    assert c.triggers(0, 101, 12., 0., planner=pl, fboxes_fn=lambda: [None] * 49) == expected
+    pl.bounds = (-10., 20., -10., 10.)
+    assert c.triggers(0, 101, 12., 0., planner=pl, fboxes_fn=lambda: _boxes(48)) == expected
+
+
+def test_danger_uses_observed_position_and_is_not_masked_by_a_timed_trigger():
+    pl = _stub_planner()
+    # The nominal path misses the box by 2 units; an offset smaller than the position threshold hits it.
+    path = [[0., 0.]] * 49
+    p = _stub_plan(path=path, first=0)
+    p.path_step = 4
+    c = CM.Committer(replan=8, step=4)
+    c.decided(0, p, 100, _boxes(48), pl)
+    boxes = _boxes(48, (10., 0., 2., 2., 0.), at=(1, 2, 3))
+    assert CM.path_check(np.zeros(49), np.zeros(49), boxes)[0] == -1
+    calls = []
+    def future():
+        calls.append(True)
+        return boxes
+    assert c.triggers(0, 101, 2.5, 0., planner=pl, fboxes_fn=future) == ["danger h0 f1"]
+    assert len(calls) == 1
+    assert c.triggers(0, 108, 2.5, 0., planner=pl, fboxes_fn=future) == ["interval", "danger h0 f1"]
+
+
 def test_triggers_danger():
     pl = _stub_planner()
     c = CM.Committer(replan=48, tube=1e9, on=True)
