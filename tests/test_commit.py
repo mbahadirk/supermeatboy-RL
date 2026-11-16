@@ -264,6 +264,22 @@ def test_danger_uses_observed_position_and_is_not_masked_by_a_timed_trigger():
     assert c.triggers(0, 108, 2.5, 0., planner=pl, fboxes_fn=future) == ["interval", "danger h0 f1"]
 
 
+def test_danger_always_checks_danger_under_a_surprise():
+    """agent.py --async-wait react plans a surprise in the background, so a surprise must not hide a danger there
+    (Committer.danger_always); by default (the other modes decide a surprise at once) it is not checked."""
+    pl = _stub_planner()
+    c = CM.Committer(replan=48, tube=1.5, on=True)
+    c.decided(0, _stub_plan(first=0), 100, _boxes(48), pl)              # path x = 2k on the ground
+    thr = max(1.5 * c.tube.at(4), CM.MIN_TUBE)
+    x = 8.0 + thr + 0.5                                                 # surprised at +4, still on the ground
+    box = (x + 6.0, 0.0, 2.0, 2.0, 0.0)                                 # the translated path reaches it at +3
+    on = lambda: c.triggers(0, 104, x, 0.0, planner=pl, fboxes_fn=lambda: _boxes(48, box, at=(2, 3, 4)))
+    assert on() == [f"surprise +4 err {thr + 0.5:.1f} > {thr:.1f}"]
+    c.danger_always = True
+    tr = on()
+    assert tr[0].startswith("surprise +4") and len(tr) == 2 and tr[1].startswith("danger h0 f")
+
+
 def test_triggers_danger():
     pl = _stub_planner()
     c = CM.Committer(replan=48, tube=1e9, on=True)

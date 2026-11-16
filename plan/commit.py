@@ -20,7 +20,8 @@ Triggers, checked every frame (Committer.triggers), each recorded with the decis
   frames that the plan did not already accept at its decision (a plan chosen while vetoed fires again only
   when the contact comes earlier), or its soft risk rose by more than DANGER_RISE over its value at the
   decision. The remaining path is translated onto the observed position for this check. A timed trigger
-  cannot mask danger: it may be handled asynchronously, whereas danger needs a decision now;
+  cannot mask danger: it may be handled asynchronously, whereas danger needs a decision now. Neither can any
+  other with Committer.danger_always (agent.py --async-wait react: surprise and support are planned ahead);
 - short: fewer than SHORT_FRAMES frames of the plan remain;
 - missed: the plan touched the princess or picked a key in its prediction and the touch frame (+1 frame for
   the game's report) passed without it.
@@ -199,6 +200,10 @@ class Committer:
         self.on = bool(on)
         self.tube = ErrorTube(tube_horizons(step))
         self.cur: dict[int, Committed] = {}
+        # the danger check also when a surprise / support / tiles trigger fired (agent.py --async-wait react,
+        # where those are planned in the background while the committed plan plays on); off: only alone or
+        # with timed / missed triggers (a decision at once follows the others anyway)
+        self.danger_always = False
 
     def reset(self):
         """A new wave or level: no committed plans."""
@@ -289,7 +294,8 @@ class Committer:
             if k > int(kt["frame"]) + 1 and not (int(keys) >> int(kt["key"])) & 1:
                 out.append(f"missed: key {int(kt['key'])} f{int(kt['frame'])}")
                 break
-        if (not out or all(kind_of(t) in ("interval", "move end", "short", "missed") for t in out)) and \
+        if (not out or self.danger_always or all(kind_of(t) in ("interval", "move end", "short", "missed")
+                                                 for t in out)) and \
                 fboxes_fn is not None and c.xs is not None and planner is not None:
             fb = fboxes_fn()
             if fb is not None:

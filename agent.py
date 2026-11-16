@@ -106,7 +106,8 @@ the share of decisions whose chosen plan the planner's collision guard clipped (
 Per wave, after the summary line, a [cost] line (FrameCost): ms per frame (mean, median, 95%) spent planning,
 observing (surprises, failed moves, deaths), on the explore agents, world-model data, telemetry, file logging, the
 overlay, the level's live state, the rest, and waiting for the game (from the reply to the next frame message),
-plus the game speed (game seconds per wall-clock second); the same numbers go into the wave event.
+the frames by python + wait time (<=17, <=34, <=50, >50 ms: hitches; FrameCost.frame_hist), plus the game speed
+(game seconds per wall-clock second); the same numbers go into the wave event.
 Stop: Ctrl+C or a file runs/<name>/STOP (the characters are handed back to the game, then the process exits).
 A second Ctrl+C, or no clean stop within 10 s, unloads the script and exits at once (shutdown.py).
 """
@@ -120,6 +121,7 @@ import re
 import sys
 import threading
 import time
+from collections import deque
 
 import numpy as np
 
@@ -302,17 +304,62 @@ ASYNC_DV = 0.5
 # old rule (danger and start only) for A/B; all: every decision not planned ahead is waited for. After
 # ASYNC_MISSES plans made ahead in a row started too far off, the next decision is made at once, from the real
 # state.
+# --async-wait react (new, not the default): the game never stops for a decision except danger, start (the
+# wave's / level's first decision, "start: tiles") and no committed plan; every other decision is planned in the
+# background from the committed plan's next L frames while that plan plays on (Runner.route_react):
+# - L (frames, whole model steps) adapts to the planner process: the smallest multiple of the model step >= the
+#   90% latency + 1 of the last REACT_WINDOW jobs (frames from a job's start to the first frame its reply was
+#   seen; a job cancelled late gives its age then, a lower bound; other cancelled jobs give none), clamped to REACT_LEAD_MIN..REACT_LEAD_MAX, REACT_LEAD_INIT before any;
+# - timed (interval, move end, short): a job starts once the next timed decision is due within L frames, for L
+#   frames on (so it is made at max(due, start + L)); timed triggers while a job is in flight are absorbed;
+# - events (REACT_EVENT_KINDS: surprise, support, missed): a routine job in flight (made for a timed decision
+#   from before the event) is cancelled and a reactive one started from the real state now; with a reactive job
+#   in flight the event is absorbed (a surprise fires every frame until the new plan is committed);
+# - at or after its target frame a job is never waited for: not ready, the committed plan plays on (cancelled
+#   and restarted more than REACT_LATE_MAX frames late); ready k frames late, it is used when the k actions
+#   played since its target are its own first k and the real state is within the tube of its path at k
+#   (lead + k frames old), else dropped and a new reactive job started. Too few committed actions left for a
+#   job (not even one model step): the decision is made at once. ASYNC_MISSES never forces a decision at once.
 ASYNC_MISSES = 2
-WAIT_KINDS = {"danger": ("danger", "start"), "events": ("danger", "start", "surprise", "support")}
+WAIT_KINDS = {"danger": ("danger", "start"), "events": ("danger", "start", "surprise", "support"),
+              "react": ("danger", "start")}
+REACT_EVENT_KINDS = ("surprise", "support", "missed")
+REACT_WINDOW = 16       # jobs whose latency sets the react lead
+REACT_LEAD_MIN, REACT_LEAD_INIT, REACT_LEAD_MAX = 8, 12, 24      # frames
+REACT_LATE_MAX = 8      # frames after its target a job not yet ready is still waited for (playing on)
+
+
+def react_lead(latencies, f: int = 4) -> int:
+    """--async-wait react: frames ahead a job is started for (module comment above): the smallest multiple of the
+    model step f >= the 90% latency (frames) + 1, within REACT_LEAD_MIN..REACT_LEAD_MAX; REACT_LEAD_INIT
+    without samples."""
+    lat = list(latencies)
+    if not lat:
+        return REACT_LEAD_INIT
+    f = max(1, int(f))
+    lead = int(math.ceil((float(np.percentile(lat, 90)) + 1.0) / f - 1e-9)) * f
+    return int(min(max(lead, REACT_LEAD_MIN), REACT_LEAD_MAX))
+
+
+def react_span(want: int, left: int, f: int) -> int:
+    """--async-wait react: the frames a job plays from the committed plan before its decision: `want` (the lead)
+    or, with only `left` committed actions left, the most whole model steps of f that fit; 0 when not even one."""
+    f = max(1, int(f))
+    d = min(int(want), max(0, int(left)) // f * f)
+    return d if d >= f else 0
 
 
 class AheadJob:
     """A decision being planned ahead in the planner process (agent.py --async-plan): the call's id, the agent,
-    the frame it started at, the frame it is for (target) and the deadly boxes from the target on."""
+    the frame it started at, the frame it is for (target) and the deadly boxes from the target on. reactive
+    (--async-wait react): started for an event (or to replace a dropped job), not for a timed decision;
+    ready_at: the first frame its reply was seen (react polls once per frame), None before."""
 
-    def __init__(self, mid: int, agent: int, start: int, target: int, fboxes, why=()):
+    def __init__(self, mid: int, agent: int, start: int, target: int, fboxes, why=(), reactive: bool = False):
         self.mid, self.agent, self.start, self.target, self.fboxes = int(mid), int(agent), int(start), int(target), fboxes
         self.why = list(why)                    # the triggers it answers ([]: the next timed decision)
+        self.reactive = bool(reactive)
+        self.ready_at = None
 
 
 class FrameCost:
@@ -370,14 +417,33 @@ class FrameCost:
             out["wait"] = stat(1000.0 * np.asarray(self.wait))
         wall = time.perf_counter() - self.t_first
         game = frames * dt_ms / 1000.0
-        return {"cost_ms": out, "wall_s": round(wall, 2), "game_s": round(game, 2),
+        return {"cost_ms": out, "frame_hist": self.frame_hist(), "wall_s": round(wall, 2), "game_s": round(game, 2),
                 "game_speed": round(game / wall, 3) if wall > 0 else None}
+
+    HIST = (17.0, 34.0, 50.0)                   # ms: about 1, 2, 3 screen refreshes of 16.7 ms
+
+    def frame_hist(self) -> dict:
+        """Frames by their python + wait time (ms; the time from one frame message to the next, which snaps to
+        16.7 ms screen refreshes: a hitch is a frame over 17): {"<=17": n, "<=34": n, "<=50": n, ">50": n}. Only
+        complete frames count: a frame's wait is known at the next frame's message, so the wave's last frame
+        (no next message) is left out."""
+        keys = [f"<={b:g}" for b in self.HIST] + [f">{self.HIST[-1]:g}"]
+        n = min(len(self.rows), len(self.wait))
+        hist = dict.fromkeys(keys, 0)
+        if n:
+            tot = 1000.0 * (np.asarray(self.rows[:n]).sum(1) + np.asarray(self.wait[:n]))
+            idx = np.searchsorted(np.asarray(self.HIST), tot, side="left")     # <= bound: that bucket
+            for k, c in zip(*np.unique(idx, return_counts=True)):
+                hist[keys[int(k)]] = int(c)
+        return hist
 
     def text(self, s: dict) -> str:
         c = s["cost_ms"]
         f = lambda v: f"{v[0]:.1f} ({v[1]:.1f}/{v[2]:.0f})"
+        h = s.get("frame_hist")
         return ("[cost] ms/frame mean (median/95%): " + " ".join(f"{self.SHORT.get(k, k)} {f(c[k])}" for k in self.CATS)
                 + f" | python {f(c['python'])}" + (f" | wait {f(c['wait'])}" if "wait" in c else "")
+                + (" | frames (python + wait ms) " + " ".join(f"{k} {v}" for k, v in h.items()) if h else "")
                 + f" | {s['game_s']:.1f} game s in {s['wall_s']:.1f} s: speed {s['game_speed']}x")
 
 
@@ -451,6 +517,27 @@ def commit_summary(st: dict, frames: int) -> dict:
             "plan_ms_per_frame": round(sum(st["ms"]) / frames, 2) if frames else None,
             "check_ms_per_frame": round(1000.0 * st["check_s"] / frames, 3) if frames else None,
             "clipped_share": round(st.get("clipped", 0) / d, 4) if d else None}
+
+
+def react_summary(st: dict) -> dict:
+    """A wave's --async-wait react leads and job latencies (Runner.st react_leads / react_latency, frames) for
+    the wave event: {"lead": {median, max}, "latency_frames": {p50, p90}} (None without any)."""
+    leads, lat = st.get("react_leads") or [], st.get("react_latency") or []
+    return {"lead": {"median": float(np.median(leads)), "max": int(max(leads))} if leads else None,
+            "latency_frames": {"p50": float(np.percentile(lat, 50)), "p90": float(np.percentile(lat, 90))}
+            if lat else None}
+
+
+def react_text(st: dict, r: dict) -> str:
+    """'[react] waited for 2 decisions (410 ms) | ahead used 40 (5 late), dropped 2, restarted 6, late dropped 1,
+    absorbed 30 | lead 12/16 f (median/max) | latency 9/11 f (50%/90%)'."""
+    g = lambda k: st.get(k, 0)
+    return (f"[react] waited for {g('sync_decisions')} decisions ({g('sync_ms'):.0f} ms) | ahead used "
+            f"{g('ahead_used')} ({g('ahead_late_used')} late), dropped {g('ahead_dropped')}, restarted "
+            f"{g('ahead_restarted')}, late dropped {g('ahead_late_dropped')}, absorbed {g('ahead_absorbed')}"
+            + (f" | lead {r['lead']['median']:g}/{r['lead']['max']} f (median/max)" if r["lead"] else "")
+            + (f" | latency {r['latency_frames']['p50']:g}/{r['latency_frames']['p90']:g} f (50%/90%)"
+               if r["latency_frames"] else ""))
 
 
 def commit_text(c: dict, triggers: dict | None = None) -> str:
@@ -555,6 +642,11 @@ class Runner:
         wait_mode = getattr(args, "async_wait", "events")
         self.wait_kinds = WAIT_KINDS.get(wait_mode, ())     # trigger kinds decided at once (--async-wait)
         self.nowait = self.async_on and wait_mode in WAIT_KINDS
+        self.react = self.async_on and wait_mode == "react"     # --async-wait react (route_react)
+        self.react_lat = deque(maxlen=REACT_WINDOW)     # react: the last jobs' latencies (frames), for the lead
+        # react: event triggers' danger is checked too (a surprise is no longer decided at once, so it must not
+        # hide a danger: Committer.danger_always)
+        self.commit.danger_always = self.react
         self.ahead_miss = 0                     # plans made ahead in a row that started too far off
         self.ajob = None                        # the plan being made ahead (AheadJob) or None
         self.proc = None                        # plan.worker.PlannerProcess: the planner with its memories
@@ -563,7 +655,9 @@ class Runner:
             from plan.worker import PlannerProcess
             self.proc = PlannerProcess(args.threads)
             print(f"[async] planner process started (pid {self.proc.proc.pid}); decisions planned "
-                  f"{self.async_lead} frames ahead; the game waits "
+                  + (f"{REACT_LEAD_MIN}-{REACT_LEAD_MAX} frames ahead (react: the planner's own latency, "
+                     f"{REACT_LEAD_INIT} at first)" if self.react else f"{self.async_lead} frames ahead")
+                  + "; the game waits "
                   + (f"only for {', '.join(self.wait_kinds)} decisions" if self.nowait
                      else "for every decision not planned ahead"), flush=True)
         self.deaths_path = args.death_memory
@@ -692,7 +786,11 @@ class Runner:
                    "surprise_pos": 0, "surprise_death": 0, "decisions": 0, "ms": [], "cut1": 0, "cut2": 0,
                    "failed": 0, "errors": 0, "ex_finished": 0, "ex_died": 0, "triggers": {}, "gaps": [],
                    "agent_frames": 0, "check_s": 0.0, "switched": 0, "kept": 0, "clipped": 0, "pnr": 0,
-                   "pnr_none": 0, "completed": 0, "all_agent_frames": 0}
+                   "pnr_none": 0, "completed": 0, "all_agent_frames": 0,
+                   # decisions the game waited for (plan_now / an in-process plan) and their ms; --async-wait
+                   # react's job counts; the react leads used and job latencies (frames) of this wave
+                   "sync_decisions": 0, "sync_ms": 0.0, "ahead_restarted": 0, "ahead_late_used": 0,
+                   "ahead_late_dropped": 0, "react_leads": [], "react_latency": []}
         self.fin = {"planned": [], "explore": [], "demo": [], "search": []}     # this wave's finish times (s)
         self.new_best = False
         if self.demo is not None:                 # this wave's perturbed copies (same for repeated calls)
@@ -1049,6 +1147,7 @@ class Runner:
             for i, trig in need.items():
                 s = states[i]
                 row = state_row(s[0], s[1], s[2], s[3], s[4], s[5], s[7] if len(s) > 7 else 0, held_before[i])
+                t_sync = time.perf_counter()
                 try:
                     danger = any(kind_of(t) == "danger" for t in trig)
                     if self.proc is not None:
@@ -1059,6 +1158,7 @@ class Runner:
                     else:
                         plan = pl.plan(row, frame, worlds, fboxes, dt, agent=i, danger=danger, recorded=self.fut_rec)
                 except Exception as e:                  # never leave the agent without an answer
+                    self.count_sync(t_sync)
                     self.st["errors"] += 1
                     if self.st["errors"] <= 3:
                         import traceback
@@ -1069,6 +1169,7 @@ class Runner:
                         self.stopping = True
                         return {"a": [NOOP] * n, "leader": 0, "stop": True}
                     continue
+                self.count_sync(t_sync)
                 self.cur_plan[i] = plan
                 self.ahead_miss = 0
                 self.commit.decided(i, plan, frame, fboxes, pl)
@@ -1248,7 +1349,10 @@ class Runner:
         (nothing now). With --async-plan: a trigger of a waiting kind (--async-wait: self.wait_kinds), no plan, or
         too many misses waits: a plan being made ahead is dropped (ahead_take) and the decision is made now. Any
         other trigger before the ahead plan's frame is absorbed by it (the committed plan plays on), else its
-        decision starts in the background for async_lead frames on. Without --async-plan: tr as it is."""
+        decision starts in the background for async_lead frames on. --async-wait react: route_react. Without
+        --async-plan: tr as it is."""
+        if getattr(self, "react", False):
+            return self.route_react(i, frame, s, tr, held, dt)
         j = self.ajob
         wait = (not self.nowait or self.cur_plan.get(i) is None or self.ahead_miss >= ASYNC_MISSES
                 or any(kind_of(t) in self.wait_kinds for t in tr))
@@ -1263,32 +1367,54 @@ class Runner:
             tr = []                                     # decided in the background, for async_lead frames on
         return tr
 
-    def ahead_start(self, i: int, frame: int, s, held: int, dt: float, target: int | None = None, why=()) -> bool:
+    def ahead_start(self, i: int, frame: int, s, held: int, dt: float, target: int | None = None, why=(),
+                    reactive: bool = False) -> bool:
         """Start planning a decision of agent i in the planner process: its next timed one (Committer.due), or
         the one for frame `target` that answers the triggers `why` (a kind not waited for). Only a whole number of
         model steps away, at most --async-lead frames, within the committed plan's actions: from the state those
         actions are imagined to reach then (Planner.predict_start), with this frame's view of the future shifted.
-        True when it started."""
+        --async-wait react: the timed one once it is due within the lead L (react_lead), for L frames on (never
+        before its due frame); `target` asks for target - frame frames on; either shrinks to the whole model steps
+        the committed plan still has (react_span). reactive: AheadJob.reactive. True when it started."""
         p, pl, lv = self.cur_plan.get(i), self.planner, self.level
-        due = self.commit.due(i) if target is None else target
-        if p is None or due is None or pl is None or lv is None or self.proc is None:
-            return False
-        d = due - frame
-        k0 = frame - p.frame
-        if d < pl.f or d > self.async_lead or d % pl.f or k0 < 0 or k0 + d > len(p.actions):
-            return False
+        if getattr(self, "react", False):
+            if p is None or pl is None or lv is None or self.proc is None:
+                return False
+            k0 = frame - p.frame
+            due = None
+            if target is None:                          # the next timed decision, once due within the lead
+                due, want = self.commit.due(i), self.lead_now()
+                if due is None or due - frame > want:
+                    return False
+            else:
+                want = target - frame
+            d = react_span(want, len(p.actions) - k0, pl.f) if k0 >= 0 else 0
+            if d == 0 or (due is not None and frame + d < due):
+                return False
+            due = frame + d
+            self.st.setdefault("react_leads", []).append(d)
+        else:
+            due = self.commit.due(i) if target is None else target
+            if p is None or due is None or pl is None or lv is None or self.proc is None:
+                return False
+            d = due - frame
+            k0 = frame - p.frame
+            if d < pl.f or d > self.async_lead or d % pl.f or k0 < 0 or k0 + d > len(p.actions):
+                return False
         worlds, fboxes, rec = future_inputs(self.fw, frame, pl.future_frames + d, dt, lv.name, self.deaths)
         row = state_row(s[0], s[1], s[2], s[3], s[4], s[5], s[7] if len(s) > 7 else 0, held)
         prefix = np.asarray(p.actions[k0:k0 + d], np.int64)
         mid = self.proc.send("plan_ahead", row, prefix, worlds, fboxes, d, due, dt, i, rec, keep=True)
-        self.ajob = AheadJob(mid, i, frame, due, fboxes[d:], why)
+        self.ajob = AheadJob(mid, i, frame, due, fboxes[d:], why, reactive)
         return True
 
     def ahead_take(self, i: int, frame: int, s, tr: list) -> list:
         """At the job's frame: its plan becomes the committed one when it was made, no trigger other than a timed
         one (interval, move end, short) fired, and the real state is within MIN_TUBE units and ASYNC_DV units /
-        frame of the predicted start (its path is then moved onto the real start); returns [] then. Otherwise (or a trigger before its frame) the job is dropped and
-        the triggers that need a decision now are returned."""
+        frame of the predicted start (its path is then moved onto the real start); returns [] then. Otherwise (or a
+        trigger before its frame) the job is dropped and the triggers that need a decision now are returned; the
+        result is waited for (proc.result). --async-wait danger / events / all only: react never waits for a job
+        and takes it with react_take (route_react)."""
         j = self.ajob
         if frame != j.target:                       # named by the trigger that waits (danger, surprise, support)
             why = next((t_ for t_ in tr if kind_of(t_) in self.wait_kinds), tr[0] if tr else "frame")
@@ -1338,6 +1464,157 @@ class Runner:
         if trial_ev:
             self.event(trial_ev["kind"], frame, **{a: b for a, b in trial_ev.items() if a not in ("kind", "frame")})
         return []
+
+    # ---- --async-wait react: the game waits only for danger and start (the module comment at WAIT_KINDS) ------
+    def lead_now(self) -> int:
+        """The react lead L (frames) for a job started now: react_lead of the last REACT_WINDOW latencies."""
+        pl = getattr(self, "planner", None)
+        return react_lead(self.react_lat, pl.f if pl is not None else 4)
+
+    def count_sync(self, t0: float):
+        """A decision the game waited for (plan_now, or the in-process planner), started at perf_counter t0."""
+        st = self.st
+        st["sync_decisions"] = st.get("sync_decisions", 0) + 1
+        st["sync_ms"] = st.get("sync_ms", 0.0) + 1000.0 * (time.perf_counter() - t0)
+
+    def ahead_poll(self, frame: int):
+        """Once per frame while a job is in flight: its reply seen for the first time (proc.ready, a non-blocking
+        read) gives its latency, frame - its start frame (react_lat, this wave's react_latency)."""
+        j = self.ajob
+        if j is None or j.ready_at is not None or not self.proc.ready(j.mid):
+            return
+        j.ready_at = int(frame)
+        self.react_lat.append(int(frame) - j.start)
+        self.st.setdefault("react_latency", []).append(int(frame) - j.start)
+
+    def ahead_cancel(self, frame: int, reason: str, count: str) -> AheadJob:
+        """Cancel the job in flight (proc.cancel: it stops at its next model step; the one short wait left in
+        react, charged to ahead_wait_ms), count it under `count`, log it; returns it."""
+        j = self.ajob
+        t = time.perf_counter()
+        self.proc.cancel(j.mid)
+        self.ajob = None
+        st = self.st
+        st["ahead_wait_ms"] = st.get("ahead_wait_ms", 0.0) + 1000.0 * (time.perf_counter() - t)
+        st[count] = st.get(count, 0) + 1
+        self.event("ahead dropped", frame, agent=j.agent, reason=reason, started=j.start, target=j.target)
+        return j
+
+    def route_react(self, i: int, frame: int, s, tr: list, held: int, dt: float) -> list:
+        """route_triggers with --async-wait react: [] (the committed plan plays on) unless a waiting kind fired
+        (danger, start), the agent has no plan, or no job fits in the committed plan's actions left; then the
+        triggers to decide on now (a job in flight is dropped). Otherwise, with a job in flight:
+        - at or after its target with its reply here: react_take (used, its start judged on the real state, even
+          with an event this frame; or dropped and a reactive job started);
+        - an event (surprise, support, missed) while it is routine (and not taken above): it is cancelled and a
+          reactive one started from the real state now (ahead_restarted); while it is reactive: absorbed;
+        - any other trigger is absorbed (ahead_absorbed); not ready at its target, the committed plan plays on,
+          and more than REACT_LATE_MAX frames late it is cancelled and restarted (ahead_late_dropped).
+        With no job in flight, a trigger starts one (reactive for an event) for L frames on (lead_now)."""
+        j = self.ajob if self.ajob is not None and self.ajob.agent == i else None
+        if j is not None:
+            self.ahead_poll(frame)
+        waiting = [t_ for t_ in tr if kind_of(t_) in self.wait_kinds]
+        if waiting or self.cur_plan.get(i) is None:
+            if j is not None:
+                self.pl_sync(drop=f"{waiting[0] if waiting else 'no plan'} at {frame} (its frame {j.target})")
+            return tr or ["start"]
+        events = [t_ for t_ in tr if kind_of(t_) in REACT_EVENT_KINDS]
+        reactive, why, old = bool(events), None, ()     # why: the job just dropped here (a new one starts now)
+        if j is not None:
+            if frame >= j.target and j.ready_at is not None:    # its reply is here: judged on the real state
+                why = self.react_take(i, frame, s, tr)
+                if why is None:
+                    return []
+                reactive = True
+            elif events and not j.reactive:
+                why = (f"{events[0]} at {frame}, " + (f"before its frame {j.target}" if frame < j.target else
+                                                      f"its frame {j.target}, not ready")
+                       + ": restarted from the real state")
+                self.ahead_cancel(frame, why, "ahead_restarted")
+            elif frame - j.target > REACT_LATE_MAX:
+                why = f"late: not ready {frame - j.target} frames after its frame {j.target}"
+                if j.ready_at is None:                  # its age: a lower bound of its latency (else L never grows)
+                    self.react_lat.append(int(frame) - j.start)
+                    self.st.setdefault("react_latency", []).append(int(frame) - j.start)
+                self.ahead_cancel(frame, why, "ahead_late_dropped")
+                reactive = reactive or j.reactive
+            else:                                       # the job answers it: the committed plan plays on
+                if tr:
+                    self.st["ahead_absorbed"] = self.st.get("ahead_absorbed", 0) + 1
+                return []
+            old = j.why
+        elif not tr:
+            return []
+        if self.ahead_start(i, frame, s, held, dt, frame + self.lead_now(), list(tr) or list(old), reactive=reactive):
+            return []
+        return tr or [f"ahead dropped: {why}"]          # no job fits: decided now
+
+    def react_take(self, i: int, frame: int, s, tr: list) -> str | None:
+        """--async-wait react: the job's reply is here (ready) at frame = its target + k (k >= 0). Its plan is
+        committed when it was made, for k > 0 the actions played on frames target .. target + k - 1 are its own
+        first k, and the real state is within the tube (lead + k frames) and ASYNC_DV units / frame of its
+        predicted state at k (k = 0: the predicted start; else its path at k, the speed from the path around k);
+        its path and predictions are moved onto the real state, its frame stays the target (the agent plays its
+        action k now). Returns None then, else the reason it was dropped (discarded, ahead_dropped)."""
+        j = self.ajob
+        ok, res = self.proc.result(j.mid)               # ready: no wait
+        self.ajob = None
+        k = frame - j.target
+        lead = j.target - j.start
+        tube = max(self.commit.tube_factor * self.commit.tube.at(lead + k), MIN_TUBE)
+        uf = self.dt_ms / 1000.0                        # units / s -> units / frame
+        off = dv = None
+        if not ok:
+            reason = f"planning error: {str(res).splitlines()[0]}"
+        else:
+            plan, px, py, spread, pvx, pvy = res
+            reason = None
+            if k == 0:
+                qx, qy, qvx, qvy = px, py, pvx * uf, pvy * uf
+            else:
+                p = self.cur_plan.get(i)
+                played = [int(p.actions[f - p.frame]) if p is not None and 0 <= f - p.frame < len(p.actions) else 0
+                          for f in range(j.target, frame)]
+                path = plan.path
+                if played != [int(a) for a in plan.actions[:k]]:
+                    reason = f"{k} frames late: the actions played since its frame are not its first {k}"
+                elif k + 1 >= len(path):
+                    reason = f"{k} frames late: past its path"
+                else:
+                    qx, qy = float(path[k][0]), float(path[k][1])
+                    qvx = (float(path[k + 1][0]) - float(path[k - 1][0])) / 2.0
+                    qvy = (float(path[k + 1][1]) - float(path[k - 1][1])) / 2.0
+            if reason is None:
+                off = math.hypot(float(s[0]) - qx, float(s[1]) - qy)
+                dv = math.hypot(float(s[2]) * uf - qvx, float(s[3]) * uf - qvy)
+                at = "start" if k == 0 else f"state {k} frames late"
+                reason = (f"{at} off by {off:.1f} > {tube:.1f} units" if off > tube else
+                          f"{at} speed off by {dv:.2f} > {ASYNC_DV:g} units/frame" if dv > ASYNC_DV else None)
+        if reason is not None:
+            if ok:
+                self.proc.send("discard", j.mid)
+            self.st["ahead_dropped"] = self.st.get("ahead_dropped", 0) + 1
+            self.ahead_miss += 1                        # counted and logged; never forces a decision now (react)
+            self.event("ahead dropped", frame, agent=i, reason=reason, started=j.start, target=j.target, late=k)
+            return reason
+        trial_ev = self.proc.call("commit", j.mid)
+        if trial_ev:
+            plan.route_trial = trial_ev
+        dx, dy = float(s[0]) - qx, float(s[1]) - qy   # its predictions from the real state (as ahead_take)
+        plan.path = [[x + dx, y + dy] for x, y in plan.path]
+        plan.predictions = {h: [v[0] + dx, v[1] + dy] for h, v in plan.predictions.items()}
+        self.st["ahead_used"] = self.st.get("ahead_used", 0) + 1
+        if k:
+            self.st["ahead_late_used"] = self.st.get("ahead_late_used", 0) + 1
+        self.ahead_miss = 0
+        self.cur_plan[i] = plan                         # plan.frame = j.target: its action k plays now
+        self.commit.decided(i, plan, j.target, j.fboxes, self.planner)     # fboxes: index 0 = the target
+        self.on_plan(plan, s, j.why or tr or ["due"], ahead={"lead": lead, "late": k, "start_off": round(off, 2),
+                                                             "speed_off": round(dv, 3), "spread": round(spread, 2)})
+        if trial_ev:
+            self.event(trial_ev["kind"], frame, **{a: b for a, b in trial_ev.items() if a not in ("kind", "frame")})
+        return None
 
     def observe_alive(self, level: str, frame: int, alive_xy: list):
         """Real agents alive at alive_xy [(x, y), ...] this wave frame: DeathMemory.observe_alive. When that
@@ -1705,8 +1982,12 @@ class Runner:
             print(self.cost.text(cost), flush=True)
         fut = self.fw.new_wave() if self.evaluation is None else {
             "frames": len(self.fw.cur), "recording": 0, "trusted": None, "mismatch": None, "extended": 0}
+        react = react_summary(st)
+        if getattr(self, "react", False):
+            print(react_text(st, react), flush=True)
         self.event("wave", frame, **(cost or {}), why=m.get("why"), frames=frame, future=fut,
-                   **{k: v for k, v in st.items() if k not in ("ms", "gaps", "check_s")},
+                   **{k: v for k, v in st.items() if k not in ("ms", "gaps", "check_s", "react_leads", "react_latency")},
+                   **react,
                    ms_median=float(np.median(ms)) if ms is not None else None,
                    ms_95=float(np.percentile(ms, 95)) if ms is not None else None, err_followed=err_f, **com,
                    tube=self.commit.tube.summary() if self.commit.on else None,
@@ -2195,15 +2476,23 @@ def build_parser() -> argparse.ArgumentParser:
                     help="world-model members that must touch a hazard within the first 16 frames for a plan to be "
                          "vetoed (default 1: any of the 5; 3: a majority). With more than 1, a touch by fewer members "
                          "is soft risk (their share). Bolder near hazards: tight passes are no longer forbidden")
-    ap.add_argument("--async-wait", choices=("events", "danger", "all"), default="events",
+    ap.add_argument("--async-wait", choices=("events", "danger", "all", "react"), default="events",
                     help="--async-plan: events (default) = the game waits for a danger, surprise or support decision "
                          "(and the first one), made at once from the real state (a plan being made ahead is dropped); "
                          "an interval, move end or short decision is made in the background for --async-lead frames "
                          "later while the committed plan plays on. danger = the old rule: only danger waits (surprise "
                          "and support are planned ahead or absorbed). all = every decision not planned ahead is "
-                         "waited for")
+                         "waited for. react (new, not the default) = the game waits only for danger and start (the "
+                         "first decision, tiles changed, no plan) or when the committed plan has no whole model step "
+                         "left: every other decision is planned in the background from the committed plan's next L "
+                         f"frames, L adapting to the planner's 90%% latency ({REACT_LEAD_MIN}-{REACT_LEAD_MAX} frames, "
+                         f"{REACT_LEAD_INIT} at first; --async-lead is not used); a surprise, support or missed "
+                         "trigger restarts a plan being made for a timed decision from the real state; a plan not "
+                         f"ready at its frame is never waited for (used up to {REACT_LATE_MAX} frames late when the "
+                         "actions played meanwhile are its own and the real state is on its path)")
     ap.add_argument("--async-lead", type=int, default=ASYNC_LEAD,
-                    help=f"--async-plan: frames ahead a decision starts (whole model steps; default {ASYNC_LEAD})")
+                    help=f"--async-plan: frames ahead a decision starts (whole model steps; default {ASYNC_LEAD}; "
+                         "not with --async-wait react, whose lead adapts)")
     ap.add_argument("--route-trial-gain", type=float, default=TRIAL_GAIN,
                     help="where the run's best route would be played, an unvetoed plan whose estimate is better by "
                          "more than this many frames is played once with its exact actions (one agent per wave, "
