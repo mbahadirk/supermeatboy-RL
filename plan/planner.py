@@ -701,25 +701,48 @@ def future_inputs(future, frame: int, H: int, dt_ms: float, level_name: str | No
     frame + k) and the deadly boxes per frame (H + 1 plan.safety.FrameBoxes, index 0 unused): the game's kill
     shapes with the future's uncertainty radius, flying shots, and remembered deaths (a
     plan.safety.DeathMemory) at their wave frames. Also how many steps came from the recording. deadly_only: no
-    model inputs (worlds None), the same deadly boxes (the per-frame danger check)."""
+    model inputs (worlds None), the same deadly boxes (the per-frame danger check). A recorded frame's FrameBoxes
+    is made once and shared (FutureWorld.derived, while the death memory's version is unchanged): read-only."""
     worlds, check, recorded = future.worlds(frame, H, dt_ms, deadly_only=deadly_only)
-    frames = [None]
-    for k, (b, r, ids, shape) in enumerate(check, start=1):
-        b = np.asarray(b, np.float64).reshape(-1, 5)
-        grow = np.asarray(r, np.float64).reshape(-1)
-        shape = np.asarray(shape, np.int8).reshape(-1)
-        ids = list(ids)
-        kind = [S.KIND_SHOT if i.startswith("shot") else S.KIND_HAZARD for i in ids]
-        if deaths is not None and level_name is not None:
-            mem = deaths.boxes(level_name, frame + k)
-            if len(mem):
-                b = np.concatenate([b, mem])
-                kind += [S.KIND_MEMORY] * len(mem)
-                ids += [f"death@{x:.0f},{y:.0f}" for x, y in mem[:, :2]]
-                grow = np.concatenate([grow, np.zeros(len(mem))])
-                shape = np.concatenate([shape, np.full(len(mem), S.SHAPE_BOX, np.int8)])
-        frames.append(S.FrameBoxes(b, np.asarray(kind, np.int8), ids, shape, grow))
+    memory = deaths if deaths is not None and level_name is not None else None
+    derived = getattr(future, "derived", None)
+    if memory is not None and not hasattr(memory, "version"):
+        derived = None                               # no way to tell its boxes changed: made every time
+    key = (memory, getattr(memory, "version", None), level_name)
+    kinds = {}                                       # id(ids list) -> its kinds, this call (worlds() gives its
+    frames = [None]                                  # extrapolated steps one list)
+    for k, c in enumerate(check, start=1):
+        f = frame + k
+        frames.append(_frame_boxes(c, memory, level_name, f, kinds) if derived is None else
+                      derived(f, c, key, _frame_boxes, c, memory, level_name, f, kinds))
     return worlds, frames, recorded
+
+
+def _frame_boxes(check: tuple, deaths, level_name, f: int, kinds: dict) -> S.FrameBoxes:
+    """One frame's FrameBoxes (future_inputs): mpc.future's deadly check (boxes, radius, ids, shapes) and the
+    remembered deaths active at wave frame f (deaths None: none). kinds: the kinds of id lists seen in this call
+    (by id: the lists are alive for the call). Its arrays are read-only (it may be shared)."""
+    b, r, ids, shape = check
+    b = np.asarray(b, np.float64).reshape(-1, 5)
+    grow = np.asarray(r, np.float64).reshape(-1)
+    shape = np.asarray(shape, np.int8).reshape(-1)
+    kind = kinds.get(id(ids))
+    if kind is None:
+        kind = kinds[id(ids)] = np.array([S.KIND_SHOT if i.startswith("shot") else S.KIND_HAZARD for i in ids],
+                                         np.int8)
+        kind.flags.writeable = False
+    ids = list(ids)
+    if deaths is not None:
+        mem = deaths.boxes(level_name, f)
+        if len(mem):
+            b = np.concatenate([b, mem])
+            kind = np.concatenate([kind, np.full(len(mem), S.KIND_MEMORY, np.int8)])
+            ids += [f"death@{x:.0f},{y:.0f}" for x, y in mem[:, :2]]
+            grow = np.concatenate([grow, np.zeros(len(mem))])
+            shape = np.concatenate([shape, np.full(len(mem), S.SHAPE_BOX, np.int8)])
+    for a in (b, kind, shape, grow):
+        a.flags.writeable = False
+    return S.FrameBoxes(b, kind, ids, shape, grow)
 
 
 def _cols(frames, n: int, f: int) -> list:

@@ -22,6 +22,13 @@ lava balls (4-4, 4-6) fall with a constant -0.15 units / frame^2, bullets (1-15,
 Two views of each frame's hazards: the model inputs (wm.features.hazard_boxes: each piece's own box, as the
 world model was trained) and the boxes that kill (game.level.hazard_boxes: the game's kill shapes, which move
 inside a piece's animation while the piece stays put). The recording is trusted while both match.
+
+Each recorded wave frame is worked out once per wave (FRAME_CACHE, _RecFrame): a sliding window asks for the same
+wave frame about 48 times (the per-frame danger check) and parsing its rows was most of the planner's per-frame
+time (runs/online_check04, 3-2: 12.8 ms per danger check, 37 ms per decision's full window). What depends on the
+asking frame is never kept: the step-0 and step-1 World (the live platforms), extrapolated frames (their guess
+and radius grow from the current frame), flying shots predicted from the current flight, and the kill shapes'
+types (looked up in the asking frame's kill_shape: a kept check is reused only while that is unchanged).
 """
 from __future__ import annotations
 
@@ -43,6 +50,8 @@ LAUNCH_KEY = 2.0         # units: shots born within this of one point come from 
 LAUNCH_P_MIN = 10        # frames: two births closer than this are not a launcher's period
 LAUNCH_P_TOL = 1         # frames: a launcher silent for longer than its period + this has stopped firing
 PERIOD_TRIES = 16        # periods verified per search at most (the shortest candidates first)
+FRAME_CACHE = True       # keep each recorded wave frame's boxes, World and check for the wave (_RecFrame); False:
+                         # recompute them on every call (tests/test_future_cache.py compares the two)
 
 # Flying shots, per frame k ahead (frames: the time step is locked). Measured on 149 recorded flights in 4-4, 4-6,
 # 3-1, 1-15, 1-16, 2-3 (positions recorded to 0.01 units; runs/experiments/shot_future_v1):
@@ -69,6 +78,7 @@ class FutureWorld:
         self.ref: dict[int, tuple] = {}       # wave frame -> (hz raw, pf, sh) of the reference recording
         self.cur: dict[int, tuple] = {}       # a wave cut by the level switch belongs to the old level: dropped
         self.keep, self.fans = None, []
+        self._keep_seen = None                # tuple(keep) the kept recorded frames were parsed with
         self.terrain = None                   # the live tiles (plan.geometry.Terrain) shots stop in; None unknown
         self.launchers: dict[tuple, Launcher] = {}   # spawn point -> what fires there (Launcher)
         self.new_wave()
@@ -104,14 +114,24 @@ class FutureWorld:
             L.last = None                     # wave frames start again: the phase is seen anew in each wave
         self.last = None                      # (frame, hz, pf, sh, dt_ms) now
         self.prev = None                      # the frame before
+        self._rec: dict[int, _RecFrame] = {}  # wave frame -> what the recording gives every window asking for it
+        self._pruned = None                   # the asking frame _rec was last cut to (worlds)
+        self._now: dict = {}                  # this frame's values shared by its calls (reset by observe)
+        self._kill_prev = None                # the previous frame's (kill boxes, kept) when keep is unchanged
         return info
 
     def observe(self, frame: int, hz: list, pf, sh, keep, fans, dt_ms: float, terrain=None):
         """This frame's hazards rows, platforms, flying shots, and the live tiles (a plan.geometry.Terrain, held by
         reference: its owner keeps it current; None: unknown, shots are then not stopped by walls)."""
         self.terrain = terrain
+        same_keep = True
         if keep is not None:
             self.keep = keep
+            seen = tuple(keep)
+            if seen != self._keep_seen:       # the pieces kept changed: the kept frames were parsed without it
+                same_keep = False
+                self._keep_seen = seen
+                self._rec = {}
         if fans is not None:
             self.fans = fans
         rec = (hz or [], pf or [], sh or [])
@@ -122,9 +142,17 @@ class FutureWorld:
             if off > MATCH_TOL:
                 self.trusted = False
                 self.mismatch = (frame, off)
+                self._rec = {}                # the recording is not used again in this wave
         if ref is not None and self.shots_trusted and _shot_offset(ref[2], rec[2]) > MATCH_TOL:
             self.shots_trusted = False
+            for e in self._rec.values():      # their kept checks hold the recorded shots
+                e.check = e.derived = None
         self._shots_seen(frame, rec[2])
+        if same_keep and self.last is not None:   # the previous frame's kill shapes, parsed as worlds() would now
+            self._kill_prev = self.kill_now[1:3]
+        else:
+            self._kill_prev = None
+        self._now = {}
         kb, kept, ksh = _kill(rec[0], self.keep)
         ids = box_ids(kept)
         runs = self.runs
@@ -133,8 +161,10 @@ class FutureWorld:
             if run is None or not run.add(frame, kb[j]):
                 runs[i] = _BoxRun(frame, kb[j])
         self.kill_now = (frame, kb, kept, ids)
-        self.kill_shape = dict(zip(ids, ksh.tolist()))   # each kill box's shape type (game.level SHAPE_*)
-        self.periodic = None                  # this frame's periodic boxes (worlds), once
+        shapes = dict(zip(ids, ksh.tolist()))  # each kill box's shape type (game.level SHAPE_*)
+        if shapes != getattr(self, "kill_shape", None):
+            self.kill_shape = shapes          # kept when equal: its identity tells the kept checks it is unchanged
+        self.periodic = None                  # this frame's periodic boxes (periods), once
         self.prev, self.last = self.last, (frame, rec[0], rec[1], rec[2], dt_ms)
 
     def _shots_seen(self, frame: int, sh: list):
@@ -253,43 +283,127 @@ class FutureWorld:
                 break
         return np.array(out[::-1], np.float64).reshape(-1, 2)
 
+    def periods(self) -> list:
+        """This frame's kill boxes repeating with their own period [(index in kill_now, _BoxRun, P)], searched once
+        per frame. The search keeps state (_BoxRun.period: the window last searched, the period kept while it
+        holds), so it must run on the frames it always ran on: every frame worlds() is asked for, and the frames
+        agent.py's telemetry skips (its frame message used to ask worlds() on every frame)."""
+        if self.periodic is None:
+            self.periodic = []
+            for j, i in enumerate(self.kill_now[3]):
+                run = self.runs[i]
+                P = run.period() if run.moved else None
+                if P is not None:
+                    self.periodic.append((j, run, P))
+        return self.periodic
+
+    def _frame_value(self, key: str, make):
+        """A value of this frame shared by its calls (FRAME_CACHE; observe resets them)."""
+        if not FRAME_CACHE:
+            return make()
+        v = self._now.get(key)
+        if v is None:
+            v = self._now[key] = make()
+        return v
+
+    def _recorded(self, f: int, rec: tuple) -> "_RecFrame":
+        """Recorded wave frame f's entry, kept for the wave (FRAME_CACHE). Only the frames of windows still to come
+        are kept (worlds() drops those at or before the asking frame): at most the longest window asked (plan.planner
+        future_frames, 101, plus agent.py's async lead), not a whole wave (about 1,200 frames)."""
+        e = self._rec.get(f) if FRAME_CACHE else None
+        if e is None:
+            kr, kept_r, _ = _kill(rec[0], self.keep)
+            e = _RecFrame((_ro(kr), _ro(np.full(len(kr), REC_RADIUS)), box_ids(kept_r)))
+            if FRAME_CACHE:
+                self._rec[f] = e
+        return e
+
+    def _rec_boxes(self, e: "_RecFrame", rec: tuple) -> np.ndarray:
+        """A recorded frame's model boxes (wm.features.hazard_boxes), once."""
+        if e.hb is None:
+            e.hb = _ro(hazard_boxes(rec[0], self.keep))
+        return e.hb
+
+    def _rec_shape(self, e: "_RecFrame") -> np.ndarray:
+        """A recorded frame's kill shapes' types as the asking frame's kill_shape has them (0 for an id it does not
+        have), kept while kill_shape is the same object (observe keeps it while its content is unchanged)."""
+        if e.shape is None or e.shape_ks is not self.kill_shape:
+            e.shape = _ro(np.array([self.kill_shape.get(i, 0) for i in e.kill[2]], np.int8))
+            e.shape_ks = self.kill_shape
+            e.check = e.derived = None
+        return e.shape
+
+    def _rec_check(self, e: "_RecFrame", shots: list) -> tuple:
+        """A recorded frame's deadly check with these flying shots, kept with the frame: its recorded ones while they
+        are trusted, else none (observe drops the kept checks when they stop being trusted; new_wave every entry)."""
+        shape = self._rec_shape(e)
+        if e.check is None:
+            b, r, ids = e.kill
+            live = [(s[0], float(s[3]), (float(s[1]), float(s[2])), REC_RADIUS) for s in shots]
+            if live:
+                sb = np.array([(c[0], c[1], rad, rad, 0.0) for _, rad, c, _ in live])
+                b, r = _ro(np.concatenate([b, sb])), _ro(np.concatenate([r, [m for *_, m in live]]))
+                ids = list(ids) + [f"shot{sid}" for sid, *_ in live]
+                shape = _ro(np.concatenate([shape, np.full(len(live), SHAPE_CIRCLE, np.int8)]))
+            e.check, e.derived = (b, r, list(ids), shape), None
+        return e.check
+
+    def derived(self, f: int, check: tuple, key, make, *args):
+        """A consumer's value made from one of worlds()'s deadly checks (plan.planner.future_inputs: its
+        FrameBoxes): make(*args), kept with wave frame f while `check` is that frame's kept check and `key`
+        (everything else the value depends on, compared with ==) is unchanged; made anew for any other check
+        (extrapolated frames, predicted shots, FRAME_CACHE off)."""
+        e = self._rec.get(f)
+        if e is None or e.check is not check:
+            return make(*args)
+        if e.derived is not None and e.derived[0] == key:
+            return e.derived[1]
+        v = make(*args)
+        e.derived = (key, v)
+        return v
+
     def worlds(self, frame: int, H: int, dt_ms: float, deadly_only: bool = False):
         """World (model inputs) for steps 0..H-1 (frames frame..frame+H-1), the boxes that kill at steps 1..H
         as (boxes (M, 5), extra radius (M,), ids (M,): game.level.box_ids, then "shot<id>" of the shots still
         flying then: shot_future), and how many steps came from the recording. deadly_only: the boxes that kill
-        only (worlds None; the same boxes): the per-frame danger check needs no model inputs."""
+        only (worlds None; the same boxes): the per-frame danger check needs no model inputs. Recorded frames'
+        parts are shared between calls (FRAME_CACHE): their arrays are read-only."""
         if self.last is None or self.last[0] != frame:
             raise RuntimeError("observe() this frame before planning")
+        if FRAME_CACHE and self._pruned != frame:  # windows only move on: frames up to this one are not asked again
+            self._pruned = frame
+            for f in [f for f in self._rec if f <= frame]:
+                del self._rec[f]
         _, hz0, pf0, sh0, _ = self.last
-        boxes0 = np.zeros((0, 5)) if deadly_only else hazard_boxes(hz0, self.keep)
+        boxes0 = np.zeros((0, 5)) if deadly_only else \
+            self._frame_value("boxes0", lambda: _ro(hazard_boxes(hz0, self.keep)))
         _, kill0, kept0, ids0 = self.kill_now
         vel = np.zeros((len(boxes0), 2))
         kvel = np.zeros((len(kill0), 2))
         pf_vel = np.zeros((len(pf0), 2))
         if self.prev is not None and self.prev[0] == frame - 1:
             dt_s = max(1e-3, self.prev[4] / 1000.0)
-            b1 = boxes0 if deadly_only else hazard_boxes(self.prev[1], self.keep)
+            b1 = boxes0 if deadly_only else \
+                self._frame_value("b1", lambda: _ro(hazard_boxes(self.prev[1], self.keep)))
             if len(b1) == len(boxes0):
                 vel = (boxes0[:, :2] - b1[:, :2]) / dt_s
-            k1, kept1, _ = _kill(self.prev[1], self.keep)
+            if FRAME_CACHE and self._kill_prev is not None:
+                k1, kept1 = self._kill_prev   # observe kept them (the same keep)
+            else:
+                k1, kept1, _ = _kill(self.prev[1], self.keep)
             if kept1 == kept0:                # the same shapes of the same pieces: their own motion
                 kvel = (kill0[:, :2] - k1[:, :2]) / dt_s
             if len(self.prev[2]) == len(pf0) and len(pf0):
                 pf_vel = (np.array(pf0, float)[:, :2] - np.array(self.prev[2], float)[:, :2]) / dt_s
         dt_s = dt_ms / 1000.0
         kspeed = np.hypot(kvel[:, 0], kvel[:, 1])
-        if self.periodic is None:
-            self.periodic = []
-            for j, i in enumerate(ids0):
-                run = self.runs[i]
-                P = run.period() if run.moved else None
-                if P is not None:
-                    self.periodic.append((j, run, P))
-        per_j = np.array([j for j, _, _ in self.periodic], np.int64)
-        per_boxes = np.stack([run.ahead(H, P) for _, run, P in self.periodic], 1) if len(per_j) else None
+        periodic = self.periods()
+        per_j = np.array([j for j, _, _ in periodic], np.int64)
+        per_boxes = np.stack([run.ahead(H, P) for _, run, P in periodic], 1) if len(per_j) else None
         use_rec = self.trusted and bool(self.ref)
         recorded = 0
         hz_k, pf_k, kill_k = [], [], []
+        ent = [None] * (H + 1)                        # the recorded steps' entries (_recorded)
         rec_shots = [None] * (H + 1)                  # recorded flying shots per step (trusted recording only)
         for k in range(H + 1):
             rec = self.ref.get(frame + k) if use_rec else None
@@ -299,9 +413,9 @@ class FutureWorld:
                 b, p = boxes0, pf0
                 kb = (kill0, np.zeros(len(kill0)), ids0)
             elif rec is not None:
-                b, p = (None, None) if deadly_only else (hazard_boxes(rec[0], self.keep), rec[1])
-                kr, kept_r, _ = _kill(rec[0], self.keep)
-                kb = (kr, np.full(len(kr), REC_RADIUS), box_ids(kept_r))
+                e = ent[k] = self._recorded(frame + k, rec)
+                b, p = (None, None) if deadly_only else (self._rec_boxes(e, rec), rec[1])
+                kb = e.kill
                 recorded += 1
             else:
                 use_rec = False               # once off the recording, stay off it for this plan
@@ -322,30 +436,75 @@ class FutureWorld:
             hz_k.append(b)
             pf_k.append(p)
             kill_k.append(kb)
+        worlds = None
+        if not deadly_only:
+            fans = list(self.fans)
+            worlds = []
+            for k in range(H):
+                e = ent[k] if k >= 2 else None    # steps 0 and 1 hold the live platforms (now, the frame before)
+                w = e.world if e is not None else None
+                if w is None or w.dt_prev_s != dt_s or w.fans != fans:
+                    w = World(hz_k[k], pf_k[k] or None,
+                              (pf_k[k - 1] if k else (self.prev[2] if self.prev else None)) or None, dt_s, list(fans))
+                    if e is not None and FRAME_CACHE:
+                        e.world = w           # a recorded step k >= 2: the platforms before it are recorded too
+                worlds.append(w)
         # flying shots: only kept away from (the world model was not trained with them). Recorded (trusted, the
         # game repeats them) where the recording is used; otherwise each from its own flight, and the shots its
-        # launcher will fire (launcher_shots: none before a launcher's period has been seen)
-        shots = [(sh[0], sh[3], *self.flying_shot(frame, sh[0], H)) for sh in sh0]
-        launch = self.launcher_shots(frame, H)
-        worlds = None if deadly_only else [
-            World(hz_k[k], pf_k[k] or None, (pf_k[k - 1] if k else (self.prev[2] if self.prev else None)) or None,
-                  dt_s, list(self.fans)) for k in range(H)]
+        # launcher will fire (launcher_shots: none before a launcher's period has been seen), predicted when a
+        # step first needs them (they change nothing: the same whenever made)
+        shots = launch = ids_x = None
         check = []
         for k in range(1, H + 1):
+            e = ent[k]
+            if e is not None and rec_shots[k] is not None:    # all from the recording, its shots too
+                check.append(self._rec_check(e, rec_shots[k]))
+                continue
             b, r, ids = kill_k[k]
-            if rec_shots[k] is not None:
-                live = [(s[0], float(s[3]), (float(s[1]), float(s[2])), REC_RADIUS) for s in rec_shots[k]]
-            else:
-                live = [(sid, rad, c[k - 1], m[k - 1]) for sid, rad, c, m, alive in shots if k <= alive]
-                live += [(lid, rad, c[k - 1], m[k - 1]) for lid, rad, c, m, k0, k1 in launch if k0 <= k <= k1]
-            shape = np.array([self.kill_shape.get(i, 0) for i in ids], np.int8)
+            if shots is None:
+                shots = [(sh[0], sh[3], *self.flying_shot(frame, sh[0], H)) for sh in sh0]
+                launch = self.launcher_shots(frame, H)
+            live = [(sid, rad, c[k - 1], m[k - 1]) for sid, rad, c, m, alive in shots if k <= alive]
+            live += [(lid, rad, c[k - 1], m[k - 1]) for lid, rad, c, m, k0, k1 in launch if k0 <= k <= k1]
+            if e is not None and not live:    # a recorded frame and no shot predicted then: its kept check
+                check.append(self._rec_check(e, []))
+                continue
+            if e is not None:
+                shape = self._rec_shape(e)
+            else:                             # the pieces now (ids0): the same types at every such step
+                shape = self._frame_value("shape0", lambda: _ro(np.array([self.kill_shape.get(i, 0) for i in ids0],
+                                                                        np.int8)))
             if live:
                 sb = np.array([(c[0], c[1], rad, rad, 0.0) for _, rad, c, _ in live])
                 b, r = np.concatenate([b, sb]), np.concatenate([r, [m for *_, m in live]])
                 ids = list(ids) + [f"shot{sid}" for sid, *_ in live]
                 shape = np.concatenate([shape, np.full(len(live), SHAPE_CIRCLE, np.int8)])
+            elif FRAME_CACHE:                 # one list for all such steps (plan.planner.future_inputs: kinds once)
+                if ids_x is None:
+                    ids_x = list(ids0)
+                check.append((b, r, ids_x, shape))
+                continue
             check.append((b, r, list(ids), shape))
         return worlds, check, recorded
+
+
+class _RecFrame:
+    """What one recorded wave frame gives every window that asks for it (FutureWorld._recorded): its kill boxes
+    (game.level.hazard_shapes), their REC_RADIUS and ids; once asked for, the model's boxes (hb), its World as a
+    step k >= 2 (the platforms before it are recorded too; dt and fans compared on use), its shapes' types under
+    the kill_shape `shape_ks`, its deadly check with the recorded shots, and one consumer's value made from that
+    check (FutureWorld.derived: (key, value))."""
+    __slots__ = ("kill", "hb", "world", "shape", "shape_ks", "check", "derived")
+
+    def __init__(self, kill: tuple):
+        self.kill = kill
+        self.hb = self.world = self.shape = self.shape_ks = self.check = self.derived = None
+
+
+def _ro(a: np.ndarray) -> np.ndarray:
+    """a, read-only: it is shared between calls (a consumer writing into it would change every later window)."""
+    a.flags.writeable = False
+    return a
 
 
 class _BoxRun:

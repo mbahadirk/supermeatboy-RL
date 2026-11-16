@@ -475,6 +475,8 @@ class DeathMemory:
         self._trail: dict[str, list] = {}               # level -> [float32 (n, 3) chunks, pending samples]
         self.transient: set[str] = set()
         self.dirty = False                              # visits added since the last save()
+        self.version = 0                                # changes whenever boxes() can: add() and a refuted static
+                                                        # place (plan.planner.future_inputs keeps boxes by it)
         for e in entries:
             self.add(*e)
 
@@ -493,6 +495,7 @@ class DeathMemory:
         self.visits.append(v)
         self._by_level.pop(level, None)
         self._pts.pop(level, None)
+        self.version += 1
 
     def trail(self, level: str) -> np.ndarray:
         """(n, 3) the level's kept alive samples (wave frame, x, y), oldest first."""
@@ -546,6 +549,7 @@ class DeathMemory:
                 refuted = True
         if refuted:
             self._by_level.pop(level, None)
+            self.version += 1
         return refuted
 
     def _table(self, level: str) -> tuple:
