@@ -208,7 +208,7 @@ def test_committed_support_uses_known_and_coarse_predicted_private_masks():
 
 
 def test_best_route_producer_records_known_and_unknown_keys_without_changing_actions():
-    route = P.BestRoute()
+    route = P.RouteBook()
     for frame, keys in enumerate((None, 0, 1)):
         route.observe(0, frame, frame * 10., 30., 1., 0., keys=keys)
         route.played(0, frame, 6)
@@ -219,17 +219,19 @@ def test_best_route_producer_records_known_and_unknown_keys_without_changing_act
 
 def test_planner_observation_forwards_native_keys_to_route():
     _, _, pl = synthetic()
-    pl.route = P.BestRoute()
+    pl.route = P.RouteBook()
     pl.surprise = types.SimpleNamespace(observe=lambda *a: [])
     pl.memory = types.SimpleNamespace(update=lambda *a, **kw: [])
-    P.Planner.observe(pl, 0, 0, 0., 30., keys=1, vx=0., vy=0.)
+    P.Planner.observe(pl, 0, 0, 0., 30., keys=1, vx=0., vy=0., held=3)
+    assert pl.route.cur[0][0][6] == 3                                 # the held buttons reach the route book
     pl.route.played(0, 0, 6)
     assert pl.route.finished(0, 0)
     assert pl.route.best["keys_known"].tolist() == [True] and pl.route.best["keys"].tolist() == [1]
+    assert pl.route.records[0]["held"].tolist() == [3] and pl.route.records[0]["held_known"].tolist() == [True]
 
 
 def _recorded_route(pl, masks):
-    pl.route = P.BestRoute()
+    pl.route = P.RouteBook()
     for f, (x, mask) in enumerate(zip((0., 74., 74.), masks)):
         pl.route.observe(0, f, x, 30., 0., 0., keys=mask)
         pl.route.played(0, f, 6)

@@ -41,6 +41,7 @@ def planner():
     pl.collide_tol, pl.key_pickup = P.COLLIDE_TOL, False
     pl._crumble = P.tile_classes(words)["crumble"]
     pl.crumble, pl._stages, pl._now = {}, {}, 0
+    pl.route = P.RouteBook(pl.lv)                               # Planner.tiles keeps its tile signature
     return pl
 
 

@@ -741,9 +741,9 @@ def test_a_repeated_death_walks_the_point_of_no_return_back():
     assert m.died(0, 234, "hazard", x=122.0, y=-78.0)["repeat"] == 0                 # per level
 
 
-def test_best_route_keeps_the_fastest_finish_and_matches_states():
-    from plan.planner import BestRoute, ROUTE_RADIUS
-    r = BestRoute()
+def test_route_book_keeps_the_fastest_finish_and_matches_states():
+    from plan.planner import RouteBook, ROUTE_RADIUS
+    r = RouteBook()
     assert r.match(0.0, 0.0, 0.0, 0.0, 0) is None                      # nothing recorded: no influence
 
     def wave(n, finish, agent=0):

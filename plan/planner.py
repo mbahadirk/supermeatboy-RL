@@ -253,12 +253,20 @@ SUCCESS_MARGIN = 3                           # frames: a success replaces a succ
 # demo) at 3 / 8 / 11 / 16 frames: finished 4 / 5 / 4 / 2, died 3 / 4 / 5 / 4, switch rate 0.58 / 0.50 / 0.43 / 0.44;
 # 3 is the smallest value (and the only one tried) with no more deaths and no fewer finishes than 3.
 HYSTERESIS_FRAMES = 3.0
-# best route (BestRoute): a state matches a state of the run's fastest finish of the level when within the body's
-# half size (realpath.BODY, units) and KEY_SPEED (units / frame) per velocity component: well inside the world
-# model's 90% error at the next decision (+4: 2-4 units, +8: 5-9 measured), so the recorded actions start from
-# practically the same situation; the final stage still judges them like any candidate
+# best route (RouteBook): every finished wave of the level in this run, joined at portals into one composite
+# route ("sum of best"). A state matches a state of the composite when within the body's half size (realpath.BODY,
+# units) and KEY_SPEED (units / frame) per velocity component: well inside the world model's 90% error at the next
+# decision (+4: 2-4 units, +8: 5-9 measured), so the recorded actions start from practically the same situation;
+# the final stage still judges them like any candidate
 ROUTE_RADIUS = BODY
 ROUTE_SPEED = KEY_SPEED
+# portals: states of two finished waves this close (units; units / frame per velocity component; same keys, held
+# buttons and tiles) are one state for the composite. Live (online_check08, 3-3, 28 finished waves, best 724
+# frames) many waves led by ~50 frames in the first half and lost it later; joined at such states (estimated
+# offline without tile signatures) 3-3 came to 618 frames, 3-2 (online_check07) 372 vs 411
+PORTAL_RADIUS = 0.5
+PORTAL_SPEED = 0.25
+ROUTE_BOOK_MAX = 64                          # finished waves kept per level (RouteBook.rebuild: who goes)
 ROUTE_MOVE = "best route"                    # the candidate's move name (failure and point-of-no-return memories)
 # the route candidate is judged on its recorded REAL path (Planner._route_real) when the decision's state is within
 # REAL_RADIUS units and REAL_SPEED units / frame (each component) of the route's state and the hazard future of the
@@ -1167,50 +1175,113 @@ class MoveMemory:
         return ev
 
 
-# ---- best route --------------------------------------------------------------------------------------------
-class BestRoute:
-    """The level's fastest finish of this run: the planned agent's real states and actions of that wave, so the
-    planner can stay on (or rejoin) a route the game has proven.
+# ---- route book --------------------------------------------------------------------------------------------
+def _tile_hash(idx: int, word: int) -> int:
+    """One changed cell's share of RouteBook's tile signature (63 bits, the same in every process)."""
+    h = (int(idx) * 0x9E3779B97F4A7C15 + int(word) * 0xC2B2AE3D27D4EB4F + 0x165667B19E3779F9) & 0xFFFFFFFFFFFFFFFF
+    h ^= h >> 31
+    h = (h * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
+    return (h ^ (h >> 29)) & 0x7FFFFFFFFFFFFFFF
 
-    Planner.observe / played record every planned agent's real state (x, y, vx, vy in units / frame, known
-    native key mask) and action
-    per wave frame; Planner.finished(agent, frame) keeps that wave's record when it finishes in fewer frames than
-    the level's best so far in this run. match(): the best wave's frame whose state is within ROUTE_RADIUS units
-    and ROUTE_SPEED units / frame (each velocity component) of a given state, the nearest in wave frames (then
-    in distance); the best wave's actions from there are a final-stage candidate (Planner.plan), chosen over the
-    best plan as an incumbent would be kept: unless vetoed, riskier than the best plan by more than RISK_SWITCH
-    (soft risk), or another plan touches the goal sooner (the field's T is optimistic along proven routes: real
-    remaining frames / T median 1.29 on 1-5, 1.70 on 1-13, 1.23 on 1-14 in bench_20261109-161551, so an
-    estimate comparison would leave the route). Its veto, soft risk, goal touch and estimate come from its
-    recorded REAL path (Planner._route_real: the game repeats it with the time-step lock) when the state matches
-    within REAL_RADIUS / REAL_SPEED and the hazard future of those frames is the trusted recording; otherwise
-    (and with plan(recorded=None)) it is re-scored with every member and the full safety check like the others
-    (live, bench_20261110-003407: 1-8's route was refused at frame 0 with the model's soft risk 1.00 vs 0.00 on
-    a path the game had just finished). Plan.best_route logs the match {frame, dist, frames, finish, used, why,
-    judged ("real" or "model: <why>"), real {window, veto_frame, soft, soft_frame, finish_in, margin, offset}};
-    the chosen plan's mode is "best-route" and, judged real, its path and predictions are the real path. A death while
-    the agent plays the route (the route itself became deadly) marks the best wave's frame where it died
-    (died_at): from then on the route is not injected where its actions would reach that frame within the
-    horizon (normal planning there), until a faster finish replaces the route. Kept per level for the run
-    (Planner.set_level makes a new one), not saved; without a recorded best it does nothing."""
 
-    def __init__(self):
-        self.best: dict | None = None                    # {finish, f, x,y,vx,vy,a, keys:uint32, keys_known:bool}
-        self.died_at: int | None = None                  # the best wave's frame where playing it killed an agent
+class RouteBook:
+    """Every finished wave of the level in this run, joined into one composite route ("sum of best"), so the
+    planner can stay on (or rejoin) routes the game has proven.
+
+    Records: Planner.observe / played / tiles record every planned agent's real state per wave frame (x, y, vx, vy
+    in units / frame, known native key mask, held buttons, the tile signature) and action; Planner.finished(agent,
+    frame) adds that wave's record, at every finish, unless it is identical to one held (duplicates); at most
+    ROUTE_BOOK_MAX (rebuild: records the composite takes nothing from go first, the slowest of them).
+    Frames without an action are gaps; a wave with a frame without velocities is not recorded.
+    Tile signature: the XOR of _tile_hash(cell, word) over the cells whose word differs from the level's start
+    (kept incrementally by tiles()), so it depends on the tile state only, not on the order of changes: the game
+    restores the last wave's tiles with changes at frame 0 of the next wave (online_check08 3-3), which brings
+    it back to 0.
+    Portals: two states of DIFFERENT records within PORTAL_RADIUS units and PORTAL_SPEED units / frame (each
+    velocity component), with equal held buttons (both known), equal tile signatures and equal key masks (both
+    known; any masks on a level without keys); on a level with moving platforms (level.plats) only at the same
+    wave frame. Found with a cKDTree on scaled coordinates, then the exact box.
+    Composite: a step plays a record's action from one of its states (cost: the frames to its next recorded
+    state); the state reached may be exchanged once for a portal partner before the next step, so every row's
+    state -> action -> next state is a recorded transition and a boundary jumps by one portal's tolerance at most.
+    remaining = the fewest frames to a finish (a record's last state + its frames to its finish), by Dijkstra on
+    the reversed step graph; the composite follows the argmin chain from the records' first states (all at the
+    spawn; no portal at the start, so the composite starts on its wave frames), staying on its record on ties (then the smallest jump). It is rebuilt at every finish and replaces
+    `best` when its finish changed (or a record it used was dropped), so died_at keeps indexing the composite it
+    was set on.
+
+    best: the composite {finish, f (composite time: the wave frame of an agent playing it from the spawn; it
+    advances by the recorded frames, so a gap stays a gap), x, y, vx, vy, a, keys, keys_known, w (the source
+    state's wave frame), rec (its record id), jump / jump_v (the position (units) / largest velocity component
+    (units / frame) jump into a row from the state its previous row's step reached: 0 inside a segment),
+    segments [[record id, from wave frame, to wave frame], ...]}. match(): the composite's row whose state is
+    within ROUTE_RADIUS units and ROUTE_SPEED units / frame (each velocity component) of a given state, the
+    nearest in composite time (then in distance); the composite's actions from there are a final-stage
+    candidate (Planner.plan), chosen over the best plan as an incumbent would be kept: unless vetoed, riskier
+    than the best plan by more than RISK_SWITCH (soft risk), or another plan touches the goal sooner (the
+    field's T is optimistic along proven routes: real remaining frames / T median 1.29 on 1-5, 1.70 on 1-13,
+    1.23 on 1-14 in bench_20261109-161551, so an estimate comparison would leave the route). Its veto, soft
+    risk, goal touch and estimate come from its recorded REAL path (Planner._route_real: the game repeats it
+    with the time-step lock; each portal jump crossed widens the margin like a match that far off) when the
+    state matches within REAL_RADIUS / REAL_SPEED and the hazard future of those frames is the trusted
+    recording; otherwise (and with plan(recorded=None)) it is re-scored with every member and the full safety
+    check like the others (live, bench_20261110-003407: 1-8's route was refused at frame 0 with the model's
+    soft risk 1.00 vs 0.00 on a path the game had just finished). Plan.best_route logs the match {frame, dist,
+    frames, finish, composite (the row's record is not the fastest real finish), used, why, judged ("real" or
+    "model: <why>"), real {window, veto_frame, soft, soft_frame, finish_in, margin, offset, portals}}; the chosen
+    plan's mode is "best-route" and, judged real, its path and predictions are the real path. A death while the
+    agent plays the route (the route itself became deadly) marks the composite's row where it died (died_at):
+    from then on the route is not injected where its actions would reach that row within the horizon (normal
+    planning there), until a composite with another finish replaces it. Kept per level for the run
+    (Planner.set_level makes a new one), not saved; without a record it does nothing."""
+
+    def __init__(self, level=None):
+        self.lv = level                                  # keys / plats / words0 (None: no keys, no platforms)
+        w0 = getattr(level, "words0", None)
+        self._words0 = None if w0 is None else np.asarray(w0, np.uint32).ravel()
+        self._changed: dict[int, int] = {}               # cell -> word, while it differs from the start
+        self.sig = 0                                     # the tile signature now
+        self.records: list[dict] = []                    # finished waves (_record), in finishing order
+        self.next_id = 0                                 # record ids: 0, 1, ... per level
+        self.duplicates = 0                              # finished waves identical to a record held (not added)
+        self.best: dict | None = None                    # the composite (class docstring)
+        self.died_at: int | None = None                  # the composite's row where playing it killed an agent
+        self.summary: dict | None = None                 # the last rebuild's {records, portals, finish, ...}
         self.new_wave()
 
     def new_wave(self):
-        self.cur: dict[int, dict] = {}                   # agent -> {frame: [x, y, vx, vy, action, keys or None]}
-        self.using: dict[int, tuple] = {}                # agent -> (decision frame, best-wave frame) while on it
+        self.cur: dict[int, dict] = {}                   # agent -> {frame: [x, y, vx, vy, action, keys, held, sig]}
+        self.using: dict[int, tuple] = {}                # agent -> (decision frame, composite frame) while on it
 
-    def observe(self, agent: int, frame: int, x: float, y: float, vx, vy, keys=None):
+    @property
+    def best_real(self) -> int | None:
+        """The fastest real finish recorded (frames), None before the first."""
+        return min((r["finish"] for r in self.records), default=None)
+
+    def fastest_id(self) -> int | None:
+        """The record id of the fastest real finish (the earliest of equal ones)."""
+        return min(self.records, key=lambda r: r["finish"])["id"] if self.records else None
+
+    def tiles(self, changes):
+        """Tile changes [(cell index, word)] (Planner.tiles): the tile signature follows the tile state."""
+        w0 = self._words0
+        for idx, word in changes or ():
+            idx, word = int(idx), int(word)
+            old = self._changed.pop(idx, None)
+            if old is not None:
+                self.sig ^= _tile_hash(idx, old)
+            if w0 is None or not 0 <= idx < len(w0) or word != int(w0[idx]):
+                self._changed[idx] = word
+                self.sig ^= _tile_hash(idx, word)
+
+    def observe(self, agent: int, frame: int, x: float, y: float, vx, vy, keys=None, held=None):
         if vx is None or vy is None:
-            self.cur.pop(int(agent), None)               # no velocities: no route from this agent
-            self.cur[int(agent)] = None
+            self.cur[int(agent)] = None                  # no velocities: no route from this agent this wave
             return
         tr = self.cur.setdefault(int(agent), {})
         if tr is not None:
-            tr[int(frame)] = [float(x), float(y), float(vx), float(vy), None, None if keys is None else int(keys)]
+            tr[int(frame)] = [float(x), float(y), float(vx), float(vy), None, None if keys is None else int(keys),
+                              None if held is None else int(held), self.sig]
 
     def played(self, agent: int, frame: int, action: int):
         tr = self.cur.get(int(agent))
@@ -1218,7 +1289,7 @@ class BestRoute:
             tr[int(frame)][4] = int(action)
 
     def dead(self, agent: int, frame: int):
-        """Agent died at wave frame `frame`. While it was playing the route, returns the best wave's frame where
+        """Agent died at wave frame `frame`. While it was playing the route, returns the composite's frame where
         that took it (now died_at), else None."""
         self.cur.pop(int(agent), None)
         u = self.using.pop(int(agent), None)
@@ -1228,25 +1299,189 @@ class BestRoute:
         self.died_at = at if self.died_at is None else min(self.died_at, at)
         return at
 
-    def finished(self, agent: int, frame: int) -> bool:
-        """Agent touched the goal in wave frame `frame`: its wave becomes the best when faster. True if so."""
-        tr = self.cur.pop(int(agent), None)
-        if not tr or (self.best is not None and int(frame) >= self.best["finish"]):
-            return False
+    def _record(self, tr: dict, frame: int) -> dict | None:
         fs = sorted(f for f, v in tr.items() if f <= int(frame) and v[4] is not None)
         if not fs:
-            return False
-        f = np.array(fs, np.int64)
-        v = np.array([tr[k][:5] for k in fs], np.float64)
-        known = np.array([len(tr[k]) > 5 and tr[k][5] is not None for k in fs], bool)
-        masks = np.array([tr[k][5] if known[i] else 0 for i, k in enumerate(fs)], np.uint32)
-        self.best = {"finish": int(frame), "f": f, "x": v[:, 0], "y": v[:, 1], "vx": v[:, 2], "vy": v[:, 3],
-                     "a": v[:, 4].astype(np.int64), "keys": masks, "keys_known": known}
-        self.died_at = None
-        return True
+            return None
+        rows = [tr[k] for k in fs]
+        v = np.array([r[:5] for r in rows], np.float64)
+        rec = {"id": None, "finish": int(frame), "f": np.array(fs, np.int64),
+               "x": v[:, 0], "y": v[:, 1], "vx": v[:, 2], "vy": v[:, 3], "a": v[:, 4].astype(np.int64),
+               "keys": np.array([r[5] if r[5] is not None else 0 for r in rows], np.uint32),
+               "keys_known": np.array([r[5] is not None for r in rows], bool),
+               "held": np.array([r[6] if r[6] is not None else 0 for r in rows], np.int64),
+               "held_known": np.array([r[6] is not None for r in rows], bool),
+               "sig": np.array([r[7] for r in rows], np.int64)}
+        return rec
 
+    def finished(self, agent: int, frame: int) -> bool:
+        """Agent touched the goal in wave frame `frame`: its wave joins the book and the composite is rebuilt
+        (summary). A wave identical to a record held (the same finish frame, recorded frames and actions: the
+        time-step lock repeats waves exactly) is not added again, only counted (duplicates). True when it is
+        faster than every real finish recorded before (a new best real finish)."""
+        tr = self.cur.pop(int(agent), None)
+        if not tr:
+            return False
+        rec = self._record(tr, frame)
+        if rec is None:
+            return False
+        if any(r["finish"] == rec["finish"] and np.array_equal(r["f"], rec["f"]) and np.array_equal(r["a"], rec["a"])
+               for r in self.records):
+            self.duplicates += 1
+            if self.summary is not None:
+                self.summary = {**self.summary, "duplicates": self.duplicates}
+            return False
+        rec["id"], self.next_id = self.next_id, self.next_id + 1
+        prior = self.best_real
+        self.records.append(rec)
+        self.rebuild()
+        return any(r is rec for r in self.records) and (prior is None or rec["finish"] < prior)
+
+    # ---- the composite --------------------------------------------------------------------------------------
+    def rebuild(self) -> dict | None:
+        """The composite of the records (class docstring): sets summary and, when it changed, best. Over
+        ROUTE_BOOK_MAX records, the composite of all of them decides who goes: first the records it takes no
+        segment from (the slowest finish of those, the latest of equal ones; the composite stays as it is), and
+        only when every record contributes the slowest finish overall (then the composite is built again)."""
+        t0 = time.perf_counter()
+        comp, pr = self._composite()
+        while len(self.records) > ROUTE_BOOK_MAX:
+            used = set() if comp is None else set(comp["rec"].tolist())
+            idle = [i for i, r in enumerate(self.records) if r["id"] not in used]
+            drop = max(idle or range(len(self.records)), key=lambda i: (self.records[i]["finish"], i))
+            self.records.pop(drop)
+            if idle:                                     # unused: the composite stands, its portals go
+                pr = pr[(pr != drop).all(1)]
+                pr = pr - (pr > drop)
+            else:
+                comp, pr = self._composite()
+        portals = len(pr)
+        old = self.best
+        ids = {r["id"] for r in self.records}
+        if comp is None:
+            self.best, self.died_at, self.using = None, None, {}
+        elif (old is None or comp["finish"] != old.get("finish")
+              or not set(np.asarray(old.get("rec", ()), np.int64).tolist()) <= ids):
+            self.best, self.died_at, self.using = comp, None, {}
+        b = self.best
+        self.summary = None if b is None else {
+            "records": len(self.records), "portals": int(portals), "finish": int(b["finish"]),
+            "best_real": self.best_real, "segments": [list(s) for s in b.get("segments", [])],
+            "duplicates": self.duplicates, "build_ms": round(1000.0 * (time.perf_counter() - t0), 1)}
+        return self.summary
+
+    def composite_at(self, j: int) -> bool:
+        """The composite's row j comes from a record other than the fastest real finish."""
+        rec = None if self.best is None else self.best.get("rec")
+        return rec is not None and int(rec[j]) != self.fastest_id()
+
+    def _portals(self, N: dict) -> np.ndarray:
+        """Portal pairs (a, b), a < b, of the stacked record states N (class docstring): (P, 2) int64."""
+        from scipy.spatial import cKDTree
+        has_keys = bool(getattr(self.lv, "keys", ()))
+        plats = bool(getattr(self.lv, "plats", None))
+        ok = N["held_known"] & N["keys_known"] if has_keys else N["held_known"]
+        idx = np.nonzero(ok)[0]
+        if len(idx) < 2:
+            return np.zeros((0, 2), np.int64)
+        cols = [N["held"][idx], N["sig"][idx]] + ([N["keys"][idx].astype(np.int64)] if has_keys else [])
+        group = np.unique(np.stack(cols, 1), axis=0, return_inverse=True)[1].reshape(-1)
+        pts = [N["x"][idx] / PORTAL_RADIUS, N["y"][idx] / PORTAL_RADIUS,
+               N["vx"][idx] / PORTAL_SPEED, N["vy"][idx] / PORTAL_SPEED, 4.0 * group]    # groups 4 apart: never
+        if plats:                                                                        # within the radius 1
+            pts.append(4.0 * N["w"][idx])
+        pairs = cKDTree(np.stack(pts, 1)).query_pairs(1.0 + 1e-9, p=np.inf, output_type="ndarray")
+        if not len(pairs):
+            return np.zeros((0, 2), np.int64)
+        a, b = idx[pairs[:, 0]], idx[pairs[:, 1]]
+        eps = 1e-9
+        keep = ((N["rid"][a] != N["rid"][b]) & (group[pairs[:, 0]] == group[pairs[:, 1]])
+                & (np.hypot(N["x"][a] - N["x"][b], N["y"][a] - N["y"][b]) <= PORTAL_RADIUS + eps)
+                & (np.abs(N["vx"][a] - N["vx"][b]) <= PORTAL_SPEED + eps)
+                & (np.abs(N["vy"][a] - N["vy"][b]) <= PORTAL_SPEED + eps))
+        if plats:
+            keep &= N["w"][a] == N["w"][b]
+        return np.stack([a[keep], b[keep]], 1).astype(np.int64)
+
+    def _composite(self):
+        """(the composite dict or None, the portals as pairs of record list indices (P, 2))."""
+        recs = self.records
+        if not recs:
+            return None, np.zeros((0, 2), np.int64)
+        from scipy.sparse import csr_matrix
+        from scipy.sparse.csgraph import dijkstra
+        N = {k: np.concatenate([r[k] for r in recs])
+             for k in ("x", "y", "vx", "vy", "a", "keys", "keys_known", "held", "held_known", "sig")}
+        N["w"] = np.concatenate([r["f"] for r in recs])
+        N["rid"] = np.concatenate([np.full(len(r["f"]), i, np.int64) for i, r in enumerate(recs)])
+        n = len(N["w"])
+        last = np.r_[N["rid"][1:] != N["rid"][:-1], True]            # a record's last state
+        first = np.r_[True, N["rid"][1:] != N["rid"][:-1]]
+        succ = np.where(last, -1, np.arange(1, n + 1))
+        cost = np.where(last, 0, np.r_[N["w"][1:], 0] - N["w"])         # frames to the record's next state
+        tail = np.array([r["finish"] - int(r["f"][-1]) for r in recs], np.int64)[N["rid"]]
+        P = self._portals(N)
+        src, dst = np.r_[P[:, 0], P[:, 1]], np.r_[P[:, 1], P[:, 0]]     # partners both ways, CSR by node:
+        o = np.argsort(src)                                            # nb[ptr[s]:ptr[s + 1]]
+        src, nb = src[o], dst[o]
+        ptr = np.searchsorted(src, np.arange(n + 1))
+        # edges: m -> its successor s and m -> every partner of s (cost(m)); a last state -> T (tail + 1)
+        has = succ >= 0
+        pred = np.full(n, -1, np.int64)
+        pred[succ[has]] = np.nonzero(has)[0]
+        ps = pred[src]
+        hop = ps >= 0
+        fr = np.concatenate([np.nonzero(has)[0], ps[hop], np.nonzero(last)[0]])
+        to = np.concatenate([succ[has], nb[hop], np.full(int(last.sum()), n)])
+        wt = np.concatenate([cost[has], cost[ps[hop]], tail[last] + 1]).astype(np.float64)
+        G = csr_matrix((wt, (to, fr)), shape=(n + 1, n + 1))          # reversed: Dijkstra from T
+        rem = dijkstra(G, directed=True, indices=n)[:n] - 1.0           # frames to a finish
+
+        def jump(s, d):
+            return (float(np.hypot(N["x"][s] - N["x"][d], N["y"][s] - N["y"][d])),
+                    float(max(abs(N["vx"][s] - N["vx"][d]), abs(N["vy"][s] - N["vy"][d]))))
+
+        def choose(s):                                   # s or a partner with the least remaining (s on ties,
+            p = nb[ptr[s]:ptr[s + 1]]                    # then the smallest jump)
+            if not len(p) or rem[s] <= rem[p].min():
+                return int(s)
+            p = p[rem[p] == rem[p].min()]
+            d2 = (N["x"][p] - N["x"][s]) ** 2 + (N["y"][p] - N["y"][s]) ** 2
+            return int(p[np.lexsort((p, d2))[0]])
+        # the start: a record's first state as it is (no portal there: a partner further into its wave would
+        # skip the spawn's frames and put the whole composite off its wave frames)
+        starts = [(int(N["w"][i]) + rem[i], recs[N["rid"][i]]["finish"], int(i)) for i in np.nonzero(first)[0]]
+        t_end, _, s = min(starts)
+        if not np.isfinite(t_end):
+            return None, N["rid"][P]
+        rows, ts, jp, jv = [], [], [], []
+        t = int(N["w"][s])
+        d = s
+        while True:
+            pj, vj = (0.0, 0.0) if d == s else jump(s, d)
+            rows.append(d), ts.append(t), jp.append(pj), jv.append(vj)
+            if last[d]:
+                finish = t + int(tail[d])
+                break
+            t, s = t + int(cost[d]), int(succ[d])
+            d = choose(s)
+        rows = np.array(rows, np.int64)
+        rid = N["rid"][rows]
+        comp = {"finish": int(finish), "f": np.array(ts, np.int64),
+                **{k: N[k][rows].copy() for k in ("x", "y", "vx", "vy", "a", "keys", "keys_known")},
+                "w": N["w"][rows].copy(), "rec": np.array([recs[i]["id"] for i in rid], np.int64),
+                "jump": np.array(jp), "jump_v": np.array(jv)}
+        segs, k0 = [], 0
+        for k in range(1, len(rows) + 1):
+            if k == len(rows) or rid[k] != rid[k - 1]:
+                segs.append([int(comp["rec"][k0]), int(comp["w"][k0]), int(comp["w"][k - 1])])
+                k0 = k
+        comp["segments"] = segs
+        return comp, N["rid"][P]
+
+    # ---- the planner's use ---------------------------------------------------------------------------------
     def match(self, x: float, y: float, vx: float, vy: float, frame: int):
-        """(index into the best wave, distance) of the matching state nearest in wave frames, or None."""
+        """(index into the composite, distance) of the matching state nearest in composite time, or None."""
         b = self.best
         if b is None:
             return None
@@ -1259,7 +1494,7 @@ class BestRoute:
         return int(j), float(d[j])
 
     def actions(self, j: int, H: int):
-        """The best wave's actions from index j, as many as recorded contiguously (<= H), and their count."""
+        """The composite's actions from index j, as many as recorded contiguously (<= H), and their count."""
         b = self.best
         f, a = b["f"], b["a"]
         n = 1
@@ -1268,7 +1503,7 @@ class BestRoute:
         return a[j:j + n].copy(), n
 
     def run(self, j: int) -> int:
-        """How many states of the best wave are recorded contiguously from index j (j itself included)."""
+        """How many states of the composite are recorded contiguously from index j (j itself included)."""
         f = self.best["f"]
         n = 1
         while j + n < len(f) and f[j + n] == f[j] + n:
@@ -1303,10 +1538,10 @@ class RouteTrials:
     decision, the candidate's moves), is never tried again in this level, whatever happens. While its moves play,
     observe() compares the real position with the plan's predicted path per frame; the first frame off by more
     than the surprise tube (Planner.trial_tube(k); default the committer's: max(1.5 x ERR90 at k, 3)) is its
-    deviation. Outcomes: "died" (in or after its window), "faster" (the wave finished before the best route: the
-    route is replaced from that wave by BestRoute.finished), "slower" (finished, not faster), "no finish" (wave
+    deviation. Outcomes: "died" (in or after its window), "faster" (the wave finished before the best real
+    finish: RouteBook.finished, the wave joins the composite), "slower" (finished, not faster), "no finish" (wave
     ended). Each outcome is one "route trial" event; the window's end gives a "route trial window" event
-    (prediction held or the deviation). Kept per level for the run, like BestRoute."""
+    (prediction held or the deviation). Kept per level for the run, like RouteBook."""
 
     def __init__(self, gain: float = TRIAL_GAIN):
         self.gain = float(gain)
@@ -1494,7 +1729,7 @@ class Planner:
         self.goal_boxes = np.asarray(getattr(level, "goal_boxes", list)(), np.float64).reshape(-1, 5)
         self.key_boxes = list(getattr(level, "key_boxes", list)())
         self.memory = memory if memory is not None else FailureMemory()
-        self.route = BestRoute()
+        self.route = RouteBook(level)
         self.trials = RouteTrials(self.trial_gain)
         if self.moves is not None:
             self.moves.set_level(getattr(level, "name", None))
@@ -1513,6 +1748,7 @@ class Planner:
         """Tile changes from the game [(cell index, word)]: the model's tile inputs and the support geometry."""
         if not changes:
             return
+        self.route.tiles(changes)                    # the route book's tile signature
         for idx, word in changes:
             self.geom.set_tile(idx, word)
             r, c = divmod(int(idx), self.terrain.W)
@@ -1773,10 +2009,12 @@ class Planner:
         return goal, legs, keys
 
     def observe(self, agent: int, frame: int, x: float, y: float, keys: int = 0, dead: bool = False,
-                cause=None, vx: float | None = None, vy: float | None = None, dt_ms: float = 16.667) -> list[dict]:
+                cause=None, vx: float | None = None, vy: float | None = None, dt_ms: float = 16.667,
+                held: int | None = None) -> list[dict]:
         """The runner calls this with every real state: surprise events (SurpriseTracker), failed moves
-        (FailureMemory.update: real T and the state key; vx, vy as recorded, units / s, None: unknown) and, on a
-        death (cause: what killed it, for the log), the point of no return (MoveMemory.died)."""
+        (FailureMemory.update: real T and the state key; vx, vy as recorded, units / s, None: unknown), the route
+        book's record (RouteBook.observe; held: the buttons held before this frame's action, None: unknown) and,
+        on a death (cause: what killed it, for the log), the point of no return (MoveMemory.died)."""
         ev = self.surprise.observe(agent, frame, x, y, dead)
         if not dead:
             self.touch(int(frame), float(x), float(y))
@@ -1790,7 +2028,7 @@ class Planner:
         else:
             vyf = None if vy is None else float(vy) * dt_ms / 1000.0
             vxf = None if vx is None else float(vx) * dt_ms / 1000.0
-            self.route.observe(agent, frame, x, y, vxf, vyf, keys=keys)
+            self.route.observe(agent, frame, x, y, vxf, vyf, keys=keys, held=held)
             t, sup, _, _, _ = self.time_to_go(np.array([x]), np.array([y]), keys,
                                               vy=None if vyf is None else np.array([vyf]))
             cell = self.cell(x, y)
@@ -1809,21 +2047,26 @@ class Planner:
 
     def played(self, agent: int, frame: int, action: int):
         """The runner calls this with the action index it really played for the agent on this frame (the
-        surprise check counts a prediction only while its plan was followed; the best route records it)."""
+        surprise check counts a prediction only while its plan was followed; the route book records it)."""
         self.surprise.played(agent, frame, action)
         self.route.played(agent, frame, action)
 
     def finished(self, agent: int, frame: int) -> dict:
-        """The runner reports a planned agent's goal touch in wave frame `frame`: its wave becomes the level's
-        best route when it is the fastest finish of this run (BestRoute); the route worked, so the failure
-        charges of its (cell, first move) pairs are cleared. Deaths are never forgiven (MoveMemory.finished drops
-        the wave's decisions only). A route trial of this agent closes as faster / slower. Returns {best_route,
-        failures_cleared, route_trial (its event or None)}."""
+        """The runner reports a planned agent's goal touch in wave frame `frame`: its wave joins the level's
+        route book and the composite route is rebuilt (RouteBook); the route worked, so the failure charges of
+        its (cell, first move) pairs are cleared. Deaths are never forgiven (MoveMemory.finished drops the wave's
+        decisions only). A route trial of this agent closes as faster / slower. Returns {best_route (True: the
+        fastest real finish of this run so far), failures_cleared, route_trial (its event or None), route_book
+        (RouteBook.summary: {records, portals, finish (composite frames), best_real, segments, duplicates,
+        build_ms}, or None)}."""
         if self.moves is not None:
             self.moves.finished(agent)
+        before = self.route.summary
         best = self.route.finished(agent, frame)
+        book = self.route.summary
         return {"best_route": best, "failures_cleared": self.memory.finished(agent),
-                "route_trial": self.trials.finished(agent, frame, faster=best)}
+                "route_trial": self.trials.finished(agent, frame, faster=best),
+                "route_book": None if book is before else book}
 
     # ---- airborne completion -----------------------------------------------------------------------------
     def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H):
@@ -1973,7 +2216,7 @@ class Planner:
 
     def _route_real(self, j: int, dist: float, vx0: float, vy0: float, frame: int, frames: list, recorded,
                     keys: int, leg: int, worlds=None):
-        """The best route's verdict on its recorded REAL path (the best wave's states from index j), or (None, why
+        """The best route's verdict on its recorded REAL path (the composite's states from index j), or (None, why
         the model judges it). With the time-step lock the game repeats that path from the same state, so it is
         judged by plan.safety's geometry against this decision's deadly boxes, not by the world model:
         - on key maps the recorded initial mask must be known and equal to the current mask (legacy unknown
@@ -1981,13 +2224,17 @@ class Planner:
         - only when the state is within REAL_RADIUS units and REAL_SPEED units / frame (each component) of the
           route's state, the hazard future of every judged frame is the trusted recording (recorded >= the
           window), and, for a route state at another wave frame, the level has no moving platforms and no tile
-          differs from its start (their timing would change the path);
+          differs from its start (their timing would change the path). A composite state's wave frame is its
+          source record's (w); every judged state counts (frame + k vs its w), not only the first;
         - window: the frames to the route's finish when the finish lies within the given future frames (a
           success: the goal is touched in update tg = finish frame - route frame + 1, the path's last state is the
           finish frame's), else every recorded frame the future covers (min(recorded run, len(frames) - 1));
         - veto: contact in frames 1..VETO_FRAMES; soft risk on the later frames: contact 1, else 1 - clearance /
           margin with margin = dist + dv x k units at frame k (dv: the largest velocity component difference; an
-          exact match has margin 0: contact only); early (REFLEX's override test): the same on 1..VETO_FRAMES;
+          exact match has margin 0: contact only), plus, for every portal crossed at frame p <= k (the
+          composite's jump / jump_v into that state), jump + jump_v x (k - p): the game continues from where the
+          previous record's step went, up to that far from the next record's state; early (REFLEX's override
+          test): the same on 1..VETO_FRAMES;
         - estimate parts: frames = tg (success) or the window, t_end = 0 (success) or T at the window's end
           (its real velocity), supported: the real end state's support.
         Returns (dict, None) or (None, reason)."""
@@ -2003,7 +2250,8 @@ class Planner:
             return None, f"match {dist:.2f} units, {dv:.2f} u/f off (real path within {REAL_RADIUS:g} / {REAL_SPEED:g})"
         if recorded is None:
             return None, "the hazard future's source is unknown"
-        offset = int(frame) - int(b["f"][j])
+        wf = b.get("w", b["f"])                         # the states' wave frames (a composite's: its sources')
+        offset = int(frame) - int(wf[j])
         if offset and (self.lv.plats or self.tiles_changed):
             return None, f"route state {offset:+d} frames away with moving platforms or changed tiles"
         n = self.route.run(j)
@@ -2014,10 +2262,18 @@ class Planner:
         W = tg - 1 if success else min(n - 1, F)
         if int(recorded) < W:
             return None, f"hazard future recorded for {int(recorded)} of {W} frames"
+        # every judged state at its own wave frame (a composite's later segments may come from other frames)
+        off = int(frame) - int(b["f"][j]) + np.asarray(b["f"][j:j + W + 1]) - np.asarray(wf[j:j + W + 1])
+        if off.any() and (self.lv.plats or self.tiles_changed):
+            k = int(np.argmax(off != 0))
+            return None, f"route state +{k} is {int(off[k]):+d} frames away with moving platforms or changed tiles"
+        jp = np.asarray(b.get("jump", np.zeros(len(b["f"]))), np.float64)[j + 1:j + W + 1]
+        jv = np.asarray(b.get("jump_v", np.zeros(len(b["f"]))), np.float64)[j + 1:j + W + 1]
         xs, ys = b["x"][j:j + W + 1], b["y"][j:j + W + 1]
         out = {"window": int(W), "veto": False, "veto_frame": -1, "veto_kind": S.KIND_NONE, "veto_id": None,
                "soft": 0.0, "soft_frame": -1, "early": 0.0, "success": bool(success), "tg": int(tg) if success else -1,
                "finish_in": int(tg) if reaches else None, "margin": [round(dist, 2), round(dv, 3)], "offset": offset,
+               "portals": int(((jp > 0) | (jv > 0)).sum()),
                "x": np.asarray(xs, np.float64), "y": np.asarray(ys, np.float64)}
         if W >= 1:
             X, Y = xs[None, None, :], ys[None, None, :]
@@ -2026,6 +2282,8 @@ class Planner:
             c = sw.step_clear[0, 0]
             ks = np.arange(1, W + 1)
             m = dist + dv * ks
+            if len(jp) and (jp.any() or jv.any()):     # portals crossed at frame p: jump + jump_v x (k - p)
+                m = m + np.cumsum(jp) + ks * np.cumsum(jv) - np.cumsum(jv * ks)
             with np.errstate(invalid="ignore", divide="ignore"):
                 near = np.where(c < 0, 1.0, np.where(m > 0, np.clip(1.0 - c / m, 0.0, 1.0), 0.0))
             near = np.nan_to_num(near, nan=0.0)
@@ -2282,7 +2540,7 @@ class Planner:
             timing["reflex"] = 1000 * (time.perf_counter() - tr)
             counts["modes"] = {"long_safe": cl, "reflex": cr}
 
-        # ---- best route: the run's fastest finish passed through this state ---------------------------------
+        # ---- best route: the route book's composite passed through this state -------------------------------
         gi, route, route_j = None, None, None
         vx0f = float(row["vx"][0]) * dt_ms / 1000.0
         if self.route.best is not None:
@@ -2293,7 +2551,8 @@ class Planner:
                 acts_g, L = self.route.actions(j, H)
                 acts_g = padded(acts_g, H)
                 route = {"frame": int(self.route.best["f"][j]), "dist": round(dist, 2), "frames": int(L),
-                         "finish": int(self.route.best["finish"]), "used": False}
+                         "finish": int(self.route.best["finish"]), "composite": self.route.composite_at(j),
+                         "used": False}
                 da = self.route.died_at
                 if da is not None and route["frame"] + H > da:
                     route["why"] = f"the route killed an agent at its frame {da}"
@@ -2376,7 +2635,7 @@ class Planner:
             else:
                 route["judged"] = "real"
                 route["real"] = {k: real[k] for k in ("window", "veto_frame", "soft", "soft_frame", "finish_in",
-                                                      "margin", "offset")}
+                                                      "margin", "offset", "portals")}
                 route["window"] = real["window"]
                 saf.veto[gi], saf.veto_frame[gi] = real["veto"], real["veto_frame"]
                 saf.veto_kind[gi], saf.veto_id[gi] = real["veto_kind"], real["veto_id"]
@@ -2433,7 +2692,7 @@ class Planner:
             else:
                 if best != gi:
                     switch = {"kept": False, "gain": None, "margin": None, "unit": "frames",
-                              "reason": f"best route: the run's fastest finish (f{route['finish']}) passed here "
+                              "reason": f"best route: the run's composite of finished waves (f{route['finish']}) passed here "
                                         f"at frame {route['frame']}"}
                 best = gi
             route["used"] = best == gi
@@ -2616,11 +2875,13 @@ class Planner:
         the members' largest distance from that mean (units). agent.py --async-plan plans from it while those
         frames play. worlds: at least len(actions) World (index k = row's frame + k). frame: the row's wave frame
         (the crumble stages count from it; None: no tile is expected to break on the way).
-        On the best route (BestRoute): when `row` is the route's state at the same wave frame (within
-        AHEAD_EXACT units and units / frame, the same key mask where it is known) and `actions` are the route's
-        recorded contiguous actions from there, the game repeats the route (time-step lock), so its position,
-        velocity (and known mask) are the route's recorded state at frame + len(actions), spread 0; the other
-        fields stay the model's. (Live, online_check01 3-1 wave 2 f152: the model's start, 0.92 units and
+        On the best route (RouteBook's composite): when `row` is the route's state at the same frame (composite
+        time; within AHEAD_EXACT units and units / frame, the same key mask where it is known), `actions` are the
+        route's recorded contiguous actions from there, no portal lies in between (one record's frames: a portal's
+        jump is not a path the game repeats) and the state's source wave frame is this frame or the level has no
+        moving platforms and no changed tile (_route_real's rule), the game repeats the route (time-step lock),
+        so its position, velocity (and known mask) are the route's recorded state at frame + len(actions), spread
+        0; the other fields stay the model's. (Live, online_check01 3-1 wave 2 f152: the model's start, 0.92 units and
         0.39 u/f off the exact route state, priced a pass the route survived at soft risk 0.92 and left it.)"""
         row = np.asarray(row, ROW).reshape(1)
         acts = np.asarray(actions, np.int64).reshape(1, -1)
@@ -2643,13 +2904,20 @@ class Planner:
         return pred, 0.0
 
     def _route_ahead(self, row, acts, frame, dt_ms) -> int | None:
-        """predict_start's route rule: the best wave's index at frame + len(acts), or None."""
+        """predict_start's route rule: the composite's index at frame + len(acts), or None."""
         b = self.route.best
         if b is None or frame is None or not len(acts):
             return None
         j = int(np.searchsorted(b["f"], int(frame)))
         n = len(acts)
         if j >= len(b["f"]) or int(b["f"][j]) != int(frame) or self.route.run(j) <= n:
+            return None
+        jp, jv = b.get("jump"), b.get("jump_v")
+        if jp is not None and (np.any(np.asarray(jp)[j + 1:j + n + 1] > 0)
+                               or np.any(np.asarray(jv)[j + 1:j + n + 1] > 0)):
+            return None                              # a portal on the way: not a path the game repeats
+        wf = b.get("w")
+        if wf is not None and int(wf[j]) != int(frame) and (self.lv.plats or self.tiles_changed):
             return None
         known = b.get("keys_known")
         if known is not None and bool(known[j]):

@@ -1096,7 +1096,8 @@ class Runner:
                 if st == 1:
                     self.on_death(i, frame, self.prev_xy[i], (x, y), keys, m, None, estimated=False)
                 else:
-                    self.observe(i, frame, x, y, keys, dead=False, vx=float(s[2]), vy=float(s[3]))
+                    self.observe(i, frame, x, y, keys, dead=False, vx=float(s[2]), vy=float(s[3]),
+                                 held=held_before[i])
             if st != 0:
                 self.alive[i] = False
                 planned = i < self.n_plan
@@ -1287,14 +1288,16 @@ class Runner:
             self.tel.send(T.plan_message(self.level.name, self.wave_no, d))
         self.cost.go(prev)
 
-    def observe(self, i, frame, x, y, keys, dead, cause=None, vx=None, vy=None):
-        """Planner.observe: surprises, failed moves and (deaths) the point of no return, counted and logged
-        (held while the planner plans ahead in the background: pl_call)."""
+    def observe(self, i, frame, x, y, keys, dead, cause=None, vx=None, vy=None, held=None):
+        """Planner.observe: surprises, failed moves, the route book's record (held: the buttons held before this
+        frame's action) and (deaths) the point of no return, counted and logged (held while the planner plans
+        ahead in the background: pl_call)."""
         if self.proc is not None:                   # in order behind a plan being made; events come back later
-            self.proc.send("observe", i, frame, x, y, keys, dead, cause=cause, vx=vx, vy=vy, dt_ms=self.dt_ms)
+            self.proc.send("observe", i, frame, x, y, keys, dead, cause=cause, vx=vx, vy=vy, dt_ms=self.dt_ms,
+                           held=held)
             return
         self.observe_events(self.planner.observe(i, frame, x, y, keys, dead, cause=cause, vx=vx, vy=vy,
-                                                 dt_ms=self.dt_ms), frame)
+                                                 dt_ms=self.dt_ms, held=held), frame)
 
     def observe_events(self, events, frame):
         for ev in events:
@@ -1710,8 +1713,15 @@ class Runner:
             self.pl_sync(drop="the agent finished")
             r = (self.proc.call("finished", i, int(finish_frame)) if self.proc is not None
                  else self.planner.finished(i, int(finish_frame)))
-            if r["best_route"]:
+            if r["best_route"]:                     # the fastest real finish of the run on this level so far
                 self.event("best route", int(finish_frame), agent=int(i), frames=frames, seconds=seconds)
+            rb = r.get("route_book")
+            if rb:                                  # every finish joins the route book: its composite rebuilt
+                self.event("route book", int(finish_frame), agent=int(i), **rb)
+                print(f"[route book] {lv}: {rb['records']} finished waves"
+                      + (f" (+{rb['duplicates']} duplicates)" if rb.get("duplicates") else "")
+                      + f", {rb['portals']} portals, sum of best {rb['finish']} f (best real {rb['best_real']} f), "
+                      f"{len(rb['segments'])} segments [{rb['build_ms'] / 1000.0:.2f} s]", flush=True)
             if r["failures_cleared"]:
                 self.event("forgiven", int(finish_frame), agent=int(i), failures=r["failures_cleared"])
             ev = r.get("route_trial")

@@ -122,8 +122,9 @@ class Plan:
     model_clipped: int | None = None
     completion: dict | None = None
     mode: str = "normal"                              # the planning mode that produced it (plan/planner.py MODES)
-    best_route: dict | None = None                    # the run's best route matched here: {frame, dist, frames,
-    #                                                   finish, used, why (when not used)} (plan.planner.BestRoute)
+    best_route: dict | None = None                    # the run's composite route matched here: {frame, dist, frames,
+    #                                                   finish, composite, used, why (when not used)}
+    #                                                   (plan.planner.RouteBook)
     trial_frames: int = 0                             # mode "route-trial": frames played exactly, no new decision
     #                                                   (plan.planner.RouteTrials, plan.commit.Committer.triggers)
     path_step: int = 1                                # direct samples at 0, path_step, 2 * path_step, ...
