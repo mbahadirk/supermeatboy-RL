@@ -95,7 +95,10 @@ times.jsonl rows of every agent (source "search"), best_times.json under "search
 --explore (set to 0), --demo or --learn. Held-out levels are searched too (no shards, no memory; the archive is
 in memory for the run only). S writes the planned agents' best as before (none in a search run: 999.99).
     python smbrl/agent.py --search --wm-collect
-Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there).
+Telemetry (--telemetry host:port, default 127.0.0.1:47800, "off" to disable): viz/telemetry.py (schema there). The
+frame message goes out every --telemetry-every frames (default 3: 20 Hz) and on every frame that matters (a decision,
+a death, a finish, a wave's first and last frame, a new level); the planned agents' positions of the frames between
+ride along (its "trail"). The run's files are written every frame as before.
 The wave summary line also says how often the planned agents decided: decisions per 100 alive frames, the
 median frames between an agent's decisions, the triggers by kind, the switch rate (decisions that switched
 plans / all decisions), the planning ms per game frame (the decisions' own time, plus the trigger checks) and
@@ -156,6 +159,10 @@ STICKY = 0.75                    # explore: keep the previous action with this p
 CHAIN_P = 0.03                   # explore: per free frame, chance to start a chain of 1-3 library moves
 FLUSH_LINES = 200                # log lines between flushes (and at every wave end)
 LEVEL_EVERY_S = 2.0              # telemetry: the level message again after this long
+TELEMETRY_EVERY = 3              # frames: the live frame message every 3rd frame (20 Hz at the locked 60 frames/s) and
+                                 # on frames that matter (Runner.tel_due). Sent every frame it cost 9-11 ms of the
+                                 # 16.7 ms of a real-time frame on 3-2 (runs/online_check04; 6-8 ms median on an
+                                 # offline replay of two 3-2 waves), all of it for the live viewer only
 NOOP = [0, 0, 0, 0]
 
 # overlay colours (0xAARRGGBB) and widths (pixels, realgame.js drawPaths)
@@ -615,6 +622,11 @@ class Runner:
         else:
             addr = T.parse_addr(args.telemetry)
             self.tel = T.Telemetry(addr) if addr else None
+        self.tel_every = max(1, int(getattr(args, "telemetry_every", TELEMETRY_EVERY)))
+        self.tel_last = None                    # (level, wave, frame) of the last frame message sent
+        self.tel_force = False                  # this frame's message is sent (a decision, a death, a finish)
+        self.tel_trail = []                     # [frame, agent, x, y] of the planned agents on frames not sent
+        self.tel_pending = None                 # the last frame's send_frame arguments when it was not sent
         self.rng = np.random.default_rng(args.seed)
         self.level: Level | None = None
         self.planner: Planner | None = None
@@ -1121,7 +1133,10 @@ class Runner:
                                                               or self.human is not None else min(self.n_plan, n))]})
         if self.tel is not None:
             C.go("telemetry")
-            self.send_frame(m, frame, states, act_idx, boxes, kept, fboxes, dt)
+            if self.tel_due(frame):
+                self.send_frame(m, frame, states, act_idx, boxes, kept, fboxes, dt)
+            else:
+                self.skip_frame(m, frame, states, act_idx, boxes, kept, fboxes, dt)
         if self.rec is not None:
             C.go("wm_data")
             self.rec.agents(self.wave_no, frame, states, alive_before, held_before, act_idx, [float("nan")] * n)
@@ -1137,6 +1152,7 @@ class Runner:
 
     def on_plan(self, plan, s, trigger=(), ahead=None):
         st = self.st
+        self.tel_force = True                       # the viewer gets the frame of every decision
         st["decisions"] += 1
         for t in trigger:
             kd = kind_of(t)
@@ -1349,6 +1365,7 @@ class Runner:
         place goes into the death memory and is saved (held-out levels: not in the first life; with --online
         after it, kept for this run only: DeathMemory.transient)."""
         self.pl_sync(drop="the agent died")
+        self.tel_force = True
         lv = self.level
         x1, y1 = xy1
         x0, y0 = xy0 if xy0 is not None else xy1
@@ -1384,6 +1401,7 @@ class Runner:
         updates played up to and including that one, frames = finish_frame + 1, x the frame time (the
         messages' dt; 16.667 ms with the time-step lock) / 1000. Every finish goes to times.jsonl; with the
         lock on it is offered as the level's best (planned and explore apart); planned finishes are events."""
+        self.tel_force = True
         planned = i < self.n_plan
         search = self.search is not None
         human = self.human is not None
@@ -1515,8 +1533,32 @@ class Runner:
         except Exception:
             pass
 
+    def tel_due(self, frame: int) -> bool:
+        """This frame's message is sent: a decision, death or finish in it (tel_force), the first frame of a wave
+        or level, or tel_every frames since the last one."""
+        last = self.tel_last
+        return (self.tel_force or last is None or last[:2] != (self.level.name, self.wave_no) or
+                not 0 < frame - last[2] < self.tel_every)
+
+    def skip_frame(self, m, frame, states, act_idx, boxes, kept, fboxes, dt):
+        """A frame whose message is not sent: the planned agents' positions go into the next one's trail (the
+        viewer compares predictions with them at their own frames), the frame is kept to be sent at the wave's end
+        if it is the last, and the hazards' future runs its period search as send_frame's future_inputs would have
+        (mpc.future.FutureWorld.periods: it keeps state, so it runs on the same frames as before)."""
+        self.tel_trail.extend([frame, i, float(s[0]), float(s[1])] for i, s in enumerate(states) if i < self.n_plan)
+        self.tel_pending = (m, frame, states, act_idx, boxes, kept, fboxes, dt)
+        fw = self.fw
+        if (fboxes is None or len(fboxes) <= max(T.FUTURE_AT)) and fw.last is not None and fw.last[0] == frame:
+            fw.periods()
+        if time.time() - self.level_sent >= LEVEL_EVERY_S:
+            self.send_level()
+
     def send_frame(self, m, frame, states, act_idx, boxes, kept, fboxes, dt):
         lv = self.level
+        same = self.tel_last is not None and self.tel_last[:2] == (lv.name, self.wave_no)
+        trail = self.tel_trail if same else []          # frames skipped since the last message, if of this wave
+        self.tel_trail, self.tel_pending, self.tel_force = [], None, False
+        self.tel_last = (lv.name, self.wave_no, frame)
         agents = [{"i": i, "role": "planner" if i < self.n_plan else "explore", "x": float(s[0]), "y": float(s[1]),
                    "vx": float(s[2]), "vy": float(s[3]), "status": int(s[6]), "flags": int(s[4]) & 0xffffffff,
                    "state": int(s[5]), "keys": int(s[7]) if len(s) > 7 else 0, "action": int(act_idx[i])}
@@ -1533,11 +1575,14 @@ class Runner:
             future = {}
         mem = self.deaths.boxes(lv.name, frame)
         self.tel.send(T.frame_message(lv.name, self.wave_no, frame, agents, now, future,
-                                      T.box_rows(mem, S.KIND_MEMORY), T.platform_rows(lv.plats)))
+                                      T.box_rows(mem, S.KIND_MEMORY), T.platform_rows(lv.plats), trail))
         if time.time() - self.level_sent >= LEVEL_EVERY_S:
             self.send_level()
 
     def on_wave_end(self, m: dict):
+        if self.tel is not None and self.tel_pending is not None and self.level is not None:
+            self.send_frame(*self.tel_pending)     # the wave's last frame was not sent: the viewer gets it now
+        self.tel_pending, self.tel_trail = None, []
         self.pl_sync(drop="the wave ended")
         lv = self.level
         if self.rec is not None:
@@ -2198,6 +2243,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-overlay", action="store_true", help="do not draw the plan in the game")
     ap.add_argument("--telemetry", default="127.0.0.1:47800",
                     help="host:port for the live telemetry (viz/telemetry.py), or off (default 127.0.0.1:47800)")
+    ap.add_argument("--telemetry-every", type=int, default=TELEMETRY_EVERY,
+                    help=f"frames between two live frame messages (default {TELEMETRY_EVERY}: 20 Hz; 1 = every "
+                         "frame); a frame with a decision, death or finish and a wave's first and last always go")
     ap.add_argument("--death-memory", default=DEFAULT_DEATHS,
                     help="unexplained deaths remembered as hazards (loaded at start, saved on every new one; "
                          "default smbrl/death_memory.json)")

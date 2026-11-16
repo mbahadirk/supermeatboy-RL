@@ -43,12 +43,12 @@ class _CaptureTel(T.Telemetry):
         return True
 
 
-def _runner(tmp_path, tel):
+def _runner(tmp_path, tel, extra=("--telemetry-every", "1")):
     import agent
     args = agent.build_parser().parse_args(
         ["--agents", "2", "--replan", "2", "--budget-ms", "60", "--model", MODEL, "--name", str(tmp_path / "run"),
          "--wm-collect", "--death-memory", str(tmp_path / "deaths.json"), "--move-memory", str(tmp_path / "moves.json"), "--telemetry", "off",
-         "--best-times", str(tmp_path / "best_times.json")])
+         "--best-times", str(tmp_path / "best_times.json"), *extra])
     r = agent.Runner(args, telemetry=tel)
     r.script = _FakeScript()
     return r
@@ -551,6 +551,36 @@ def test_runner_sends_the_platforms_in_frame_telemetry(tmp_path):
     for k, m in enumerate(frames):
         assert m["pf"] == T.platform_rows(platform_boxes(pf(k)))
     assert frames[-1]["pf"][1][2:] == [10.0, 30.0]                     # upright: 20 x 60
+
+
+@need_data
+def test_frame_telemetry_every_third_frame_and_on_frames_that_matter(tmp_path):
+    """The default rate (agent.py TELEMETRY_EVERY): a frame message at most every 3rd frame, plus every frame with a
+    decision or a death and the wave's first and last; the frames between ride along as the planned agents' trail,
+    so the viewer still has every frame's real position (viz/viewer.py: predictions against reality)."""
+    import agent
+    from viz import viewer as V
+    tel = _CaptureTel()
+    r = _runner(tmp_path, tel, extra=())
+    assert r.tel_every == agent.TELEMETRY_EVERY == 3
+    acts, dead_xy, died_frame, end_xy = _drive_wave(r)
+    r.close()
+    msgs = [T.decode(d) for d in tel.out]
+    frames = [m for m in msgs if m["t"] == "frame"]
+    sent = [m["frame"] for m in frames]
+    plans = sorted({m["frame"] for m in msgs if m["t"] == "plan"})
+    assert len(frames) < N_FRAMES and sent == sorted(set(sent))
+    assert sent[0] == 0 and sent[-1] == N_FRAMES - 1                    # the first, and the last at the wave's end
+    assert set(plans) <= set(sent) and died_frame in sent               # decisions and the death
+    assert all(b - a <= 3 for a, b in zip(sent, sent[1:]))
+    seen = {(m["frame"], a["i"]) for m in frames for a in m["agents"]}
+    seen |= {(int(t[0]), int(t[1])) for m in frames for t in m["trail"]}
+    assert seen == {(f, i) for f in range(N_FRAMES) for i in range(2)}  # every frame of both planned agents
+    live = V.LiveSource.__new__(V.LiveSource)                           # the viewer keeps them all
+    live.seg, live.plans, live.real, live.deaths, live.frame_msg = None, {}, {}, [], None
+    for m in frames:
+        live.handle(m)
+    assert sorted(live.real[0]) == list(range(N_FRAMES))
 
 
 def test_frame_message_shrinks_under_the_limit():

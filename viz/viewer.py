@@ -650,13 +650,16 @@ class LiveSource:
             self._segment(msg)
             self.frame_msg = msg
             f = int(msg.get("frame", 0))
-            for a in msg.get("agents") or []:
-                if a.get("role") == "planner":
-                    h = self.real.setdefault(int(a["i"]), {})
-                    h[f] = (float(a["x"]), float(a["y"]))
-                    if len(h) > self.HIST_FRAMES:
-                        for k in sorted(h)[:len(h) - self.HIST_FRAMES]:
-                            del h[k]
+            # the planned agents now and on the frames since the last message (its "trail": not sent themselves)
+            seen = [(int(r[0]), int(r[1]), float(r[2]), float(r[3])) for r in msg.get("trail") or []]
+            seen += [(f, int(a["i"]), float(a["x"]), float(a["y"])) for a in msg.get("agents") or []
+                     if a.get("role") == "planner"]
+            for g, i, x, y in seen:
+                h = self.real.setdefault(i, {})
+                h[g] = (x, y)
+                if len(h) > self.HIST_FRAMES:
+                    for k in sorted(h)[:len(h) - self.HIST_FRAMES]:
+                        del h[k]
         elif t == "plan":
             self._segment(msg)
             self.plans.setdefault(int(msg.get("agent", 0)), deque(maxlen=self.HIST_PLANS)).append(msg)

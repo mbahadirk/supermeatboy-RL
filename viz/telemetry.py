@@ -69,9 +69,13 @@ Message types
  "memory": [box, ...] (remembered deaths active at this frame, kind 3),
  "pf": [[x, y, hw, hh], ...] (the moving platforms now, game.level.Level.plats: axis-aligned bars, centre and half
        sizes, 30 x 10 or 10 x 30 when upright (game.level PLAT_HALF), rounded to 0.1; [] on a level without them.
-       Older senders have no "pf": readers take it as [])}
- Sent every frame. Shrunk when too big: "future" dropped, then the agent list cut to the first 60 ("pf", a few
- short rows, is kept).
+       Older senders have no "pf": readers take it as []),
+ "trail": [[frame, agent, x, y], ...] (the planned agents' positions on this wave's frames since the previous frame
+          message, which had no message of their own; [] when there were none. Older senders have no "trail")}
+ Sent every --telemetry-every frames (agent.py, default 3: 20 Hz; older senders every frame), and always on a frame
+ with a planned agent's decision, a death or a finish, a wave's first frame, its last one (sent at the wave's end)
+ and a new level's first. Shrunk when too big: "future" dropped, then the agent list cut to the first 60 ("pf" and
+ "trail", a few short rows, are kept).
 
 {"t": "plan", "time", "level", "wave", "real": {x, y, vx, vy, flags, state, status, keys} (the agent's reported
  state at the decision frame), ... every field of plan.explain.Plan.to_dict() ...}
@@ -215,10 +219,12 @@ def level_message(lv, wave: int, planned: int, explore: int, field_summary: str 
 
 
 def frame_message(level: str, wave: int, frame: int, agents: list, hazards: list, future: dict,
-                  memory: list, pf: list | None = None) -> dict:
-    """pf: platform_rows of the level's moving platforms (None: [])."""
+                  memory: list, pf: list | None = None, trail: list | None = None) -> dict:
+    """pf: platform_rows of the level's moving platforms (None: []); trail: [frame, agent, x, y] of the planned
+    agents on the frames not sent since the previous message (None: [])."""
     return {"t": "frame", "time": time.time(), "level": level, "wave": int(wave), "frame": int(frame),
-            "agents": agents, "hazards": hazards, "future": future, "memory": memory, "pf": list(pf or [])}
+            "agents": agents, "hazards": hazards, "future": future, "memory": memory, "pf": list(pf or []),
+            "trail": list(trail or [])}
 
 
 def plan_message(level: str, wave: int, plan_dict: dict) -> dict:
