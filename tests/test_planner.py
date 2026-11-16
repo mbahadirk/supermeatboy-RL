@@ -903,10 +903,14 @@ def test_route_trial_plays_a_much_better_plan_once_then_the_route(flat):
         assert p2.mode == "best-route" and p2.best_route["used"]
         out = pl.new_wave()
         assert [e["outcome"] for e in out] == ["no finish"]
+        from plan.planner import move_family                         # the spot memory: where, which mask and family
+        assert pl.trials.fails == [(x0, 46.0, 0, move_family(p1.chosen[0]))]
         pl.prev = {}
         p3 = pl.plan(standing(), 100, worlds, frames)                    # next wave: another candidate, or none
         assert p3.chosen != p1.chosen
+        assert p3.mode != "route-trial" or move_family(p3.chosen[0]) != move_family(p1.chosen[0])
     finally:
+        pl.trials.fails.clear()
         pl.route.best = None
         pl.prev = {}
         pl.new_wave()

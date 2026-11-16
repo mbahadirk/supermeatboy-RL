@@ -188,13 +188,14 @@ def test_g_died_at_is_reset_only_when_the_composite_finish_changes():
 
 
 # ---- the planner's use of a composite ------------------------------------------------------------------------
-def _composite(n=21, jump_at=None, w=None):
+def _composite(n=21, jump_at=None, w=None, jump=(0.5, 0.25)):
     b = {"finish": 400, "f": np.arange(n), "x": np.full(n, 100.0), "y": np.full(n, 30.0), "vx": np.zeros(n),
          "vy": np.zeros(n), "a": np.full(n, 6), "keys": np.zeros(n, np.uint32), "keys_known": np.ones(n, bool),
          "w": np.arange(n) if w is None else np.asarray(w), "rec": np.zeros(n, np.int64),
          "jump": np.zeros(n), "jump_v": np.zeros(n), "segments": [[0, 0, n - 1]]}
-    if jump_at is not None:
-        b["jump"][jump_at], b["jump_v"][jump_at] = 0.5, 0.25
+    for k in ([] if jump_at is None else np.atleast_1d(jump_at)):
+        b["jump"][k], b["jump_v"][k] = jump
+        b["rec"][k:] += 1
     return b
 
 
@@ -232,7 +233,7 @@ def test_real_path_needs_every_state_at_its_wave_frame_when_tiles_changed():
     assert real is None and why.startswith("route state +10 is -30 frames away")
 
 
-def test_ahead_start_never_crosses_a_portal():
+def test_ahead_start_crosses_portals_within_the_real_path_match():
     _, _, pl = synthetic()
     pl.route, pl.tiles_changed = RouteBook(), False
     row = np.zeros(1, ROW)
@@ -240,13 +241,40 @@ def test_ahead_start_never_crosses_a_portal():
     acts = np.full(8, 6)
     pl.route.best = _composite()
     assert pl._route_ahead(row, acts, 4, 16.667) == 12
-    pl.route.best = _composite(jump_at=9)
-    assert pl._route_ahead(row, acts, 4, 16.667) is None             # the portal lies in frames 5..12
-    assert pl._route_ahead(row, acts, 9, 16.667) == 17               # from the portal's own state on: fine
+    pl.route.best = _composite(jump_at=9, jump=(0.0, 0.0))            # an exact join (another record from f9)
+    assert pl.route.best["rec"][9] != pl.route.best["rec"][8]
+    assert pl._route_ahead(row, acts, 4, 16.667) == 12
+    pl.route.best = _composite(jump_at=[6, 9], jump=(0.5, 0.25))       # two joins at the portal tolerance:
+    assert pl._route_ahead(row, acts, 4, 16.667) == 12               # 1.0 unit, 0.5 u/f in all
+    pl.route.best = _composite(jump_at=[6, 9, 11], jump=(0.5, 0.0))    # 1.5 units in all > REAL_RADIUS
+    assert pl._route_ahead(row, acts, 4, 16.667) is None             # the model's start
+    assert pl._route_ahead(row, acts, 9, 16.667) == 17               # from f9 on: 0.5 + 0.5 (f11) only
+    pl.route.best = _composite(jump_at=[6, 9, 11], jump=(0.0, 0.25))   # 0.75 u/f in all > REAL_SPEED
+    assert pl._route_ahead(row, acts, 4, 16.667) is None
     pl.route.best = _composite(w=np.arange(21) + 30)                  # recorded at other wave frames
     assert pl._route_ahead(row, acts, 4, 16.667) == 12
     pl.tiles_changed = True
     assert pl._route_ahead(row, acts, 4, 16.667) is None
+    pl.route.best = _composite(jump_at=9, jump=(0.0, 0.0), w=list(range(9)) + list(range(40, 52)))
+    assert pl._route_ahead(row, acts, 0, 16.667) == 8                 # before the join: its own wave frames
+    assert pl._route_ahead(row, acts, 4, 16.667) is None              # across it: frames 40.. with changed tiles
+    pl.tiles_changed = False
+    assert pl._route_ahead(row, acts, 4, 16.667) == 12
+
+
+def test_ahead_start_across_an_exact_join_of_two_records_is_the_recorded_state():
+    """Through a real book: A and B join exactly at S (composite row 4); a prefix from row 1 across the join
+    gives B's recorded state."""
+    _, _, pl = synthetic()
+    pl.route, pl.tiles_changed = RouteBook(), False
+    assert feed(pl.route, wave_a()) and feed(pl.route, wave_b())
+    b = pl.route.best
+    assert b["rec"][3] != b["rec"][4] and b["jump"][4] == 0.0 and b["jump_v"][4] == 0.0
+    row = np.zeros(1, ROW)
+    v = 1000.0 / 16.667
+    row["x"], row["y"], row["vx"], row["vy"] = b["x"][1], b["y"][1], b["vx"][1] * v, b["vy"][1] * v
+    k = pl._route_ahead(row, np.full(4, 6), 1, 16.667)
+    assert k == 5 and b["x"][k] == 150.0 and b["w"][k] == 15          # B's frame 15: x 100 + 50
 
 
 def test_planner_finished_reports_the_route_book():

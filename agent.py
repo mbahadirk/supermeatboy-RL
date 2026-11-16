@@ -2506,7 +2506,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--route-trial-gain", type=float, default=TRIAL_GAIN,
                     help="where the run's best route would be played, an unvetoed plan whose estimate is better by "
                          "more than this many frames is played once with its exact actions (one agent per wave, "
-                         "never the same plan from the same state again; plan.planner.RouteTrials); 0 = never "
+                         "never the same plan from the same state again, nor a failed move family near where it "
+                         "failed, nor riskier than the route; plan.planner.RouteTrials); 0 = never "
                          f"(default {TRIAL_GAIN:g})")
     ap.add_argument("--triggers", choices=("on", "off"), default="on",
                     help="replan on triggers (start, interval, move end, surprise, support, danger, short, missed: "

@@ -171,6 +171,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import time
 from dataclasses import dataclass, replace
 
@@ -263,7 +264,9 @@ ROUTE_SPEED = KEY_SPEED
 # portals: states of two finished waves this close (units; units / frame per velocity component; same keys, held
 # buttons and tiles) are one state for the composite. Live (online_check08, 3-3, 28 finished waves, best 724
 # frames) many waves led by ~50 frames in the first half and lost it later; joined at such states (estimated
-# offline without tile signatures) 3-3 came to 618 frames, 3-2 (online_check07) 372 vs 411
+# offline without tile signatures) 3-3 came to 618 frames, 3-2 (online_check07) 372 vs 411. Tighter joins (0.1 /
+# 0.05, all exact) cost too much offline: online_check07 3-2 406 vs 369 frames; a start predicted ahead crosses
+# these joins instead (Planner.predict_start, REAL_RADIUS / REAL_SPEED below)
 PORTAL_RADIUS = 0.5
 PORTAL_SPEED = 0.25
 ROUTE_BOOK_MAX = 64                          # finished waves kept per level (RouteBook.rebuild: who goes)
@@ -279,10 +282,22 @@ REAL_RADIUS = 1.0
 REAL_SPEED = 0.5
 # a start predicted ahead (Planner.predict_start) is the route's recorded one when the agent is this close to the
 # route's state at the same wave frame (units, and units / frame per component): the time-step lock repeats waves
-# exactly (online_check01 3-1: waves 1-3 identical to 0.01 units through frame 152)
+# exactly (online_check01 3-1: waves 1-3 identical to 0.01 units through frame 152). The portals its prefix
+# crosses may jump REAL_RADIUS units and REAL_SPEED units / frame in all (the composite's jump / jump_v summed):
+# live (online_check09 3-3 wave 61) a prefix across a join got the model's start instead, ~7 units off on a wall
+# rebound, and the route was refused; a recorded start within the real-path match is far closer, and
+# _route_real widens its margin by the jumps crossed
 AHEAD_EXACT = 0.05
 RISK_SWITCH = 0.2                            # soft risk: a previous plan riskier than the best by more is dropped
 TRIAL_GAIN = 20.0                            # frames: an unvetoed plan this much better than the best route is tried once
+# route trials' spot memory (RouteTrials.fails): live (online_check09) the same idea was tried again and again at
+# one place because every hold length / duration was a new key (3-3 "walk L 8f/16f/24f" near frame 340: 15 tries,
+# all slower; 4-1 "jump up hold 10/15/22/max" near frame 165: 17, mostly deaths). A failed trial ("died", "slower",
+# "no finish") closes its move family (move_family) with the same key mask within TRIAL_SPOT_RADIUS units of its
+# decision; TRIAL_SPOT_FAILS failed trials of any family there close the spot to trials
+TRIAL_SPOT_RADIUS = 64.0
+TRIAL_SPOT_FAILS = 2
+TRIAL_RISK_SLACK = 0.05                      # soft risk: a trial at most this riskier than the route it replaces
 BOX_MARGIN = 70.0                            # units around the candidates' paths: hazards further are not checked
 N_ALTERNATIVES = 5
 HAZ_FAR = 300.0                              # wm.features.hazard_features clips offsets and distances here
@@ -1232,8 +1247,10 @@ class RouteBook:
     plan's mode is "best-route" and, judged real, its path and predictions are the real path. A death while the
     agent plays the route (the route itself became deadly) marks the composite's row where it died (died_at):
     from then on the route is not injected where its actions would reach that row within the horizon (normal
-    planning there), until a composite with another finish replaces it. Kept per level for the run
-    (Planner.set_level makes a new one), not saved; without a record it does nothing."""
+    planning there), until a composite with another finish replaces it. A start predicted ahead
+    (Planner.predict_start) is the composite's recorded state also across portals whose summed jumps stay
+    within REAL_RADIUS / REAL_SPEED (the real-path match; _route_real widens its margin by them). Kept per
+    level for the run (Planner.set_level makes a new one), not saved; without a record it does nothing."""
 
     def __init__(self, level=None):
         self.lv = level                                  # keys / plats / words0 (None: no keys, no platforms)
@@ -1514,19 +1531,55 @@ class RouteBook:
 # ---- the planner ------------------------------------------------------------------------------------------
 
 
-def route_trial_choice(est: np.ndarray, veto: np.ndarray, gi: int, gain: float, keys: list, tried) -> int | None:
+_FAMILY_ARG = re.compile(r"\b(?:hold|after)\s+\S+")
+
+
+def move_family(name: str) -> str:
+    """A move's name without its number-bearing parts (RouteTrials' spot memory): "hold <n | max>" and
+    "after <n>f" go with their argument, then every token with a digit ("walk L 8f" -> "walk L",
+    "run-jump R hold 6 after 4f" -> "run-jump R", "jump up hold max" -> "jump up", "jump L hold 6 turn" ->
+    "jump L turn", "best route" stays). A name of numbers only stays as it is."""
+    s = _FAMILY_ARG.sub(" ", str(name))
+    out = " ".join(t for t in s.split() if not any(ch.isdigit() for ch in t))
+    return out or str(name)
+
+
+def route_trial_choice(est: np.ndarray, veto: np.ndarray, gi: int, gain: float, keys: list, tried,
+                       soft=None, families=None, here=None, fails=()) -> tuple[int | None, dict]:
     """The final-stage candidate to try instead of the best route (index gi): the one with the lowest estimate
     among those without a veto whose estimate beats the route's by more than `gain` frames and whose key
-    (keys[c]) was never tried. None: no such candidate (or gain <= 0)."""
+    (keys[c]) was never tried, and, with the spot memory (here = (x, y, key mask) of the decision, fails =
+    RouteTrials.fails [(x, y, mask, family), ...]), not within TRIAL_SPOT_RADIUS units of TRIAL_SPOT_FAILS
+    failed trials with the same mask (the spot is closed) nor of a failed trial of its family (families[c])
+    with the same mask, and, with soft (soft risk per candidate), at most TRIAL_RISK_SLACK riskier than the
+    route. Returns (index or None: no such candidate, or gain <= 0; skipped {"spot", "family", "risk"}: the
+    candidates passing gain, veto and tried that the spot memory or the risk rule left out, better estimates
+    than the one chosen)."""
+    skipped = {"spot": 0, "family": 0, "risk": 0}
     if gain <= 0 or not np.isfinite(est[gi]):
-        return None
+        return None, skipped
+    near = []
+    if here is not None:
+        x, y, mask = float(here[0]), float(here[1]), int(here[2])
+        near = [fam for fx, fy, fm, fam in fails
+                if int(fm) == mask and math.hypot(float(fx) - x, float(fy) - y) <= TRIAL_SPOT_RADIUS]
+    closed = len(near) >= TRIAL_SPOT_FAILS
+    near = set(near)
     for c in np.argsort(est, kind="stable"):
         c = int(c)
         if not est[c] < est[gi] - gain:
-            return None                              # sorted: no later one is better enough
-        if c != gi and not veto[c] and keys[c] not in tried:
-            return c
-    return None
+            break                                    # sorted: no later one is better enough
+        if c == gi or veto[c] or keys[c] in tried:
+            continue
+        if closed:
+            skipped["spot"] += 1
+        elif families is not None and families[c] in near:
+            skipped["family"] += 1
+        elif soft is not None and float(soft[c]) > float(soft[gi]) + TRIAL_RISK_SLACK:
+            skipped["risk"] += 1
+        else:
+            return c, skipped
+    return None, skipped
 
 
 class RouteTrials:
@@ -1534,8 +1587,12 @@ class RouteTrials:
     actions, no replanning while they play: Committer.triggers is silent for Plan.trial_frames).
 
     Planner.plan offers it where the best route would be played: an unvetoed final-stage candidate whose
-    estimate beats the route's by more than `gain` frames (route_trial_choice). Its key, (state key of the
-    decision, the candidate's moves), is never tried again in this level, whatever happens. While its moves play,
+    estimate beats the route's by more than `gain` frames and whose soft risk is at most the route's +
+    TRIAL_RISK_SLACK (route_trial_choice). Its key, (state key of the decision, the candidate's moves), is never
+    tried again in this level, whatever happens. Spot memory (fails): a trial ending "died", "slower" or "no
+    finish" leaves (decision x, y, key mask, move_family of its first move); its family with that mask is not
+    offered again within TRIAL_SPOT_RADIUS units, and no trial within that radius of TRIAL_SPOT_FAILS of them
+    (Plan.counts["route_trial_skipped"] counts the candidates left out so). While its moves play,
     observe() compares the real position with the plan's predicted path per frame; the first frame off by more
     than the surprise tube (Planner.trial_tube(k); default the committer's: max(1.5 x ERR90 at k, 3)) is its
     deviation. Outcomes: "died" (in or after its window), "faster" (the wave finished before the best real
@@ -1546,6 +1603,7 @@ class RouteTrials:
     def __init__(self, gain: float = TRIAL_GAIN):
         self.gain = float(gain)
         self.tried: dict[tuple, dict] = {}           # candidate key -> its record (never tried again)
+        self.fails: list[tuple] = []                 # failed trials' (x, y, key mask, move family): spot memory
         self.active: dict[int, dict] = {}
         self.wave_used = False
 
@@ -1558,10 +1616,13 @@ class RouteTrials:
     def allowed(self, agent: int) -> bool:
         return self.gain > 0 and not self.wave_used and int(agent) not in self.active
 
-    def start(self, agent: int, frame: int, key: tuple, path, frames: int, info: dict) -> dict:
+    def start(self, agent: int, frame: int, key: tuple, path, frames: int, info: dict, spot=None) -> dict:
+        """spot: (x, y, key mask, move family) of the decision, remembered in fails if the trial fails."""
         rec = {"agent": int(agent), "frame": int(frame), "frames": int(frames), **info,
                "deviation": None, "max_error": 0.0, "window": None, "outcome": None}
         rec["_path"] = np.asarray(path, np.float64)
+        if spot is not None:
+            rec["_spot"] = (float(spot[0]), float(spot[1]), int(spot[2]), str(spot[3]))
         self.active[int(agent)] = rec
         self.tried[key] = rec
         self.wave_used = True
@@ -1602,6 +1663,8 @@ class RouteTrials:
     def _close(self, agent: int, outcome: str, frame=None, cause=None) -> dict:
         t = self.active.pop(int(agent))
         t["outcome"] = outcome
+        if outcome != "faster" and t.get("_spot") is not None:      # died, slower, no finish
+            self.fails.append(t["_spot"])
         if frame is not None:
             t["end_frame"] = int(frame)
         if cause is not None:
@@ -2700,11 +2763,16 @@ class Planner:
         if gi is not None and route["used"] and self.trials.allowed(agent):   # a much better plan: tried once
             key0 = self.state_key(cell0, bool(sup0[0]), float(row["vx"][0]) * dt_ms / 1000.0, float(vy0[0]))
             names = [tuple(nm for nm, a, b in segs if nm != "pad") for segs, _ in final]
-            c = route_trial_choice(est3, saf.veto, gi, self.trials.gain, [(key0, nm) for nm in names],
-                                   self.trials.tried)
+            fams = [move_family(nm[0] if nm else "pad") for nm in names]
+            c, skipped = route_trial_choice(est3, saf.veto, gi, self.trials.gain, [(key0, nm) for nm in names],
+                                            self.trials.tried, soft=soft3, families=fams, here=(x0, y0, keys),
+                                            fails=self.trials.fails)
+            if any(skipped.values()):
+                counts["route_trial_skipped"] = skipped
             if c is not None:
                 gain = float(est3[gi] - est3[c])
-                trial = {"key": (key0, names[c]), "moves": list(names[c]), "estimate": round(float(est3[c]), 2),
+                trial = {"key": (key0, names[c]), "spot": (x0, y0, keys, fams[c]),
+                         "moves": list(names[c]), "estimate": round(float(est3[c]), 2),
                          "route_estimate": round(float(est3[gi]), 2), "gain": round(gain, 2),
                          "route_frame": route["frame"], "route_finish": route["finish"],
                          "route_judged": route.get("judged")}
@@ -2851,8 +2919,9 @@ class Planner:
             elif route_using is not None:
                 self.route.using[agent] = route_using
             if plan.trial_frames:
-                info = {k: v for k, v in trial.items() if k != "key"}
-                plan.route_trial = self.trials.start(agent, frame, trial["key"], plan.path, plan.trial_frames, info)
+                info = {k: v for k, v in trial.items() if k not in ("key", "spot")}
+                plan.route_trial = self.trials.start(agent, frame, trial["key"], plan.path, plan.trial_frames, info,
+                                                     spot=trial["spot"])
             self.prev[agent] = plan
             if not plan.from_prev:                   # a kept plan keeps the predictions of its adoption
                 self.surprise.add(plan)
@@ -2877,12 +2946,15 @@ class Planner:
         (the crumble stages count from it; None: no tile is expected to break on the way).
         On the best route (RouteBook's composite): when `row` is the route's state at the same frame (composite
         time; within AHEAD_EXACT units and units / frame, the same key mask where it is known), `actions` are the
-        route's recorded contiguous actions from there, no portal lies in between (one record's frames: a portal's
-        jump is not a path the game repeats) and the state's source wave frame is this frame or the level has no
-        moving platforms and no changed tile (_route_real's rule), the game repeats the route (time-step lock),
-        so its position, velocity (and known mask) are the route's recorded state at frame + len(actions), spread
-        0; the other fields stay the model's. (Live, online_check01 3-1 wave 2 f152: the model's start, 0.92 units and
-        0.39 u/f off the exact route state, priced a pass the route survived at soft risk 0.92 and left it.)"""
+        route's recorded contiguous actions from there, the portals crossed on the way jump at most REAL_RADIUS
+        units and REAL_SPEED units / frame in all (the composite's jump and jump_v summed: the real-path
+        match's limits) and every state on the way is at its source wave frame or the level has no moving
+        platforms and no changed tile (_route_real's rule), the game repeats the route (time-step lock; up to
+        those jumps), so its position, velocity (and known mask) are the route's recorded state at frame +
+        len(actions), spread 0; the other fields stay the model's. (Live, online_check01 3-1 wave 2 f152: the model's start, 0.92 units and
+        0.39 u/f off the exact route state, priced a pass the route survived at soft risk 0.92 and left it;
+        online_check09 3-3 wave 61 f365: a prefix across a 0.5-unit join took the model's start, ~7 units off on
+        a wall rebound, and the route was refused at soft risk 1.0.)"""
         row = np.asarray(row, ROW).reshape(1)
         acts = np.asarray(actions, np.int64).reshape(1, -1)
         if acts.shape[1] % self.f:
@@ -2912,13 +2984,15 @@ class Planner:
         n = len(acts)
         if j >= len(b["f"]) or int(b["f"][j]) != int(frame) or self.route.run(j) <= n:
             return None
-        jp, jv = b.get("jump"), b.get("jump_v")
-        if jp is not None and (np.any(np.asarray(jp)[j + 1:j + n + 1] > 0)
-                               or np.any(np.asarray(jv)[j + 1:j + n + 1] > 0)):
-            return None                              # a portal on the way: not a path the game repeats
-        wf = b.get("w")
-        if wf is not None and int(wf[j]) != int(frame) and (self.lv.plats or self.tiles_changed):
+        jp, jv = b.get("jump"), b.get("jump_v")      # portals crossed on the way: their jumps summed
+        if jp is not None and (float(np.sum(np.asarray(jp, np.float64)[j + 1:j + n + 1])) > REAL_RADIUS
+                               or float(np.sum(np.asarray(jv, np.float64)[j + 1:j + n + 1])) > REAL_SPEED):
             return None
+        wf = b.get("w")                              # every state at its own wave frame (_route_real's rule)
+        if wf is not None and (self.lv.plats or self.tiles_changed):
+            off = np.asarray(b["f"][j:j + n + 1]) - np.asarray(wf[j:j + n + 1])
+            if off.any():
+                return None
         known = b.get("keys_known")
         if known is not None and bool(known[j]):
             if int(b["keys"][j]) != int(row["keys"][0]):
