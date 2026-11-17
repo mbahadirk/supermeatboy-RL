@@ -10,7 +10,9 @@ outside the level's camera-bounds kill box (Level.kill_box), or without one past
 A trajectory is positions (members E, candidates n, frames K+1); frame 0 is now. Each step k -> k+1 is tested
 as a movement segment (a fall covers about 50 units per frame and would skip thin hazards between frames),
 sampled every SUB_STEP units or less, against the hazards at frame k+1. The segment's start is not re-tested
-(it was the previous step's end).
+(it was the previous step's end). A step through a game portal (jumps: game.level.Jumps, the rollout's
+teleports or a recorded path's one-frame jumps) is never tested along the straight line between its ends: its
+own motion up to where it entered the trigger and from the exit to its end (a recorded jump: its end only).
 
 Decision rule: contact within the first VETO_FRAMES frames is a hard veto. Later contact or near contact is a
 soft risk, with a margin from the world model's measured 90% position error at that horizon (ERR90),
@@ -29,6 +31,7 @@ from realpath import BODY
 from game.level import OUT_BOTTOM, OUT_SIDE, alive_box, box_ids, hazard_boxes   # noqa: F401 (OUT_*: fallback rule)
 from game.level import (SHAPE_BOX, SHAPE_CIRCLE, SHAPE_GAMEBOX, hazard_shapes, kill_clearance,   # noqa: F401
                         kill_clearance_paired, kill_reach)
+from game.level import Jumps, teleport_jumps   # noqa: F401 (teleport_jumps: re-exported for the callers)
 from wm.features import box_distances
 
 VETO_FRAMES = 16            # contact in frames 1..VETO_FRAMES vetoes the candidate
@@ -190,6 +193,31 @@ def segment_contact(x0, y0, x1, y1, fb: FrameBoxes, bounds=None):
     return kind, box
 
 
+def _cut(x0, y0, x1, y1, jumps: Jumps | None, k: int):
+    """A step's segments across a teleport (flat (P,) rows of step k-1 -> k; jumps flat (P, K+1)): the starts
+    with each jumped row's start moved to its exit (its end when unknown), and the jumped rows whose motion up
+    to the entry is a second segment (rows, start x, y, entry x, y). Without a jump at k: the inputs, None."""
+    if jumps is None or not jumps.at[:, k].any():
+        return x0, y0, None
+    at = jumps.at[:, k]
+    ex, ey = jumps.exit[:, k, 0], jumps.exit[:, k, 1]
+    sx = np.where(at, np.where(np.isnan(ex), x1, ex), x0)
+    sy = np.where(at, np.where(np.isnan(ey), y1, ey), y0)
+    r = np.nonzero(at & ~np.isnan(jumps.entry[:, k, 0]))[0]
+    pre = None if not len(r) else (r, x0[r], y0[r], jumps.entry[r, k, 0], jumps.entry[r, k, 1])
+    return sx, sy, pre
+
+
+def _flat(jumps: Jumps | None, P: int, K1: int) -> Jumps | None:
+    """jumps of (E, n, K+1) trajectories as (P, K+1) rows; None (also without any jump) stays None."""
+    if jumps is None or not jumps.any():
+        return None
+    if jumps.at.size != P * K1:
+        raise ValueError(f"jumps of shape {jumps.at.shape} for {P} paths of {K1} columns")
+    return Jumps(jumps.at.reshape(P, K1), jumps.frame.reshape(P, K1), jumps.entry.reshape(P, K1, 2),
+                 jumps.exit.reshape(P, K1, 2))
+
+
 def explain_death(lv, frame_record: dict, keep, x0, y0, x1, y1) -> bool:
     """Does the geometry explain a real death: the move from the previous position (x0, y0) to the death
     position (x1, y1) against the hazards and shots of the death frame, or leaving the level."""
@@ -226,7 +254,7 @@ class Sweep:
         return np.arange(1, self.step_clear.shape[2] + 1) * self.step
 
 
-def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Sweep:
+def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps | None = None) -> Sweep:
     """xs, ys: (E, n, K+1) positions, frame 0 = now. frames: K+1 FrameBoxes (or None for none), frames[k] =
     the hazards at trajectory frame k (frames[0] is not used: the start is a fact). bounds: level_bounds(lv)
     for the out-of-level rule, or None. floor: a plan.geometry.Terrain (or None): a step ending on the padding
@@ -234,7 +262,8 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Sweep:
     KIND_FLOOR (clearance -1 at that step: the same verdict and risk as the kill box). A floor with at(frame)
     (plan.planner's per-step rule, its moving platforms where the column's frame has them) gives each column's
     rule: at(k x step). step: frames per column (frames[k] then holds the boxes of frame k x step; the segment
-    test covers the motion between columns)."""
+    test covers the motion between columns). jumps (game.level.Jumps of xs' shape, or None): steps through a
+    game portal, tested as the module docstring says."""
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
     E, n, K1 = xs.shape
     K = K1 - 1
@@ -259,10 +288,16 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Sweep:
     contact_kind = np.full(P, KIND_NONE, np.int8)
     contact_box = np.full(P, -1, np.int64)
     X, Y = xs.reshape(P, K1), ys.reshape(P, K1)
+    J = _flat(jumps, P, K1)
     floor_at = getattr(floor, "at", None)
     for k in range(1, K1):
         fb = frames[k]
-        clear, oc = segment_clearance(X[:, k - 1], Y[:, k - 1], X[:, k], Y[:, k], fb, bounds)
+        sx, sy, pre = _cut(X[:, k - 1], Y[:, k - 1], X[:, k], Y[:, k], J, k)
+        clear, oc = segment_clearance(sx, sy, X[:, k], Y[:, k], fb, bounds)
+        if pre is not None:                             # a teleport's motion up to its entry
+            r, ax, ay, bx, by = pre
+            c2, o2 = segment_clearance(ax, ay, bx, by, fb, bounds)
+            clear[r], oc[r] = np.minimum(clear[r], c2), np.minimum(oc[r], o2)
         if len(fb):
             idx = np.fromiter((col[i] for i in fb.ids), np.int64, len(fb))
             better = clear < clear_min[:, idx]
@@ -274,7 +309,7 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Sweep:
             j = np.zeros(P, np.int64)
             cbest = np.full(P, np.inf)
         fl = floor_at(k * step) if floor_at is not None else floor
-        pad = fl.on_padding(X[:, k], Y[:, k], dy=Y[:, k] - Y[:, k - 1]) if fl is not None else None
+        pad = fl.on_padding(X[:, k], Y[:, k], dy=Y[:, k] - sy) if fl is not None else None
         if pad is not None and pad.any():
             oc = np.where(pad, np.minimum(oc, -1.0), oc)
         better = oc < out_min
@@ -299,14 +334,14 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Sweep:
                  out_min.reshape(sh2), out_frame.reshape(sh2), step_clear.reshape(E, n, K), int(step))
 
 
-def first_contact(xs, ys, boxes, first=None, upto=None, step: int = 1):
+def first_contact(xs, ys, boxes, first=None, upto=None, step: int = 1, jumps: Jumps | None = None):
     """The same swept segment test against boxes that are touched rather than deadly (the goal, a key): fixed
     boxes (M, 5) in the contact convention (centre within BODY: game.level.Level.goal_boxes / key_boxes).
     xs, ys (E, n, K+1). Per trajectory the first frame k (step k-1 -> k) that touches a box, only frames
     first..upto (first, upto: broadcast to (E, n); None: 1 and K), and the index of the box; -1 when none.
     A box the trajectory starts in contact with (frame 0) is not counted for it: the game said it was not
     touched there. step: frames per column; first, upto and the frames returned are in frames (a frame inside
-    a column counts as that column's end frame)."""
+    a column counts as that column's end frame). jumps: as sweep's (a portal step: never the line across)."""
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
     E, n, K1 = xs.shape
     K = K1 - 1
@@ -339,8 +374,21 @@ def first_contact(xs, ys, boxes, first=None, upto=None, step: int = 1):
     if not len(cand):
         return frame, which
     Xc, Yc = X[cand], Y[cand]
-    clear, _ = segment_clearance(Xc[:, :-1], Yc[:, :-1], Xc[:, 1:], Yc[:, 1:], fb)
+    J = _flat(jumps, P, K1)
+    Sx, Sy = Xc[:, :-1], Yc[:, :-1]
+    pre = []
+    if J is not None and J.at[cand].any():
+        Sx, Sy = Sx.copy(), Sy.copy()
+        for k in np.nonzero(J.at[cand].any(0))[0]:
+            sx, sy, pk = _cut(Xc[:, k - 1], Yc[:, k - 1], Xc[:, k], Yc[:, k], J[cand], k)
+            Sx[:, k - 1], Sy[:, k - 1] = sx, sy
+            if pk is not None:
+                pre.append((k, pk))
+    clear, _ = segment_clearance(Sx, Sy, Xc[:, 1:], Yc[:, 1:], fb)
     clear = clear.reshape(len(cand), K, len(b))
+    for k, (r, ax, ay, bx, by) in pre:                  # a teleport's motion up to its entry
+        c2, _ = segment_clearance(ax, ay, bx, by, fb)
+        clear[r, k - 1] = np.minimum(clear[r, k - 1], c2)
     start_in = box_distances(Xc[:, 0], Yc[:, 0], b) - BODY < 0              # (paths, M)
     clear = np.where(start_in[:, None, :], np.inf, clear)
     j = clear.argmin(2)                                                      # (paths, K)
@@ -424,9 +472,10 @@ def assess(sw: Sweep) -> Safety:
     return Safety(veto, veto_frame, veto_kind, veto_id, soft_risk, soft_frame, nearest, sw)
 
 
-def check(xs, ys, frames, bounds=None, floor=None, step: int = 1) -> Safety:
-    """sweep + assess: the planner's safety verdict for (E, n, K+1) trajectories (step: frames per column)."""
-    return assess(sweep(xs, ys, frames, bounds, floor, step))
+def check(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps | None = None) -> Safety:
+    """sweep + assess: the planner's safety verdict for (E, n, K+1) trajectories (step: frames per column;
+    jumps: their teleports, sweep's)."""
+    return assess(sweep(xs, ys, frames, bounds, floor, step, jumps))
 
 
 # ---- deaths the geometry did not predict ----------------------------------------------------------------

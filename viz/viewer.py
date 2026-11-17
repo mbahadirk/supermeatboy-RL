@@ -78,6 +78,7 @@ RUNS = os.path.join(HERE, "runs")
 BEST_TIMES = os.path.join(HERE, "best_times.json")      # agent.py --best-times default
 TILE = 20.0
 BODY = 6.0                    # realpath.BODY: a goal / key box is touched within this of it
+TELEPORT_JUMP = 30.0          # game.level.TELEPORT_JUMP: a one-frame move this long went through a game portal
 FPS = 30
 HZ = 60                       # game frames per second (replay speed 1x)
 PANEL_W = 480
@@ -1358,13 +1359,18 @@ class Renderer:
                     continue
                 pts = [m.pt(x, y) for x, y in ap]
                 col = ALT_VETO if alt.get("vetoed") else ALT
-                pg.draw.lines(surf, col, False, pts, 1)
+                cuts = sorted(int(k) for k in alt.get("jumps") or [] if 0 < int(k) < len(pts))   # game portals
+                for a, b in zip([0] + cuts, cuts + [len(pts)]):
+                    if b - a >= 2:
+                        pg.draw.lines(surf, col, False, pts[a:b], 1)
                 self.alt_hits.append((pts, alt))
         # the chosen path (its mode's colour): dashed and faded where the members disagree, thinner where played
         col = mode_color(plan)
         col_done = tuple(v // 2 for v in col)
         pts = [m.pt(x, y) for x, y in path]
         for k in range(len(pts) - 1):
+            if math.hypot(path[k + 1][0] - path[k][0], path[k + 1][1] - path[k][1]) > TELEPORT_JUMP:
+                continue                             # through a game portal: no line across
             far = k + 1 < len(spread) and spread[k + 1] is not None and spread[k + 1] > SPREAD_FAR
             done = k < k_now
             if far:
@@ -1375,8 +1381,10 @@ class Renderer:
         # the airborne completion: dashed, fainter, from the plan's end to its landing (or death)
         comp = plan.get("completion") or {}
         cp = [m.pt(x, y) for x, y in comp.get("path") or []]
+        cj = {int(k) for k in comp.get("jumps") or []}                # through a game portal: no line across
         for k in range(0, len(cp) - 1, 2):
-            pg.draw.line(surf, COMPLETION, cp[k], cp[k + 1], 2)
+            if k + 1 not in cj:
+                pg.draw.line(surf, COMPLETION, cp[k], cp[k + 1], 2)
         if cp:
             if comp.get("on") in ("ground", "wall", "goal"):
                 pg.draw.circle(surf, LAND, cp[-1], 5, 2)

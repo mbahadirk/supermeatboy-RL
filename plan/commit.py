@@ -122,23 +122,31 @@ SUPPORT_TEXT = {(1, 0): "landed early", (0, 1): "not on the ground", (0, 2): "lo
                 (2, 0): "on a wall", (2, 1): "on a wall"}
 
 
-def path_check(xs, ys, frames, bounds=None):
+def path_check(xs, ys, frames, bounds=None, portals: bool = False):
     """plan.safety's rule for one path (frame 0 = now, K more): each step k-1 -> k sampled at most
     plan.safety.SUB_STEP apart against frames[k]'s boxes (and the level's edge), in one vectorized pass.
-    Returns (contact frame or -1, id of what was hit or None, soft risk in [0, 1] over frames after
-    VETO_FRAMES)."""
+    portals (the level has game portals): a one-frame move longer than game.level.TELEPORT_JUMP is a teleport,
+    only its end is tested (never the line across). Returns (contact frame or -1, id of what was hit or None,
+    soft risk in [0, 1] over frames after VETO_FRAMES)."""
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
     K = min(len(xs), len(frames)) - 1
     if K < 1:
         return -1, None, 0.0
     xs, ys = xs[:K + 1], ys[:K + 1]
-    seg = np.hypot(np.diff(xs), np.diff(ys))
+    x0, y0 = xs[:-1], ys[:-1]
+    if portals:
+        jp = S.teleport_jumps(xs, ys)
+        if jp is not None:
+            at = jp.at[1:]
+            x0, y0 = np.where(at, xs[1:], x0), np.where(at, ys[1:], y0)
+    dx, dy = xs[1:] - x0, ys[1:] - y0
+    seg = np.hypot(dx, dy)
     nk = np.maximum(1, np.ceil(seg / S.SUB_STEP)).astype(np.int64)    # samples per step (as safety.sweep)
     n = int(nk.max())
     j = np.arange(1, n + 1, dtype=np.float64)
     t = np.minimum(j[None, :], nk[:, None]) / nk[:, None]             # short steps repeat their end point
-    px = xs[:-1, None] + np.diff(xs)[:, None] * t                     # (K, n): step k-1 -> k in row k-1
-    py = ys[:-1, None] + np.diff(ys)[:, None] * t
+    px = x0[:, None] + dx[:, None] * t                                # (K, n): step k-1 -> k in row k-1
+    py = y0[:, None] + dy[:, None] * t
     step = np.full(K, np.inf)
     hit_id = [None] * K
     parts = [(k, fb) for k in range(1, K + 1) for fb in (frames[k],) if fb is not None and len(fb)]
@@ -228,7 +236,8 @@ class Committer:
             _, g, side = planner.support(c.xs, c.ys, keys=masks)
             c.support = support_kind(g, side)
             if fboxes is not None:
-                cf, _, risk = path_check(c.xs, c.ys, fboxes, planner.bounds)
+                cf, _, risk = path_check(c.xs, c.ys, fboxes, planner.bounds,
+                                         portals=getattr(planner, "teleports", None) is not None)
                 c.base_contact = frame + cf if 0 < cf <= S.VETO_FRAMES else None
                 c.base_risk = risk
         self.cur[int(agent)] = c
@@ -302,7 +311,8 @@ class Committer:
                 # Request a new plan when the actual offset makes the old path dangerous. This is only
                 # a safety check, not a new dynamics prediction or a change to the committed actions.
                 xs, ys = c.xs[k:] + (x - c.xs[k]), c.ys[k:] + (y - c.ys[k])
-                cf, hid, risk = path_check(xs, ys, fb, planner.bounds)
+                cf, hid, risk = path_check(xs, ys, fb, planner.bounds,
+                                           portals=getattr(planner, "teleports", None) is not None)
                 if 0 < cf <= S.VETO_FRAMES and (c.base_contact is None or frame + cf < c.base_contact - 1):
                     out.append(f"danger {hid} f{cf}")
                 elif risk - c.base_risk > DANGER_RISE:

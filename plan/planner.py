@@ -160,6 +160,22 @@ committer's support trigger on the real state) use the live bars (Level.plats). 
 committer's predicted support of the chosen path (plan.commit.Committer.decided: live bars at adoption; it has
 no worlds) and plan/search.py.
 
+Game portals (Level.portals; game.level's teleport rule, measured from 95 live teleports): the world model has no
+input for them, so every imagined step applies them deterministically (imagine(teleports=...), the level's
+Planner.teleports): a row whose motion during the step enters the trigger of an end it may use goes to the other
+end's centre on that frame, plus its kept velocity times the frames left (the guard on that part too). A row may
+not teleport again for TELEPORT_COOLDOWN frames (the agent's last real teleport: Planner.observe; stage 2 and the
+completion go on from their prefix's state) and is kept off an end it starts inside until it leaves it. Every
+consumer of the steps gets the teleports (game.level.Jumps): the sweep, goal / key contact, corner risk and key
+pickup test the step's motion up to the entry and from the exit, never the line across; the members' mean path
+is the side most members are on (member_mean); the chosen path per frame steps at the teleport frame
+(frame_path). Recorded and per-frame paths on a portal level (the best route's real path, the committer's checks,
+REFLEX's look-ahead) take a one-frame move longer than TELEPORT_JUMP as a teleport. Levels without portals: no
+change (none of this runs). Measured offline on the recorded 4-9 teleports (runs/online_check04, 10, model
+human_v4p_gpu, from 4 frames before): the position error 4 / 8 / 16 frames after a teleport, median 1.1 / 0.9 /
+2.6 units (268 / 265 / 259 without the rule); the predicted teleport frame is the real one in 67 of 82, a frame
+off in 15 (the committer's surprise then replans from the real state).
+
 Supported rule (plan/geometry.py, checked by `python -m plan.geometry runs/real_20261102-165351/wm_data --shards 3`
 on 3 waves each of 1-5 and 1-13, 331,000 rows): of the frames at rest (vy == 0 now and the next frame) the rule
 says ground on 99.7% (1-5) and 98.6% (1-13); flag 0x2 is set on 74% / 92% of all rows, so it is not "airborne".
@@ -194,7 +210,8 @@ from wm.model import N_CONT
 from wm.protocol import GRAVITY_PRIOR
 from wm.model import WorldModel
 from wm.rollout import World, advance, step_actions, _stacked
-from game.level import key_pickup_policy, platform_boxes
+from game.level import (TELEPORT_COOLDOWN, TELEPORT_JUMP, Jumps, Teleports, frame_path, key_pickup_policy,
+                        member_mean, platform_boxes, teleport_jumps)
 
 H_DEFAULT, B1_DEFAULT, BRANCH_DEFAULT, S_DEFAULT, BUDGET_MS = 48, 8, 16, 16, 120.0
 
@@ -336,7 +353,7 @@ CRUMBLE_LATE = 10                            # frames past its time a tile may s
 def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.ndarray, dt_ms: float,
             worlds: list, offsets=None, keep_rows: bool = False,
             terrain: Terrain | None = None, tol: float = None, key_pickup=False, terrain_for_mask=None,
-            stages=None) -> dict:
+            stages=None, teleports: Teleports | None = None, tp_ready=None, tp_off=None) -> dict:
     """wm.rollout.rollout_batched for a subset of ensemble members (`members`, a slice) whose rows may start at
     different future frames: row i at step k sees the level's moving parts worlds[offsets[i] + k] (clamped to
     the last). s0 (n,) ROW, actions (n, K). Returns x, y (E, n, K+1) float64; vx, vy (E, n, K+1): the velocity
@@ -353,7 +370,18 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     A step-k model (model.step = f > 1): actions, dt_ms, offsets and worlds stay per frame; every array is per
     model step instead (ceil(K / f) steps, column j = frame j x f, the last action repeated to fill the last
     step), step j sees worlds[offset + j x f]; vx, vy stay units per frame (the step's difference / f); steps
-    counts model steps; "step": f."""
+    counts model steps; "step": f.
+    teleports (game.level.Teleports, the level's portals; None or none: nothing below, the arrays as without):
+    after each step (the guard, the key pickup), a row whose frames on the step's line (frame i at i / f) come
+    inside the trigger of an end it may use (game.level: the cooldown tp_ready, the end it is kept off) goes to
+    the other end's centre on that frame, plus its velocity (the model's at the step's end, kept) times the
+    frames left in the step (the guard on that motion too). tp_ready (n,) or scalar: the first frame of the
+    first step a row may teleport on (frames after its last teleport: TELEPORT_COOLDOWN - them; None: 0, any);
+    tp_off (n,): the end each row is kept off until it leaves its trigger (-1 none; None: the end whose trigger
+    the start row is inside: it just came out there). Returns also "jumps" (game.level.Jumps (E, n, K+1): the
+    teleport steps, their frame, entry and exit; None without teleports), "tp_ready" / "tp_off" (E, n, K+1):
+    each column's state for a rollout continued from it, and vx, vy of a teleport step are the row's velocity
+    (not the jump's difference)."""
     Wl, Bl = _stacked(model)
     Wl, Bl = [w[members] for w in Wl], [b[members] for b in Bl]
     E = Wl[0].shape[0]
@@ -394,6 +422,15 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     last = len(worlds) - 1
     bars = clip is not None and has_bars(worlds)     # the guard on bars (collide_bars); none: nothing to do
     pp = model_prior(model)
+    tp = teleports if teleports is not None and len(teleports.src) else None
+    if tp is not None:
+        ready = np.tile(np.broadcast_to(np.asarray(0 if tp_ready is None else tp_ready, np.int64), (n,)), E).copy()
+        off = (tp.start_off(s["x"], s["y"]) if tp_off is None
+               else np.tile(np.broadcast_to(np.asarray(tp_off, np.int64), (n,)), E).copy())
+        jumps = Jumps.empty((E * n, K + 1))
+        tv = np.zeros((E * n, K + 1, 2))
+        st_ready, st_off = np.zeros((E * n, K + 1), np.int64), np.zeros((E * n, K + 1), np.int64)
+        st_ready[:, 0], st_off[:, 0] = ready, off
     for k in range(K):
         if CANCEL is not None and CANCEL.is_set():
             raise PlanCancelled()
@@ -450,6 +487,33 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
             # integer endpoints are interpolated, with new private geometry only on the NEXT model step.
             geom.lock_context.pickup_after_step(s, s2, f)
             key_masks[:, :, k + 1] = s2["keys"].reshape(E, n)
+        if tp is not None:                           # game portals: after the guard, on the guarded motion
+            end, jf, enx, eny = tp.step(s["x"], s["y"], s2["x"], s2["y"], f, ready, off)
+            ready -= f
+            hit = np.nonzero(end >= 0)[0]
+            if len(hit):
+                e = end[hit]
+                v = (s2["vx"][hit] * (dt_ms / 1000.0), s2["vy"][hit] * (dt_ms / 1000.0))   # units / frame
+                rest = (f - jf[hit]).astype(np.float64)
+                at_exit = s2[hit].copy()
+                at_exit["x"], at_exit["y"] = tp.dst[e, 0], tp.dst[e, 1]
+                after = at_exit.copy()
+                after["x"], after["y"] = tp.dst[e, 0] + v[0] * rest, tp.dst[e, 1] + v[1] * rest
+                if terrain is not None and (rest > 0).any():
+                    moved = collide(terrain, at_exit, after, tol)
+                    if clip is not None:
+                        cflat = clip[:, :, k + 1].reshape(-1)
+                        cflat[hit] |= moved
+                        clip[:, :, k + 1] = cflat.reshape(E, n)
+                s2[hit] = after
+                jumps.at[hit, k + 1], jumps.frame[hit, k + 1] = True, jf[hit]
+                jumps.entry[hit, k + 1] = np.stack([enx[hit], eny[hit]], -1)
+                jumps.exit[hit, k + 1] = tp.dst[e]
+                tv[hit, k + 1] = np.stack(v, -1)
+                ready[hit] = jf[hit] + TELEPORT_COOLDOWN - f
+                off[hit] = tp.other[e]
+            off = tp.left(s2["x"], s2["y"], off)
+            st_ready[:, k + 1], st_off[:, k + 1] = ready, off
         s = s2
         al = al * (1.0 - pb[:, EVENTS["death"]])
         xs[:, :, k + 1], ys[:, :, k + 1] = s["x"].reshape(E, n), s["y"].reshape(E, n)
@@ -465,7 +529,15 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
     vx[:, :, 0] = np.tile(s0["vx"], E).reshape(E, n) * (dt_ms / 1000.0)
     vy[:, :, 0] = np.tile(s0["vy"], E).reshape(E, n) * (dt_ms / 1000.0)
     result = {"x": xs, "y": ys, "vx": vx, "vy": vy, "last": s.reshape(E, n), "alive": alive, "finish": fin,
-              "rows": rows, "steps": done, "clip": clip, "step": f}
+              "rows": rows, "steps": done, "clip": clip, "step": f, "jumps": None}
+    if tp is not None:
+        J = Jumps(jumps.at.reshape(E, n, K + 1), jumps.frame.reshape(E, n, K + 1),
+                  jumps.entry.reshape(E, n, K + 1, 2), jumps.exit.reshape(E, n, K + 1, 2))
+        if J.any():
+            tvr = tv.reshape(E, n, K + 1, 2)
+            vx[J.at], vy[J.at] = tvr[..., 0][J.at], tvr[..., 1][J.at]
+        result.update(jumps=J if J.any() else None, tp_ready=st_ready.reshape(E, n, K + 1),
+                      tp_off=st_off.reshape(E, n, K + 1))
     if key_pickup:
         result.update(keys=key_masks, key_pickup=key_pickup_policy(f))
     return result
@@ -581,7 +653,8 @@ def stall_penalty(stalled: float, best: float, t_end) -> np.ndarray:
     return np.where(np.isfinite(t_end) & (t_end <= best - STALL_STEP), 0.0, float(stalled))
 
 
-def corner_risk(ter: Terrain | None, xs, ys, frames, step: int, upto, bounds=None, offset: int = 0):
+def corner_risk(ter: Terrain | None, xs, ys, frames, step: int, upto, bounds=None, offset: int = 0,
+                jumps: Jumps | None = None):
     """Soft risk of passing a ledge's corner closer than the world model's error, when missing it is deadly.
     xs, ys (E, n, K+1) imagined positions (column k = frame k x step), frames their FrameBoxes (sweep's), ter the
     guard's tiles, upto (n,) the frames judged. A step whose x move is free as the guard saw it (its box, half
@@ -592,7 +665,8 @@ def corner_risk(ter: Terrain | None, xs, ys, frames, step: int, upto, bounds=Non
     slide (from the top down to the next floor, at most CORNER_FALL) touches a deadly box of the column or
     leaves the level, the step costs 1 - c / margin(k). offset: frames before column 0 (a completion's H; the
     margin is taken at offset + k, the frames reported are k). Returns (risk (E, n), frame (E, n), -1 none);
-    None without a guard map. A missed ledge with a safe floor below costs nothing (it only takes longer)."""
+    None without a guard map. A missed ledge with a safe floor below costs nothing (it only takes longer).
+    jumps (game.level.Jumps of xs' shape): a step through a game portal passes no ledge (it is not a move)."""
     if ter is None:
         return None
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
@@ -602,12 +676,16 @@ def corner_risk(ter: Terrain | None, xs, ys, frames, step: int, upto, bounds=Non
     lim = np.broadcast_to(np.asarray(upto, np.int64)[None, :], (E, n)).reshape(P)
     risk, at = np.zeros(P), np.full(P, -1, np.int64)
     half = BODY - SIDE_SHRINK
+    jat = None if jumps is None or not jumps.any() else jumps.at.reshape(P, K1)
     for k in range(1, K1):
         fk = k * step
         x0, y0, x1, y1 = X[:, k - 1], Y[:, k - 1], X[:, k], Y[:, k]
         dx = x1 - x0
         d = float(S.margin(offset + fk))
-        i = np.nonzero((np.abs(dx) > 1e-6) & (fk <= lim))[0]
+        moves = (np.abs(dx) > 1e-6) & (fk <= lim)
+        if jat is not None:
+            moves &= ~jat[:, k]
+        i = np.nonzero(moves)[0]
         if not len(i):
             continue
         m = len(i)                                           # as imagined, then 1/4 .. 4/4 of d lower (a
@@ -1728,6 +1806,7 @@ class _StepFloor:
 
 class Planner:
     """One planner per level (several agents may share it; the previous plan is kept per agent)."""
+    teleports: Teleports | None = None               # the level's game portals (set_level; None: none)
 
     def __init__(self, model, level, field: ProgressField, H: int = H_DEFAULT, B1: int = B1_DEFAULT,
                  branch: int = BRANCH_DEFAULT, S_final: int = S_DEFAULT, budget_ms: float | None = BUDGET_MS,
@@ -1801,6 +1880,9 @@ class Planner:
         self.key_boxes = list(getattr(level, "key_boxes", list)())
         self.memory = memory if memory is not None else FailureMemory()
         self.route = RouteBook(level)
+        self.teleports = Teleports.of(level)          # the level's game portals (None: it has none)
+        self._tp_seen: dict[int, tuple] = {}          # agent -> (wave frame, x, y) of its last real state
+        self._tp_last: dict[int, int] = {}            # agent -> wave frame of its last real teleport
         self.trials = RouteTrials(self.trial_gain)
         if self.moves is not None:
             self.moves.set_level(getattr(level, "name", None))
@@ -1878,13 +1960,14 @@ class Planner:
             s = self.stalls[int(agent)] = {"best": float(T0), "since": int(frame)}
         return max(0.0, float(frame - s["since"]) - self.stall_free), s["best"]
 
-    def _corner(self, xs, ys, frames, upto, keys):
+    def _corner(self, xs, ys, frames, upto, keys, jumps=None):
         """corner_risk of imagined paths on the guard's tiles for these keys (None with the guard or the rule off),
-        over every frame the score credits (a pad tail's landing too: its T is credited)."""
+        over every frame the score credits (a pad tail's landing too: its T is credited); jumps: their
+        teleports."""
         if not self.corner:
             return None
         return corner_risk(self.guard_terrain(keys), xs, ys, frames, self.f, np.broadcast_to(upto, xs.shape[1]),
-                           self.bounds)
+                           self.bounds, jumps=jumps)
 
     def support_terrain(self, keys=0):
         """Private support geometry, keeping slopes (the guard intentionally uses a separate geometry)."""
@@ -1895,14 +1978,44 @@ class Planner:
             self._support_keys[mask] = self.terrain.opened(self.geom.lock_context.opened_cells(mask))
         return self._support_keys[mask]
 
-    def imagine_options(self, keys=0, frame=None):
+    def imagine_options(self, keys=0, frame=None, agent=None):
         """imagine()'s guard and tile options for rollouts that start at wave frame `frame` (default: the frame of
-        the decision being made, Planner.plan's; the crumble stages are counted from it)."""
+        the decision being made, Planner.plan's; the crumble stages are counted from it). On a level with game
+        portals also the teleports and the agent's cooldown left at that frame (tp_ready: its last real
+        teleport, Planner.observe; an unknown agent: none)."""
         per_mask = self.key_pickup and self.collide_tol is not None
-        return {"terrain": self.guard_terrain(keys), "tol": self.collide_tol,
-                "key_pickup": self.key_pickup,
-                "terrain_for_mask": self.guard_terrain if per_mask else None,
-                "stages": self.crumble_stages(keys, self._now if frame is None else frame, per_mask)}
+        at = self._now if frame is None else frame
+        out = {"terrain": self.guard_terrain(keys), "tol": self.collide_tol,
+               "key_pickup": self.key_pickup,
+               "terrain_for_mask": self.guard_terrain if per_mask else None,
+               "stages": self.crumble_stages(keys, at, per_mask)}
+        if self.teleports is not None:
+            out.update(teleports=self.teleports, tp_ready=self.tp_ready(agent, at))
+        return out
+
+    # ---- game portals ---------------------------------------------------------------------------------------
+    def tp_ready(self, agent, frame: int) -> int:
+        """imagine()'s tp_ready for a rollout of this agent from wave frame `frame`: the first frame it may
+        teleport on, TELEPORT_COOLDOWN after its last real teleport (0: any; no agent or none seen: 0)."""
+        last = None if agent is None else self._tp_last.get(int(agent))
+        return 0 if last is None else max(0, int(last) + TELEPORT_COOLDOWN - int(frame))
+
+    def path_jumps(self, xs, ys):
+        """A recorded or per-frame path's teleports on a level with game portals (game.level.teleport_jumps: a
+        one-frame move longer than TELEPORT_JUMP), else None."""
+        return None if self.teleports is None else teleport_jumps(xs, ys)
+
+    def _tp_observe(self, agent: int, frame: int, x: float, y: float, dead: bool):
+        """A real state: a one-frame move longer than TELEPORT_JUMP onto a portal end's centre is a teleport
+        (its wave frame: the cooldown of this agent's rollouts)."""
+        agent = int(agent)
+        if dead:
+            self._tp_seen.pop(agent, None)
+            return
+        prev = self._tp_seen.get(agent)
+        if prev is not None and int(frame) == prev[0] + 1 and                 math.hypot(x - prev[1], y - prev[2]) > TELEPORT_JUMP and                 float(np.hypot(self.teleports.dst[:, 0] - x, self.teleports.dst[:, 1] - y).min()) < 1.0:
+            self._tp_last[agent] = int(frame)
+        self._tp_seen[agent] = (int(frame), float(x), float(y))
 
     # ---- crumble blocks: gone CRUMBLE_DELAY frames after a touch -----------------------------------------------
     def touch(self, frame: int, x: float, y: float):
@@ -1972,6 +2085,7 @@ class Planner:
         self.long = {}                               # agent -> the last long-safe plan {frame, actions, segs, valid}
         self.crumble, self._stages = {}, {}          # the level is whole again
         self.stalls = {}                             # agent -> {"best": lowest T reached, "since": its wave frame}
+        self._tp_seen, self._tp_last = {}, {}        # no teleport yet this wave
         self.memory.new_wave()
         self.route.new_wave()
         if self.moves is not None:
@@ -2054,26 +2168,27 @@ class Planner:
             leg = int(leg) if np.ndim(leg) == 0 else leg
         return self.field.times(x, y, leg, sup, vy), sup, g, side, leg
 
-    def _path_keys(self, xs, ys, keys=0, upto=None, death=None):
+    def _path_keys(self, xs, ys, keys=0, upto=None, death=None, jumps=None):
         if death is not None:
             end = (xs.shape[-1] - 1) * self.f if upto is None else upto
             upto = np.minimum(end, np.where(death > 0, death - 1, end))
-        return self.geom.lock_context.pickup_path(xs, ys, keys, self.f, upto)
+        return self.geom.lock_context.pickup_path(xs, ys, keys, self.f, upto, jumps=jumps)
 
-    def _contacts(self, xs, ys, upto, death, leg: int, initial_keys=0):
+    def _contacts(self, xs, ys, upto, death, leg: int, initial_keys=0, jumps=None):
         """Goal and key contact of paths xs, ys (E, n, K+1 columns of self.f frames; every frame in and out is a
         frame) on their frames 1..upto ((n,), None: all K), given
         each path's first deadly contact frame `death` (E, n) (plan.safety.Sweep.contact_frame, -1 none).
         Returns goal (E, n): the first frame touching a goal before any deadly contact (-1 none); legs (E, n):
         the leg derived from private masks before any deadly contact; keys: per newly touched key
         (key index, pickup frame (E, n) or -1, key index (E, n) or -1). Native keys are not route-order gated.
-        key_pickup=False disables state/geometry dynamics only, not this geometric contact scoring rule."""
+        key_pickup=False disables state/geometry dynamics only, not this geometric contact scoring rule.
+        jumps: the paths' teleports (game.level.Jumps; never a contact across one)."""
         E, n = xs.shape[:2]
         f = self.f
         safe = lambda t: (t > 0) & ((death < 0) | (death > t))
-        g, _ = S.first_contact(xs, ys, self.goal_boxes, upto=upto, step=f)
+        g, _ = S.first_contact(xs, ys, self.goal_boxes, upto=upto, step=f, jumps=jumps)
         goal = np.where(safe(g), g, -1)
-        masks, touches = self._path_keys(xs, ys, initial_keys, upto, death)
+        masks, touches = self._path_keys(xs, ys, initial_keys, upto, death, jumps)
         legs = self.field.leg_of(masks[..., -1])
         keys = [(k, touches[..., k], np.where(touches[..., k] > 0, k, -1))
                 for k in range(len(self.geom.lock_context.keys)) if (touches[..., k] > 0).any()]
@@ -2087,6 +2202,8 @@ class Planner:
         book's record (RouteBook.observe; held: the buttons held before this frame's action, None: unknown) and,
         on a death (cause: what killed it, for the log), the point of no return (MoveMemory.died)."""
         ev = self.surprise.observe(agent, frame, x, y, dead)
+        if self.teleports is not None:
+            self._tp_observe(agent, frame, float(x), float(y), dead)
         if not dead:
             self.touch(int(frame), float(x), float(y))
             self.visit(float(x), float(y))
@@ -2140,7 +2257,7 @@ class Planner:
                 "route_book": None if book is before else book}
 
     # ---- airborne completion -----------------------------------------------------------------------------
-    def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H):
+    def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H, tp=None):
         """C1b: from each candidate's main-member end row at H (rows (m,) ROW, its last action a_last (m,), its
         leg there legs (m,)), the continuation fan (continuations()) rolled out with the main member up to
         complete_max frames in batches of COMPLETE_CHUNK (rows that landed or died stop; all stopped: early
@@ -2149,7 +2266,9 @@ class Planner:
         (the last given frame's boxes beyond the inputs). Returns per candidate (estimate frames after H,
         completion risk 0 / 1, the record {continuation, frames, x, y, on, died}, its path [[x, y], ...]) and
         the frames rolled out. A step-f model: complete_max and the batches round up to whole steps; the paths
-        are per step, every frame reported is a frame."""
+        are per step, every frame reported is a frame. tp: on a level with game portals, the rows' (tp_ready,
+        tp_off) at H (imagine's, of the rollouts they end); a path through a portal has "jumps" in its record
+        (the path points reached by a teleport)."""
         m_all = len(rows)
         f = self.f
         fan = [continuations(a) for a in a_last]
@@ -2178,6 +2297,13 @@ class Planner:
         last_vy = vy0.copy()
         mem = slice(self.member, self.member + 1)
         ck = self.imagine_options(keys)
+        portals = "teleports" in ck
+        if portals:                                  # each row's teleport state, carried from chunk to chunk
+            tp_r = np.repeat(np.asarray(tp[0], np.int64), nf) if tp is not None else np.full(n, int(ck["tp_ready"]))
+            tp_o = np.repeat(np.asarray(tp[1], np.int64), nf) if tp is not None else None
+            if tp_o is None:
+                tp_o = self.teleports.start_off(s["x"], s["y"])
+            Jc = Jumps.empty((n, Kmax // f + 1))
         done, rolled = 0, 0
         clipped = np.zeros(n, bool)
         while done < Kmax:
@@ -2186,17 +2312,22 @@ class Planner:
                 break
             K = min(chunk, Kmax - done)
             Kc, dc = K // f, done // f                   # columns of this batch, columns done
+            if portals:
+                ck = {**ck, "tp_ready": tp_r[act_i], "tp_off": tp_o[act_i]}
             out = imagine(self.model, mem, self.geom, s[act_i], np.repeat(acts[act_i, None], K, 1), dt_ms, worlds,
                           offsets=np.full(len(act_i), H + done), **ck)
             rolled += len(act_i) * K
             if out["clip"] is not None:
                 clipped[act_i] |= out["clip"][0].any(1)
             x, y, vy = out["x"][0], out["y"][0], out["vy"][0]               # (a, Kc+1)
+            jo = out.get("jumps")
             fr = [frames[min(H + done + k * f, len(frames) - 1)] if k else None for k in range(Kc + 1)]
             fr = _near_frames(fr, x[None], y[None])
-            sw = S.sweep(x[None], y[None], fr, self.bounds, self.floor_for(worlds, H + done), f)
+            sw = S.sweep(x[None], y[None], fr, self.bounds, self.floor_for(worlds, H + done), f,
+                         jumps=None if jo is None else jo[0:1])
             cf = sw.contact_frame[0]
-            tg = S.first_contact(x[None], y[None], self.goal_boxes, step=f)[0][0] if len(self.goal_boxes) else \
+            tg = S.first_contact(x[None], y[None], self.goal_boxes, step=f,
+                                 jumps=None if jo is None else jo[0:1])[0][0] if len(self.goal_boxes) else \
                 np.full(len(act_i), -1)
             masks = out["keys"][0, :, 1:] if self.key_pickup else np.broadcast_to(s["keys"][act_i, None], x[:, 1:].shape)
             sup, g, side = self.support(x[:, 1:], y[:, 1:], vy[:, 1:], keys=masks,
@@ -2209,7 +2340,8 @@ class Planner:
                 t, kd = min(ev, key=lambda e: (e[0], -e[1]))     # same frame: a deadly contact, then the goal, then support
                 state[r], at[r] = kd, done + t
                 if self.key_pickup:
-                    endpoint_masks[r] = self._path_keys(x[j:j + 1], y[j:j + 1], s["keys"][r], upto=t)[0][0, -1]
+                    endpoint_masks[r] = self._path_keys(x[j:j + 1], y[j:j + 1], s["keys"][r], upto=t,
+                                                        jumps=None if jo is None else jo[0, j:j + 1])[0][0, -1]
                     leg[r] = self.field.leg_of(endpoint_masks[r])
                 tc = t // f
                 if kd == 1:
@@ -2221,9 +2353,15 @@ class Planner:
                     hit[r] = S.contact_id(kind, sw.ids, sw.contact_box[0, j])
                 xs[r, dc + 1:dc + tc + 1], ys[r, dc + 1:dc + tc + 1] = x[j, 1:tc + 1], y[j, 1:tc + 1]
                 xs[r, dc + tc + 1:], ys[r, dc + tc + 1:] = x[j, tc], y[j, tc]
+                if jo is not None:
+                    Jc.put((r, slice(dc + 1, dc + tc + 1)), jo[0, j, 1:tc + 1])
             fly = state[act_i] == 0
             fi = act_i[fly]
             xs[fi, dc + 1:dc + Kc + 1], ys[fi, dc + 1:dc + Kc + 1] = x[fly, 1:], y[fly, 1:]
+            if portals:
+                if jo is not None:
+                    Jc.put((fi, slice(dc + 1, dc + Kc + 1)), jo[0, np.nonzero(fly)[0], 1:])
+                tp_r[fi], tp_o[fi] = out["tp_ready"][0, fly, -1], out["tp_off"][0, fly, -1]
             last_vy[fi] = vy[fly, -1]
             s[fi] = out["last"][0][fly]
             endpoint_masks[fi] = s["keys"][fi]
@@ -2233,8 +2371,10 @@ class Planner:
         # the scores
         end_c = np.where(at >= 0, at, done) // f
         fr_all = [frames[min(H + k * f, len(frames) - 1)] for k in range(xs.shape[1])]
+        Jc = Jc if portals and Jc.any() else None
         corner = corner_risk(self.guard_terrain(keys) if self.corner else None, xs[None], ys[None], fr_all, f,
-                             np.where(at >= 0, at, done), self.bounds, offset=H)
+                             np.where(at >= 0, at, done), self.bounds, offset=H,
+                             jumps=None if Jc is None else Jc[None])
         corner = corner[0][0] if corner is not None else np.zeros(n)
         xe, ye = xs[np.arange(n), end_c], ys[np.arange(n), end_c]
         t_land = np.where(state == 2, 0.0, np.inf)
@@ -2271,6 +2411,8 @@ class Planner:
                    "hits": {names[j]: hit[j] for j in idx if state[j] == 3}}
             if risk == 0 and corner[i] > 0:          # a landing past a ledge's corner closer than the error
                 rec["corner_risk"] = round(float(corner[i]), 3)
+            if Jc is not None and Jc.at[i, :kk // f + 1].any():   # through a game portal (drawing: a break)
+                rec["jumps"] = [k for k in Jc.indices(i) if k <= kk // f]
             res.append((float(est), max(float(risk), float(corner[i])), rec,
                         [[float(a), float(b)] for a, b in zip(xs[i, :kk // f + 1], ys[i, :kk // f + 1])]))
         self.completion_clipped = getattr(self, "completion_clipped", 0) + int(clipped.sum())
@@ -2348,7 +2490,8 @@ class Planner:
                "x": np.asarray(xs, np.float64), "y": np.asarray(ys, np.float64)}
         if W >= 1:
             X, Y = xs[None, None, :], ys[None, None, :]
-            sw = S.sweep(X, Y, _near_frames(frames[:W + 1], X, Y), self.bounds, self.floor_for(worlds), 1)
+            sw = S.sweep(X, Y, _near_frames(frames[:W + 1], X, Y), self.bounds, self.floor_for(worlds), 1,
+                         jumps=self.path_jumps(X, Y))      # a game portal crossed: never the line across
             cf = int(sw.contact_frame[0, 0])
             c = sw.step_clear[0, 0]
             ks = np.arange(1, W + 1)
@@ -2415,7 +2558,7 @@ class Planner:
         mem = slice(self.member, self.member + 1)
         timing, counts = {}, {}
         gt = self.guard_terrain(keys)
-        ck = self.imagine_options(keys)
+        ck = self.imagine_options(keys, agent=agent)
         n_clip = lambda c, upto=None: 0 if c is None else int(
             (c if upto is None else c & (np.arange(c.shape[2])[None, None, :] <= np.asarray(upto)[None, :, None]))
             .any(axis=(0, 2)).sum())
@@ -2451,9 +2594,11 @@ class Planner:
         end1 = steps1 * f                            # one end frame for every move (rolled to the same length)
         fr1 = _near_frames(_cols(frames, steps1 + 1, f), out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1])
         floor0 = self.floor_for(worlds)              # the map-bottom rule of rollouts from the decision frame
-        sw1 = S.sweep(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], fr1, self.bounds, floor0, f)
+        J1 = out1["jumps"]                           # teleports (game portals; None: none)
+        sw1 = S.sweep(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1], fr1, self.bounds, floor0, f,
+                      jumps=J1)
         tg1, legs1, _ = self._contacts(out1["x"][:, :, :steps1 + 1], out1["y"][:, :, :steps1 + 1],
-                                       None, sw1.contact_frame, leg, keys)
+                                       None, sw1.contact_frame, leg, keys, jumps=J1)
         tg1, legs1 = tg1[0], legs1[0]
         succ1 = tg1 > 0
         # safety over every frame the score credits: the estimate is taken at the common end (a success: its goal
@@ -2465,9 +2610,9 @@ class Planner:
                                                      early_margin=self.early_margin,
                                                      corner=self._corner(out1["x"][:, :, :steps1 + 1],
                                                                          out1["y"][:, :, :steps1 + 1], fr1,
-                                                                         np.where(succ1, tg1, end1), keys))
+                                                                         np.where(succ1, tg1, end1), keys, J1))
         xe1, ye1, vye1 = out1["x"][0, :, steps1], out1["y"][0, :, steps1], out1["vy"][0, :, steps1]
-        masks1 = self._path_keys(out1["x"], out1["y"], keys, death=sw1.contact_frame)[0][0, :, -1]
+        masks1 = self._path_keys(out1["x"], out1["y"], keys, death=sw1.contact_frame, jumps=J1)[0][0, :, -1]
         tend1 = ends_time(xe1, ye1, vye1, legs1, masks1, end1)
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
         death1 = np.array([death_of(m.name) for m in self.lib])
@@ -2511,10 +2656,16 @@ class Planner:
                         + ([("pad", L2, H)] if L2 < H else []))
                 cands.append((segs, full))
         s0 = np.array(s0, ROW)
-        out2 = imagine(self.model, mem, self.geom, s0, np.stack(acts2), dt_ms, worlds, offsets=offs, **ck)
+        ck2 = ck
+        if J1 is not None or "tp_ready" in ck:       # game portals: each continuation goes on from its prefix's
+            cols1 = np.array(offs) // f                 # cooldown and kept-off end at its start column
+            ck2 = {**ck, "tp_ready": out1["tp_ready"][0, firsts, cols1], "tp_off": out1["tp_off"][0, firsts, cols1]}
+        out2 = imagine(self.model, mem, self.geom, s0, np.stack(acts2), dt_ms, worlds, offsets=offs, **ck2)
         steps2 = out2["steps"]
         n2 = len(cands)
         xs2, ys2 = np.zeros((1, n2, Hc + 1)), np.zeros((1, n2, Hc + 1))
+        J2o = out2["jumps"]
+        J2 = Jumps.empty((1, n2, Hc + 1)) if J1 is not None or J2o is not None else None
         vye2 = np.zeros(n2)
         up2 = np.zeros(n2, np.int64)
         for c in range(n2):
@@ -2523,18 +2674,27 @@ class Planner:
             xs2[0, c, :L + 1], ys2[0, c, :L + 1] = out1["x"][0, i, :L + 1], out1["y"][0, i, :L + 1]
             xs2[0, c, L + 1:L + m + 1], ys2[0, c, L + 1:L + m + 1] = out2["x"][0, c, 1:m + 1], out2["y"][0, c, 1:m + 1]
             xs2[0, c, L + m + 1:], ys2[0, c, L + m + 1:] = xs2[0, c, L + m], ys2[0, c, L + m]
+            if J2 is not None:
+                if J1 is not None:
+                    J2.put((0, c, slice(0, L + 1)), J1[0, i, :L + 1])
+                if J2o is not None:
+                    J2.put((0, c, slice(L + 1, L + m + 1)), J2o[0, c, 1:m + 1])
             up2[c] = (L + m) * f
             vye2[c] = out2["vy"][0, c, m] if m > 0 else out1["vy"][0, i, L]
         K = int(up2.max()) // f
+        J2K = None if J2 is None or not J2.any() else J2.cols(K + 1)
         fr2 = _near_frames(_cols(frames, K + 1, f), xs2[:, :, :K + 1], ys2[:, :, :K + 1])
-        sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds, floor0, f)
-        tg2, legs2, _ = self._contacts(xs2[:, :, :K + 1], ys2[:, :, :K + 1], up2, sw2.contact_frame, leg, keys)
+        sw2 = S.sweep(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, self.bounds, floor0, f, jumps=J2K)
+        tg2, legs2, _ = self._contacts(xs2[:, :, :K + 1], ys2[:, :, :K + 1], up2, sw2.contact_frame, leg, keys,
+                                       jumps=J2K)
         tg2, legs2 = tg2[0], legs2[0]
         succ2 = tg2 > 0
         win2 = np.where(succ2, np.minimum(up2, tg2), up2)
         veto2, vf2, _, _, soft2, _ = _verdict(sw2, win2, early_margin=self.early_margin,
-                                              corner=self._corner(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, win2, keys))
-        masks2 = self._path_keys(xs2[:, :, :K + 1], ys2[:, :, :K + 1], keys, up2, sw2.contact_frame)[0][0, :, -1]
+                                              corner=self._corner(xs2[:, :, :K + 1], ys2[:, :, :K + 1], fr2, win2, keys,
+                                                                  J2K))
+        masks2 = self._path_keys(xs2[:, :, :K + 1], ys2[:, :, :K + 1], keys, up2, sw2.contact_frame,
+                                 J2K)[0][0, :, -1]
         tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2, masks2, up2)
         pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
         pen2 = pen2 + np.where(succ2, 0.0, stall_penalty(stalled, t_best, self._tt(tend2))
@@ -2670,9 +2830,11 @@ class Planner:
         planned3 = np.minimum(np.maximum(-(-planned3 // f) * f, S.VETO_FRAMES), H)   # step-f model: step boundary
         out3 = imagine(self.model, slice(None), self.geom, np.repeat(row, n3), acts3, dt_ms, worlds, **ck)
         E = out3["x"].shape[0]
+        J3 = out3["jumps"]
         fr3 = _near_frames(_cols(frames, Hc + 1, f), out3["x"], out3["y"])
-        saf = S.check(out3["x"], out3["y"], fr3, self.bounds, floor0, f)
-        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], None, saf.sweep.contact_frame, leg, keys)
+        saf = S.check(out3["x"], out3["y"], fr3, self.bounds, floor0, f, jumps=J3)
+        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], None, saf.sweep.contact_frame, leg, keys,
+                                              jumps=J3)
         n_goal = (tg_e > 0).sum(0)                                   # members touching the goal safely
         succ3 = 2 * n_goal > E
         tg3 = np.full(n3, -1, np.int64)
@@ -2684,10 +2846,10 @@ class Planner:
         vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3, planned=pl3,
                                                  quorum=self.veto_members, members=self.risk_members,
                                                  early_margin=self.early_margin,
-                                                 corner=self._corner(out3["x"], out3["y"], fr3, win3, keys))
+                                                 corner=self._corner(out3["x"], out3["y"], fr3, win3, keys, J3))
         saf = replace(saf, veto=vv, veto_frame=vfr, veto_kind=vkd, veto_id=vid, soft_risk=vsoft, soft_frame=vsf)
         xe, ye, vye = out3["x"][:, :, Hc], out3["y"][:, :, Hc], out3["vy"][:, :, Hc]
-        masks3 = self._path_keys(out3["x"], out3["y"], keys, death=saf.sweep.contact_frame)[0][..., -1]
+        masks3 = self._path_keys(out3["x"], out3["y"], keys, death=saf.sweep.contact_frame, jumps=J3)[0][..., -1]
         tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, masks3, legs_e, vye, at=H, worlds=worlds)   # private mask
         vend_e = self.value(xe, ye, masks3, legs_e, vye, at=H, worlds=worlds)[0]    # V: display only
         lands = 2 * sup_e.sum(0) > E                                 # a majority of members supported at H
@@ -2726,8 +2888,9 @@ class Planner:
         self.completion_clipped = 0
         if len(need):
             mi = min(self.member, E - 1)
+            tp3 = None if "tp_ready" not in out3 else (out3["tp_ready"][mi, need, Hc], out3["tp_off"][mi, need, Hc])
             res, rolled = self.complete(out3["last"][mi, need], acts3[need, H - 1], legs_e[mi, need], worlds,
-                                        frames, dt_ms, keys, H)
+                                        frames, dt_ms, keys, H, tp=tp3)
             for c, (est, risk, rec, path) in zip(need, res):
                 base3[c] = H + est
                 comp_risk[c], comp_rec[c], comp_path[c] = risk, rec, path
@@ -2740,7 +2903,8 @@ class Planner:
         death3 = np.array([death_of(nm) for nm in first_name])
         soft3 = np.minimum(saf.soft_risk + comp_risk, 1.0)          # one death at most
         risk3 = scale * soft3
-        novel3 = self.novelty(out3["x"].mean(0), out3["y"].mean(0)) if stalled > 0 else np.zeros(n3)
+        MX, MY, JM = member_mean(out3["x"], out3["y"], J3)              # the members' mean paths (per column)
+        novel3 = self.novelty(MX, MY) if stalled > 0 else np.zeros(n3)
         stall3 = np.where(succ3, 0.0, stall_penalty(stalled, t_best, t_end3) * (1.0 - novel3))
         est3 = base3 + risk3 + fail3 + death3 + stall3
         total3 = ranked(saf.veto, saf.veto_frame, est3, soft3)
@@ -2838,9 +3002,10 @@ class Planner:
 
         # ---- explanation -----------------------------------------------------------------------------------
         segs, acts = final[best]
-        mx, my = out3["x"][:, best].mean(0), out3["y"][:, best].mean(0)            # per column (step)
+        mx, my = MX[best], MY[best]                                  # per column (step)
+        jb = None if JM is None or not JM.at[best].any() else JM[best:best + 1]     # its teleports (1, Hc+1)
         spread = np.sqrt(out3["x"][:, best].var(0) + out3["y"][:, best].var(0))
-        display_keys = self._path_keys(mx[None], my[None], keys)[0][0, ::f]
+        display_keys = self._path_keys(mx[None], my[None], keys, jumps=jb)[0][0, ::f]
         cols = np.arange(Hc + 1) * f                 # the columns' frames (the bars there)
         _, g, side = self.support(mx, my, keys=display_keys, at=cols, worlds=worlds)
         sup = g | (side != 0)
@@ -2851,7 +3016,11 @@ class Planner:
                       for k in range(Hc) if side[k] != 0 and not g[k] and jump[k * f] and (k == 0 or not jump[k * f - 1])]
         if f > 1:                                    # the chosen path per frame (commit tube, overlay, viewer)
             fr_c, fr_all = np.arange(Hc + 1) * f, np.arange(H + 1)
-            mx, my, spread = (np.interp(fr_all, fr_c, v) for v in (mx, my, spread))
+            if jb is None:
+                mx, my, spread = (np.interp(fr_all, fr_c, v) for v in (mx, my, spread))
+            else:                                    # through a game portal: a step at the teleport frame
+                mx, my = (v[0] for v in frame_path(mx[None], my[None], f, jb))
+                spread = np.interp(fr_all, fr_c, spread)
         real_best = real is not None and best == gi
         path_step = 1 if real_best else f
         if real_best:                                # the route's recorded real path is the prediction
@@ -2876,7 +3045,8 @@ class Planner:
         parts = {"base": base3, "t_end": t_end3, "comp_death": comp_risk, "risk": risk3, "fail": fail3, "death": death3,
                  "est": est3, "soft": soft3, "first": first_name, "stall": stall3, "stalled": stalled}
         alts = self._alternatives(final, best, saf, parts, total3, T0, cell0, scale, veto1, vf1, vk1, vid1, est1,
-                                  paths=(out3["x"].mean(0), out3["y"].mean(0), out1["x"][0], out1["y"][0], uc1),
+                                  paths=(MX, MY, out1["x"][0], out1["y"][0], uc1, JM,
+                                         None if J1 is None else J1[0]),
                                   goal=(succ3, tg3, n_goal, E), switch=switch)
         veto = None
         if saf.veto[best]:
@@ -2978,12 +3148,15 @@ class Planner:
             self.stalls[agent] = _copy_state(eff["stall"])
         return getattr(plan, "route_trial", None)
 
-    def predict_start(self, row, actions, worlds: list, dt_ms: float = 16.667, frame: int | None = None):
+    def predict_start(self, row, actions, worlds: list, dt_ms: float = 16.667, frame: int | None = None,
+                      agent: int | None = None):
         """The agent's state after it plays `actions` (frames, a whole number of model steps) from `row`, as the
-        ensemble imagines it with the collision guard: the member row nearest the members' mean position, and
-        the members' largest distance from that mean (units). agent.py --async-plan plans from it while those
+        ensemble imagines it with the collision guard: the member row nearest the members' mean position (members
+        on both sides of a game portal: of the side most of them are on), and the members' largest distance from
+        that mean (units). agent.py --async-plan plans from it while those
         frames play. worlds: at least len(actions) World (index k = row's frame + k). frame: the row's wave frame
-        (the crumble stages count from it; None: no tile is expected to break on the way).
+        (the crumble stages count from it; None: no tile is expected to break on the way). agent: whose state it
+        is (a game portal's cooldown after its last real teleport; None: unknown, none).
         On the best route (RouteBook's composite): when `row` is the route's state at the same frame (composite
         time; within AHEAD_EXACT units and units / frame, the same key mask where it is known), `actions` are the
         route's recorded contiguous actions from there, the portals crossed on the way jump at most REAL_RADIUS
@@ -2999,13 +3172,17 @@ class Planner:
         acts = np.asarray(actions, np.int64).reshape(1, -1)
         if acts.shape[1] % self.f:
             raise ValueError(f"a prediction ahead needs whole model steps of {self.f} frames")
-        opts = self.imagine_options(int(row["keys"][0]), frame=frame if frame is not None else 0)
+        opts = self.imagine_options(int(row["keys"][0]), frame=frame if frame is not None else 0, agent=agent)
         if frame is None:
             opts["stages"] = None
         out = imagine(self.model, slice(None), self.geom, row, acts, dt_ms, worlds, **opts)
         last = out["last"][:, 0]
-        d = np.hypot(last["x"] - last["x"].mean(), last["y"] - last["y"].mean())
-        pred = last[int(np.argmin(d))].reshape(1).copy()
+        side = np.arange(len(last))
+        if out["jumps"] is not None:                 # members on both sides of a game portal: the side most are on
+            cnt = out["jumps"].at[:, 0].sum(1)
+            side = np.nonzero(cnt == cnt[int((cnt[:, None] == cnt[None, :]).sum(1).argmax())])[0]
+        d = np.hypot(last["x"] - last["x"][side].mean(), last["y"] - last["y"][side].mean())
+        pred = last[int(side[np.argmin(d[side])])].reshape(1).copy()
         k = self._route_ahead(row, acts[0], frame, dt_ms)
         if k is None:
             return pred, float(d.max())
@@ -3054,20 +3231,21 @@ class Planner:
         charged), sweep}. A success: every member touches the goal before any deadly contact."""
         f = self.f
         x, y = out["x"], out["y"]
+        J = out.get("jumps")
         E, n, K1 = x.shape
         fr = _near_frames(_cols(frames, K1, f), x, y)
-        sw = S.sweep(x, y, fr, self.bounds, self.floor_for(worlds), f)
-        tg_e, legs_e, _ = self._contacts(x, y, upto, sw.contact_frame, leg, keys)
+        sw = S.sweep(x, y, fr, self.bounds, self.floor_for(worlds), f, jumps=J)
+        tg_e, legs_e, _ = self._contacts(x, y, upto, sw.contact_frame, leg, keys, jumps=J)
         succ = (tg_e > 0).all(0)
         tg = np.where(succ, tg_e.max(0), -1)
         win = np.where(succ, np.minimum(upto, tg), upto)
         veto, vf, _, _, soft, _ = _verdict(sw, win, quorum=self.veto_members, members=self.risk_members,
                                            early_margin=self.early_margin,
-                                           corner=self._corner(x, y, fr, win, keys))
+                                           corner=self._corner(x, y, fr, win, keys, J))
         uc = np.asarray(upto) // f
         ar = np.arange(n)
         xe, ye, vye = x[:, ar, uc], y[:, ar, uc], out["vy"][:, ar, uc]
-        masks = self._path_keys(x, y, keys, upto, sw.contact_frame)[0][..., -1]
+        masks = self._path_keys(x, y, keys, upto, sw.contact_frame, J)[0][..., -1]
         tend = self._tt(self.time_to_go(xe, ye, masks, legs_e, vye, at=np.broadcast_to(upto, xe.shape),
                                         worlds=worlds)[0]).mean(0)
         return {"veto": veto, "veto_frame": vf, "soft": soft, "succ": succ, "tg": tg, "tend": tend, "sweep": sw}
@@ -3130,11 +3308,13 @@ class Planner:
             pts += [list(q) for q in prev.path[k0 + 1:k0 + REFLEX_WINDOW + 1]]
         pts += [pts[-1]] * (REFLEX_WINDOW + 1 - len(pts))
         p = np.asarray(pts, np.float64)
+        jp = self.path_jumps(p[:, 0], p[:, 1])      # a teleport on the path: its end only
         for k in range(1, REFLEX_WINDOW + 1):
             fb = frames[min(k, len(frames) - 1)]
             if fb is None or not len(fb):
                 continue
-            clear, _ = S.segment_clearance(p[k - 1:k, 0], p[k - 1:k, 1], p[k:k + 1, 0], p[k:k + 1, 1], fb)
+            a = k if jp is not None and jp.at[k] else k - 1
+            clear, _ = S.segment_clearance(p[a:a + 1, 0], p[a:a + 1, 1], p[k:k + 1, 0], p[k:k + 1, 1], fb)
             if clear.size and float(clear.min()) < REFLEX_NEAR:
                 return True
         return False
@@ -3176,7 +3356,7 @@ class Planner:
         E_all = len(self.model.members)
         a, b = MEMBERS["explore"]
         mem = slice(min(a, E_all - 2), min(b, E_all - 1) + 1)
-        ck = self.imagine_options(keys)
+        ck = self.imagine_options(keys, agent=agent)
         out = imagine(self.model, mem, self.geom, np.repeat(row, n), acts, dt_ms, worlds, **ck)
         up = np.full(n, H, np.int64)
         j = self._judge(out, frames, up, leg, keys, worlds)
@@ -3188,9 +3368,13 @@ class Planner:
         else:
             c = int(np.lexsort((est, -j["veto_frame"]))[0])
         Hc = H // f
-        mx, my = x[:, c].mean(0), y[:, c].mean(0)
-        if f > 1:
+        J = out.get("jumps")
+        mx, my, jm = member_mean(x[:, c:c + 1], y[:, c:c + 1], None if J is None else J[:, c:c + 1])
+        mx, my = mx[0], my[0]
+        if f > 1 and (jm is None or not jm.any()):
             mx, my = (np.interp(np.arange(H + 1), np.arange(Hc + 1) * f, v) for v in (mx, my))
+        elif f > 1:                                  # through a game portal: a step at the teleport frame
+            mx, my = (v[0] for v in frame_path(mx[None], my[None], f, jm))
         name = self.lib[c].name
         L = int(self.lib_len[c])
         ms = 1000 * (time.perf_counter() - t0)
@@ -3284,19 +3468,27 @@ class Planner:
         parts: the final candidates' frames {base (frames used + T at the end), risk, fail, death, est (the
         estimate), soft (soft risk), first (first move names)}.
 
-        With `paths` (final mean x, y (n3, H+1); stage-1 member-0 x, y (n1, K1+1); stage-1 frames judged (n1,)),
-        each alternative also carries its predicted path [[x, y], ...] (final: the members' mean over frames
-        0..H; stage 1: frames 0..its move's length) and whether it was vetoed. "progress": T(start) minus its
+        With `paths` (final mean x, y (n3, H+1); stage-1 member-0 x, y (n1, K1+1); stage-1 frames judged (n1,);
+        optionally their game.level.Jumps (n3, ..) and (n1, ..) or None), each alternative also carries its
+        predicted path [[x, y], ...] (final: the members' mean over frames 0..H; stage 1: frames 0..its move's
+        length), whether it was vetoed and, when it goes through a game portal, "jumps": the indices of the path
+        points reached by a teleport. "progress": T(start) minus its
         estimate (frames gained beyond the time it takes; None without T(start))."""
         names = lambda segs: [nm for nm, a, b in segs if nm != "pad"]
         est = parts["est"]
         gained = lambda e: None if not math.isfinite(T0) else float(T0 - e)
 
-        def with_path(d, xs, ys, vetoed):
+        def with_path(d, xs, ys, vetoed, jumps=None):
             if paths is not None:
                 d["path"] = [[float(a), float(b)] for a, b in zip(xs, ys)]
                 d["vetoed"] = bool(vetoed)
+                if jumps:                            # points reached through a game portal (drawing: a break)
+                    d["jumps"] = jumps
             return d
+
+        def jumps_of(k, c, n=None):                  # paths[k]: Jumps (rows, columns) or None
+            J = paths[k] if paths is not None and len(paths) > k else None
+            return None if J is None else [j for j in J.indices(c) if n is None or j < n]
 
         succ, tg, n_goal, E = goal if goal is not None else (np.zeros(len(final), bool), None, None, None)
         kept_over = switch is not None and switch["kept"]
@@ -3346,7 +3538,9 @@ class Planner:
                     reason = f"estimate {est[c]:.0f} vs {est[best]:.0f} frames"
             d = {"moves": names(final[c][0]), "total": float(total3[c]), "estimate": float(est[c]),
                  "progress": gained(est[c]), "stage": "final", "reason": reason}
-            return with_path(d, paths[0][c], paths[1][c], saf.veto[c]) if paths is not None else d
+            if paths is None:
+                return d
+            return with_path(d, paths[0][c], paths[1][c], saf.veto[c], jumps_of(5, c))
 
         def stage1_alt(i):
             d = {"moves": [self.lib[i].name], "total": None, "estimate": float(est1[i]), "progress": gained(est1[i]),
@@ -3354,7 +3548,7 @@ class Planner:
             if paths is None:
                 return d
             n = int(paths[4][i]) + 1
-            return with_path(d, paths[2][i][:n], paths[3][i][:n], True)
+            return with_path(d, paths[2][i][:n], paths[3][i][:n], True, jumps_of(6, i, n))
 
         fin = [int(c) for c in np.argsort(-total3, kind="stable") if c != best]
         vet = [int(i) for i in np.argsort(est1, kind="stable") if veto1[i]]

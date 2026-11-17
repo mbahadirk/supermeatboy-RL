@@ -43,7 +43,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from realpath import SHAPE_FULL, SHAPE_HALF, SHAPE_SLOPE, SHAPE_SPECIAL, accel_bits, box_distance, tile_shape
-from game.level import LockContext, platform_boxes
+from game.level import TELEPORT_JUMP, LockContext, platform_boxes
 from wm.protocol import (ACCEL_TILES_PROTOCOL, FAN_WIND_PRIOR, FEATURE_PROTOCOL, GRAVITY_PRIOR, KEY_TILES_PROTOCOL,
                          PLAT_TILES_PROTOCOL, PRIOR_PROTOCOL, PRIOR_PROTOCOLS, TILE_SHAPES_PROTOCOL, input_protocol,
                          prior_protocol)
@@ -550,7 +550,7 @@ def demo_key(d: str) -> str:
 
 def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=None, exclude=(), step: int = 1,
           demos: dict | None = None, dataset=None, provenance: bool = False,
-          protocol: str = FEATURE_PROTOCOL, prior_protocol: str = PRIOR_PROTOCOL) -> dict:
+          protocol: str = FEATURE_PROTOCOL, prior_protocol: str = PRIOR_PROTOCOL, counts: dict | None = None) -> dict:
     """Features, targets and baselines of every transition in these wm_data folders. frac: keep this share of
     each wave's transitions (all deaths and finishes) before the inputs are built, for runs too long to
     featurize whole. exclude: levels left out (the held-out ones). step k > 1: samples of a step-k model
@@ -560,7 +560,11 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
     {shard index: [(agent, first frame, last frame)]}}: those agents' transitions are marked in "demo" and kept by
     frac and max_samples (wm.train --demos). protocol: the feature protocol whose layout X has (the model's
     model_layout, or the one fresh training chose). prior_protocol: the physics prior the targets correct
-    (wm.protocol; the model's model_prior, or the one fresh training chose)."""
+    (wm.protocol; the model's model_prior, or the one fresh training chose).
+    Game portals: on a level whose level file lists portals, a sample (step 1: a transition; step k: a chain)
+    with a one-frame move longer than game.level.TELEPORT_JUMP went through one (the model has no input for a
+    teleport): it is dropped after the frac draw (other levels' samples and draws are as without), the count
+    logged per shard and summed into counts["teleport_dropped"] when a dict is given."""
     layout(protocol)
     if prior_protocol not in PRIOR_PROTOCOLS:
         raise ValueError(f"unknown prior protocol {prior_protocol!r}")
@@ -575,7 +579,7 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
         dirs = dataset.source_list(dirs)
         exclude = set(exclude) | dataset.excluded
     for d in dirs:
-        geoms = {}
+        geoms, portals = {}, {}
         dem = (demos or {}).get(demo_key(d), {})
         for meta, rows, world in (dataset.iter_shards(d) if dataset is not None else load_shards(d)):
             lv = meta.get("level")
@@ -584,8 +588,9 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
                 continue
             if lv not in geoms:
                 try:
-                    geoms[lv] = LevelGeom(*(dataset.level(d, lv) if dataset is not None else load_level(d, lv)),
-                                          protocol=protocol)
+                    words, lmeta = dataset.level(d, lv) if dataset is not None else load_level(d, lv)
+                    geoms[lv] = LevelGeom(words, lmeta, protocol=protocol)
+                    portals[lv] = bool(lmeta.get("portals"))
                 except (OSError, KeyError):
                     log(f"[wm] no level data for {lv}, skipped")
                     geoms[lv] = None
@@ -601,6 +606,9 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
                 tr = transitions(rows)
                 s, s2, a, r = tr["s"], tr["s2"], tr["a"], tr["r"]
                 ext = None
+            jump = None                        # samples through a game portal (dropped below)
+            if portals.get(lv) and len(s):
+                jump = tr["jump"] if step > 1 else np.hypot(s2["x"] - s["x"], s2["y"] - s["y"]) > TELEPORT_JUMP
             is_demo = np.zeros(len(s), bool)
             demo_index = meta["_dataset_local_index"] if dataset is not None else int(rows["wave"][0]) if len(rows) else -1
             for ag, f0, f1 in dem.get(demo_index, []):
@@ -610,6 +618,16 @@ def build(dirs: list, levels=None, max_samples=None, seed=0, log=print, frac=Non
                 s, s2, a, r, is_demo = s[k], s2[k], a[k], r[k], is_demo[k]
                 if ext is not None:
                     ext = {kk: v[k] for kk, v in ext.items()}
+                if jump is not None:
+                    jump = jump[k]
+            if jump is not None and jump.any():
+                k = ~jump
+                s, s2, a, r, is_demo = s[k], s2[k], a[k], r[k], is_demo[k]
+                if ext is not None:
+                    ext = {kk: v[k] for kk, v in ext.items()}
+                log(f"[wm] {d} shard {shard_no} ({lv}): {int(jump.sum())} samples through a game portal dropped")
+                if counts is not None:
+                    counts["teleport_dropped"] = counts.get("teleport_dropped", 0) + int(jump.sum())
             if not len(s):
                 continue
             wf = {w["f"]: w for w in world}

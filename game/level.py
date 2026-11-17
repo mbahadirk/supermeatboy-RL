@@ -10,6 +10,7 @@ import os
 import sys
 import json
 from collections import deque
+from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
@@ -180,12 +181,13 @@ class LockContext:
             raise ValueError("key-owned legacy multi-key data needs a recorded applied lock context")
         return opened_lock_cells(self.groups, mask, self.width)
 
-    def pickup_path(self, xs, ys, initial=0, step=1, upto=None):
+    def pickup_path(self, xs, ys, initial=0, step=1, upto=None, jumps=None):
         """Private masks after each integer-frame endpoint; no continuous-segment pickup.
 
         step1 matches realgame.js pickKeys after updateChar (even if its status changed). Coarse paths
         linearly interpolate integer endpoints, an approximation only: callers expose new masks to
         physics/guard only at the NEXT model step. Geometry and caller arrays are never mutated.
+        jumps (Jumps of the columns): a teleport step's frames are frame_path's (never the line across).
         """
         xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
         if xs.shape != ys.shape or xs.ndim < 1 or xs.shape[-1] < 2 or int(step) != step or step < 1:
@@ -202,11 +204,17 @@ class LockContext:
         masks = np.empty(prefix + (count + 1,), np.uint32)
         first = np.full(prefix + (len(self.keys),), -1, np.int64)
         masks[..., 0] = mask
+        fx = fy = None
+        if jumps is not None and jumps.any():
+            fx, fy = frame_path(xs, ys, step, jumps)
         for frame in range(1, count + 1):
             col, frac = divmod(frame - 1, int(step))
             alpha = (frac + 1) / int(step)
-            x = xs[..., col] + alpha * (xs[..., col + 1] - xs[..., col])
-            y = ys[..., col] + alpha * (ys[..., col + 1] - ys[..., col])
+            if fx is not None:
+                x, y = fx[..., frame], fy[..., frame]
+            else:
+                x = xs[..., col] + alpha * (xs[..., col + 1] - xs[..., col])
+                y = ys[..., col] + alpha * (ys[..., col + 1] - ys[..., col])
             for k, (kx, ky) in enumerate(self.keys):
                 bit = np.uint32(1 << k)
                 hit = (frame <= limit) & ((mask & bit) == 0) & (np.hypot(x - kx, y - ky) < KEY_PICKUP_RADIUS)
@@ -222,6 +230,246 @@ class LockContext:
         masks, _ = self.pickup_path(np.stack([previous["x"], following["x"]], -1),
                                     np.stack([previous["y"], following["y"]], -1), previous["keys"], step)
         following["keys"] = masks[..., -1]
+
+
+# ---- game portals (Level.portals): teleports -------------------------------------------------------------
+# Measured from the 95 live teleports of runs/online_check04, 09 and 10 (4-9, 4-10; states.jsonl), 2026-11-17:
+# - trigger: tested on the agent's centre after each frame's move (where that frame takes it, before the
+#   teleport). A rounded box around the end's centre fits: half size TELEPORT_HALF, corners rounded with radius
+#   TELEPORT_ROUND, centre TELEPORT_DY lower. Replayed along the recorded tracks (the first frame each approach
+#   is inside, with the cooldown): 94 of 95 teleports on their own frame, 1 a frame early, none missed, 1 pass
+#   inside without a teleport. The ridge is narrow: half 15.25 misses 1, half 15.5 fires 12 a frame early; a
+#   circle (radius 18) fires 35 early and passes 13 times inside, radius 17.5 misses 3.
+# - exit: exactly the other end's centre on the teleport frame; the velocity goes on (that frame's physics as
+#   usual: run acceleration, gravity), so the following frames move from the exit at it.
+# - re-arm: TELEPORT_COOLDOWN frames from one teleport to the next: 8 re-entries waited exactly 18 frames (back
+#   inside the trigger 1-3 frames earlier, not sent), no gap was shorter. Whether the agent must also leave the
+#   trigger, and whether the wait is per pair, the runs cannot tell (no agent stayed in an exit's trigger for 18
+#   frames; every quick re-entry used the same pair). The rollouts also keep an end the agent is inside at
+#   their start (it just came out) off until it leaves (Teleports.start_off): the history is not in the state.
+# - a recorded one-frame move: under the time-step lock legal moves stay under 20 units (every wave of runs/
+#   but the unlocked real_20261102-035612: none between 20 and 38, respawns aside; 4-9 / 4-10 / 4-11 tracks of
+#   online_check04 / 09 / 10: largest 19.8); a teleport moves at least 38.3 (4-9's second pair, ends 58.5
+#   apart, entered below the upper end); a respawn moves 20 or more. On a level with portals a one-frame move
+#   longer than TELEPORT_JUMP is a teleport (teleport_jumps; dead agents' respawns are not part of a path).
+TELEPORT_HALF = 15.3
+TELEPORT_ROUND = 8.5
+TELEPORT_DY = -0.5
+TELEPORT_COOLDOWN = 18
+TELEPORT_JUMP = 30.0
+
+
+def teleport_inside(dx, dy):
+    """Offsets (dx, dy) of the agent's centre from a portal end's centre: inside its trigger (bool, broadcast)."""
+    core = TELEPORT_HALF - TELEPORT_ROUND
+    a = np.maximum(np.abs(np.asarray(dx, np.float64)) - core, 0.0)
+    b = np.maximum(np.abs(np.asarray(dy, np.float64) - TELEPORT_DY) - core, 0.0)
+    return a * a + b * b <= TELEPORT_ROUND * TELEPORT_ROUND
+
+
+class Teleports:
+    """A level's portal ends as rollouts use them: end i (centre src[i]) sends to dst[i], its pair's other end
+    (index other[i]). Built from Level.portals (Teleports.of: None for a level without portals)."""
+
+    def __init__(self, portals):
+        src, dst, other = [], [], []
+        for i, (a, b) in enumerate(portals):
+            src += [tuple(a), tuple(b)]
+            dst += [tuple(b), tuple(a)]
+            other += [2 * i + 1, 2 * i]
+        self.src = np.asarray(src, np.float64).reshape(-1, 2)
+        self.dst = np.asarray(dst, np.float64).reshape(-1, 2)
+        self.other = np.asarray(other, np.int64)
+
+    @classmethod
+    def of(cls, level) -> "Teleports | None":
+        portals = list(getattr(level, "portals", None) or [])
+        return cls(portals) if portals else None
+
+    def inside(self, x, y) -> np.ndarray:
+        """(N, ends) bool: positions (N,) inside each end's trigger."""
+        x, y = np.asarray(x, np.float64).reshape(-1, 1), np.asarray(y, np.float64).reshape(-1, 1)
+        return teleport_inside(x - self.src[:, 0], y - self.src[:, 1])
+
+    def start_off(self, x, y) -> np.ndarray:
+        """(N,) the end whose trigger each position is inside (it just came out there: off until it leaves), -1
+        none."""
+        ins = self.inside(x, y)
+        return np.where(ins.any(1), ins.argmax(1), -1).astype(np.int64)
+
+    def left(self, x, y, off) -> np.ndarray:
+        """`off` (N,) with -1 where the position is outside that end's trigger (it left: the end is on again)."""
+        off = np.asarray(off, np.int64)
+        k = np.nonzero(off >= 0)[0]
+        if not len(k):
+            return off
+        x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+        e = off[k]
+        out = off.copy()
+        gone = ~teleport_inside(x[k] - self.src[e, 0], y[k] - self.src[e, 1])
+        out[k[gone]] = -1
+        return out
+
+    def step(self, x0, y0, x1, y1, f: int, ready, off):
+        """One rollout step of f frames from (x0, y0) to (x1, y1) (N,), its frames on the straight line between
+        them (frame i at i / f). The first frame i >= ready (N,) whose position is inside the trigger of an end
+        other than off (N,) teleports. Returns (end (N,), -1 none; frame i (N,), 0 none; entry x, y (N,): the
+        position of that frame, inside the trigger)."""
+        x0, y0, x1, y1 = (np.asarray(a, np.float64) for a in (x0, y0, x1, y1))
+        N, M = len(x0), len(self.src)
+        end = np.full(N, -1, np.int64)
+        frame = np.zeros(N, np.int64)
+        ex, ey = np.full(N, np.nan), np.full(N, np.nan)
+        if not N:
+            return end, frame, ex, ey
+        reach = TELEPORT_HALF + 1.0                  # rows whose step's box comes near no end: nothing to do
+        lo_x, hi_x = np.minimum(x0, x1) - reach, np.maximum(x0, x1) + reach
+        lo_y, hi_y = np.minimum(y0, y1) - reach, np.maximum(y0, y1) + reach
+        near = ((self.src[None, :, 0] >= lo_x[:, None]) & (self.src[None, :, 0] <= hi_x[:, None])
+                & (self.src[None, :, 1] >= lo_y[:, None]) & (self.src[None, :, 1] <= hi_y[:, None])).any(1)
+        r = np.nonzero(near & (np.asarray(ready, np.int64) <= f))[0]
+        if not len(r):
+            return end, frame, ex, ey
+        t = np.arange(1, f + 1, dtype=np.float64) / f
+        px = x0[r, None] + (x1 - x0)[r, None] * t                     # (R, f)
+        py = y0[r, None] + (y1 - y0)[r, None] * t
+        ins = teleport_inside(px[:, :, None] - self.src[:, 0], py[:, :, None] - self.src[:, 1])   # (R, f, M)
+        ins &= np.arange(1, f + 1)[None, :, None] >= np.asarray(ready, np.int64)[r, None, None]
+        ins &= np.arange(M)[None, None, :] != np.asarray(off, np.int64)[r, None, None]
+        hit = ins.any(2)                                               # (R, f)
+        got = hit.any(1)
+        if not got.any():
+            return end, frame, ex, ey
+        r, hit, ins, px, py = r[got], hit[got], ins[got], px[got], py[got]
+        i = hit.argmax(1)                                              # the first frame (0-based)
+        a = np.arange(len(r))
+        end[r] = ins[a, i].argmax(1)
+        frame[r] = i + 1
+        ex[r], ey[r] = px[a, i], py[a, i]
+        return end, frame, ex, ey
+
+
+@dataclass
+class Jumps:
+    """Teleports along paths of columns (..., K+1), column k = frame k x step: at (..., K+1) bool, column k was
+    reached by a teleport from column k - 1; frame (..., K+1) int, the frame of that step it happened on (1..step);
+    entry, exit (..., K+1, 2): where the step's own motion was when it entered the trigger (that frame's
+    position) and the portal end it came out of (NaN when unknown: a recorded one-frame jump, whose two ends
+    are its only positions). Segment tests (plan.safety) test the step's motion up to the entry and from the
+    exit on, never the straight line across; per-frame paths (frame_path) step at the teleport frame."""
+    at: np.ndarray
+    frame: np.ndarray
+    entry: np.ndarray
+    exit: np.ndarray
+
+    @classmethod
+    def empty(cls, shape) -> "Jumps":
+        shape = tuple(shape)
+        return cls(np.zeros(shape, bool), np.zeros(shape, np.int64), np.full(shape + (2,), np.nan),
+                   np.full(shape + (2,), np.nan))
+
+    def any(self) -> bool:
+        return bool(self.at.any())
+
+    def __getitem__(self, idx) -> "Jumps":
+        """The same index on every array (explicit leading axes, no Ellipsis: entry / exit have one more)."""
+        return Jumps(self.at[idx], self.frame[idx], self.entry[idx], self.exit[idx])
+
+    def put(self, idx, other: "Jumps"):
+        """self[idx] = other, array by array."""
+        self.at[idx], self.frame[idx], self.entry[idx], self.exit[idx] = other.at, other.frame, other.entry, other.exit
+
+    def cols(self, u: int) -> "Jumps":
+        """The first u columns."""
+        return Jumps(self.at[..., :u], self.frame[..., :u], self.entry[..., :u, :], self.exit[..., :u, :])
+
+    def indices(self, row=None) -> list:
+        """The columns reached by a teleport (of paths[row] for (n, K+1) jumps), as a list (path drawing)."""
+        at = self.at if row is None else self.at[row]
+        return [int(k) for k in np.nonzero(at)[0]]
+
+
+def member_mean(xs, ys, jumps: Jumps | None):
+    """The ensemble's mean path per candidate from (E, n, K+1) members: (x, y (n, K+1), the mean path's Jumps
+    or None). Members that teleported a different number of times by a column are on different sides of a
+    portal there: the mean is over the members on the side most of them are on (ties: the first member's),
+    and the mean path teleports where that side changes (entry, exit: the mean of the side's members that
+    teleported on that step; frame: their lowest). Without jumps: the plain mean."""
+    xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+    if jumps is None or not jumps.any():
+        return xs.mean(0), ys.mean(0), None
+    cnt = np.cumsum(jumps.at, axis=-1)                                 # teleports so far (E, n, K+1)
+    votes = (cnt[:, None] == cnt[None, :]).sum(1)
+    side = np.take_along_axis(cnt, votes.argmax(0)[None], 0)[0]       # (n, K+1)
+    w = cnt == side[None]
+    nw = w.sum(0)
+    mx, my = (xs * w).sum(0) / nw, (ys * w).sum(0) / nw
+    J = Jumps.empty(side.shape)
+    J.at[:, 1:] = side[:, 1:] != side[:, :-1]
+    sel = w & jumps.at
+    ns = sel.sum(0)
+    ok = J.at & (ns > 0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        for arr, src in ((J.entry, jumps.entry), (J.exit, jumps.exit)):
+            m = np.where(sel[..., None], np.nan_to_num(src), 0.0).sum(0) / ns[..., None]
+            arr[ok] = m[ok]
+    J.frame[J.at] = 1
+    fr = np.where(sel, jumps.frame, np.iinfo(np.int64).max).min(0)
+    J.frame[ok] = fr[ok]
+    return mx, my, J
+
+
+def teleport_jumps(xs, ys) -> Jumps | None:
+    """Recorded (or per-frame) paths (..., K+1): the one-frame moves longer than TELEPORT_JUMP as teleports
+    (entry and exit unknown: the move's two ends). None when there is none. Callers apply it on levels with
+    portals only."""
+    xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+    if xs.shape[-1] < 2:
+        return None
+    d = np.hypot(np.diff(xs, axis=-1), np.diff(ys, axis=-1)) > TELEPORT_JUMP
+    if not d.any():
+        return None
+    j = Jumps.empty(xs.shape)
+    j.at[..., 1:] = d
+    j.frame[..., 1:] = d.astype(np.int64)
+    return j
+
+
+def frame_path(xs, ys, step: int, jumps: Jumps | None = None):
+    """Per-frame positions (..., K x step + 1) of paths of columns (..., K+1) (column k = frame k x step):
+    linear between columns, except across a teleport (jumps.at): frames before its frame j go from the column
+    toward the entry (the step's own motion), frame j is the exit, the frames after go from the exit to the next
+    column. step 1 without jumps: the columns themselves."""
+    xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+    K1 = xs.shape[-1]
+    f = int(step)
+    if f == 1:
+        return xs.copy(), ys.copy()
+    t = np.arange(1, f + 1, dtype=np.float64) / f                     # frames 1..f of each step
+    x0, y0, x1, y1 = xs[..., :-1, None], ys[..., :-1, None], xs[..., 1:, None], ys[..., 1:, None]
+    px, py = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t                   # (..., K, f)
+    if jumps is not None and jumps.at[..., 1:].any():
+        at = jumps.at[..., 1:]
+        idx = np.nonzero(at)
+        j = jumps.frame[..., 1:][idx].astype(np.float64)               # (J,)
+        ent = jumps.entry[..., 1:, :][idx]
+        ext = jumps.exit[..., 1:, :][idx]
+        s = np.stack([xs[..., :-1][idx], ys[..., :-1][idx]], -1)        # the step's start (J, 2)
+        e = np.stack([xs[..., 1:][idx], ys[..., 1:][idx]], -1)          # its end
+        ent = np.where(np.isnan(ent), s, ent)
+        ext = np.where(np.isnan(ext), e, ext)
+        i = np.arange(1, f + 1, dtype=np.float64)[None, :]            # (1, f)
+        before = i < j[:, None]
+        a = np.where(before, i / j[:, None], 0.0)
+        span = np.maximum(f - j, 1.0)[:, None]
+        b = np.where(before, 0.0, (i - j[:, None]) / span)
+        qx = np.where(before, s[:, :1] + (ent[:, :1] - s[:, :1]) * a, ext[:, :1] + (e[:, :1] - ext[:, :1]) * b)
+        qy = np.where(before, s[:, 1:] + (ent[:, 1:] - s[:, 1:]) * a, ext[:, 1:] + (e[:, 1:] - ext[:, 1:]) * b)
+        px[idx], py[idx] = qx, qy
+    lead = xs.shape[:-1]
+    ox = np.concatenate([xs[..., :1], px.reshape(lead + (-1,))], -1)
+    oy = np.concatenate([ys[..., :1], py.reshape(lead + (-1,))], -1)
+    return ox, oy
 
 
 class Level:
@@ -252,6 +500,8 @@ class Level:
         pt = set(info.get("portalTypes", []))
         ends = [(x, y) for t, x, y, fl in objs if t in pt]
         self.portals = list(zip(ends[0::2], ends[1::2]))
+        if not pt and info.get("portals"):           # a recorded level file (wm.buffer): the pairs it resolved live
+            self.portals = [(tuple(a), tuple(b)) for a, b in info["portals"]]
         self.accel = accel_bits(self.words0).accel        # accelerator tiles (realpath.accel_bits: what they do)
         self.fans, self.orbs = [], []
         self.wind = np.zeros((self.H, self.W), dtype=bool)

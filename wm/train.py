@@ -342,10 +342,13 @@ def main():
 
     t0 = time.time()
     held = eval_levels()
+    counts = {}
     d = build(args.data, levels=args.levels, max_samples=args.max_samples, log=lambda *a: None, seed=args.seed,
               frac=args.sample_frac, exclude=held, step=args.step,
               demos=all_demos(args.demos, args.data) if args.demos else None, dataset=dataset, protocol=protocol,
-              prior_protocol=prior_protocol)
+              prior_protocol=prior_protocol, counts=counts)
+    if counts.get("teleport_dropped"):
+        print(f"{counts['teleport_dropped']} samples through a game portal dropped (a teleport: no model input)")
     val = sample_validation(d, strict=dataset is not None)
     if args.save_features:
         save_features(args.save_features, d, val, args, dataset, protocol, prior_protocol, held)

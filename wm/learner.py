@@ -179,9 +179,12 @@ def fine_tune(model, folders: list, demo_paths: list, args, log=print):
     t0 = time.time()
     from wm.dataset import sample_validation
     dataset = getattr(args, "dataset", None)
+    counts = {}
     d = build(folders, max_samples=args.max_samples, log=lambda *a: None, seed=args.seed, frac=args.sample_frac,
               exclude=eval_levels(), step=model.step, demos=all_demos(demo_paths, folders), dataset=dataset,
-              protocol=model_layout(model).protocol, prior_protocol=model_prior(model))
+              protocol=model_layout(model).protocol, prior_protocol=model_prior(model), counts=counts)
+    if counts.get("teleport_dropped"):
+        log(f"[learner] {counts['teleport_dropped']} samples through a game portal dropped")
     if model.step > 1:                       # the targets in the model's own scale
         d["yc"] = (d["yc"] * RES_SCALE / model.res_scale).astype(np.float32)
         d["wc"] = d["full"].astype(np.float32)

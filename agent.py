@@ -129,7 +129,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from game.level import Level, box_base, box_ids, hazard_boxes, identify_level, HZ          # noqa: E402
+from game.level import Level, box_base, box_ids, hazard_boxes, identify_level, HZ, TELEPORT_JUMP   # noqa: E402
 from mpc.candidates import ACTIONS                                       # noqa: E402
 from mpc.future import FutureWorld                                       # noqa: E402
 from plan import safety as S                                             # noqa: E402
@@ -248,6 +248,30 @@ def _sub(pts, step: int) -> list:
     return [[round(float(x), 1), round(float(y), 1)] for x, y in out]
 
 
+def _pieces(pts, jumps=None, per_frame: bool = True) -> list:
+    """A drawn path split where it goes through a game portal: at the point indices `jumps` (a per-step path's
+    teleports: Plan.alternatives / completion "jumps"), else, for a per-frame path, where one frame moves more
+    than TELEPORT_JUMP. One piece without."""
+    pts = list(pts)
+    if len(pts) < 2:
+        return [pts]
+    if jumps:
+        cut = {int(k) for k in jumps if 0 < int(k) < len(pts)}
+    elif per_frame:
+        cut = {k for k in range(1, len(pts))
+               if math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]) > TELEPORT_JUMP}
+    else:
+        cut = set()
+    if not cut:
+        return [pts]
+    out, start = [], 0
+    for k in sorted(cut):
+        out.append(pts[start:k])
+        start = k
+    out.append(pts[start:])
+    return [p for p in out if p]
+
+
 def overlay_payload(plan) -> list:
     """realgame.js 'path' payload [{pts, col, w, dash}] for one plan: the top rejected alternatives faintly (red
     when vetoed, grey otherwise), the chosen path (green), its airborne completion (Plan.completion: fainter
@@ -258,13 +282,15 @@ def overlay_payload(plan) -> list:
     out = []
     for a in [a for a in plan.alternatives if a.get("path")][:OVERLAY_ALTS]:
         if len(a["path"]) >= 2:
-            out.append({"pts": _sub(a["path"], ALT_STEP), "col": COL_ALT_VETO if a.get("vetoed") else COL_ALT,
-                        "w": 1})
-    out.append({"pts": _sub(plan.path, PLAN_STEP), "col": MODE_COL.get(getattr(plan, "mode", "normal"), COL_PLAN),
-                "w": 3})
+            for p in _pieces(a["path"], a.get("jumps"), per_frame=False):
+                out.append({"pts": _sub(p, ALT_STEP), "col": COL_ALT_VETO if a.get("vetoed") else COL_ALT, "w": 1})
+    for p in _pieces(plan.path):
+        out.append({"pts": _sub(p, PLAN_STEP), "col": MODE_COL.get(getattr(plan, "mode", "normal"), COL_PLAN),
+                    "w": 3})
     comp = getattr(plan, "completion", None)
     if comp and len(comp.get("path") or []) >= 2:
-        out.append({"pts": _sub(comp["path"], PLAN_STEP), "col": COL_COMP, "w": 2, "dash": True})
+        for p in _pieces(comp["path"], comp.get("jumps"), per_frame=False):
+            out.append({"pts": _sub(p, PLAN_STEP), "col": COL_COMP, "w": 2, "dash": True})
         if comp.get("on") in ("ground", "wall", "goal"):
             out.append({"pts": [[round(comp["x"], 1), round(comp["y"], 1)]], "col": COL_LAND, "w": 4})
     for p in plan.landings[:4]:
@@ -1946,6 +1972,8 @@ class Runner:
         lv = self.level
         x1, y1 = xy1
         x0, y0 = xy0 if xy0 is not None else xy1
+        if getattr(lv, "portals", None) and math.hypot(x1 - x0, y1 - y0) > TELEPORT_JUMP:
+            x0, y0 = x1, y1                          # came out of a game portal: the death frame's end only
         explained = bool(S.explain_death(lv, rec or {}, lv.hz_keep, x0, y0, x1, y1))
         fb = S.record_boxes(rec or {}, lv.hz_keep)
         kind, box = S.segment_contact([x0], [y0], [x1], [y1], fb, S.level_bounds(lv))

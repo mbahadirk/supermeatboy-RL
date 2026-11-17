@@ -78,10 +78,11 @@ def ready(path: str) -> bool:
     return os.path.exists(world) and now - os.path.getmtime(path) > SETTLE_S and now - os.path.getmtime(world) > SETTLE_S
 
 
-def featurize(shard: str, model, tmp: str) -> dict | None:
+def featurize(shard: str, model, tmp: str, log=None) -> dict | None:
     """One shard's transitions in the model's encoding (wm.features.build on a folder holding only this shard and
     its level file), with the targets the model trains on (yc in its res_scale units; wc: full chains). None: the
-    shard has no usable transitions (its level file missing, or nothing alive)."""
+    shard has no usable transitions (its level file missing, or nothing alive). log(text): told how many samples
+    went through a game portal and were dropped (wm.features.build), when any."""
     from wm.features import RES_SCALE, build, model_layout, model_prior
     d = os.path.dirname(shard)
     base = os.path.basename(shard)[:-4]
@@ -96,8 +97,11 @@ def featurize(shard: str, model, tmp: str) -> dict | None:
         shutil.copy2(shard, os.path.join(work, base + ".npz"))
         shutil.copy2(os.path.join(d, base + "_world.json.gz"), os.path.join(work, base + "_world.json.gz"))
         shutil.copy2(level_file, os.path.join(work, "levels", f"{lv}.npz"))
+        counts = {}
         b = build([work], log=lambda *a: None, step=model.step, protocol=model_layout(model).protocol,
-                  prior_protocol=model_prior(model))
+                  prior_protocol=model_prior(model), counts=counts)
+        if counts.get("teleport_dropped") and log is not None:
+            log(f"{base}: {counts['teleport_dropped']} samples through a game portal dropped")
     finally:
         shutil.rmtree(work, ignore_errors=True)
     if not len(b["X"]):
@@ -259,7 +263,7 @@ def main(argv=None):
         new = [p for p in shards if p not in parts and ready(p)]
         for p in new:
             try:
-                parts[p] = featurize(p, model, tmp)
+                parts[p] = featurize(p, model, tmp, log=lambda t: log_line(args.out, t))
             except Exception as e:                # a shard still being written, or broken: tried again later
                 log_line(args.out, f"{os.path.basename(p)}: not read ({type(e).__name__}: {e})")
                 continue

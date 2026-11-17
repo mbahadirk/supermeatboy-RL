@@ -135,7 +135,8 @@ def serve(conn_in, conn_out, cancel, threads: int):
                 row, prefix, worlds, frames, d, target, dt, agent, rec = a
                 P.CANCEL = cancel
                 try:
-                    pred, spread = planner.predict_start(row, prefix, worlds[:d], dt, frame=int(target) - int(d))
+                    pred, spread = planner.predict_start(row, prefix, worlds[:d], dt, frame=int(target) - int(d),
+                                                         agent=agent)
                     plan = planner.plan(pred, target, worlds[d:], frames[d:], dt, agent=agent,
                                         recorded=None if rec is None else max(0, int(rec) - d), defer=True)
                 finally:
