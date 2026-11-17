@@ -31,6 +31,11 @@ tiles, each opened by the nearest key.
 
 The level map is live: tiles that change in the game (crumble blocks breaking, locks opening) change in the
 agents' view and in the monitor. Agents also see the two nearest moving hazards (where, how fast).
+Live perception is shared with the current PPO implementation: animated kill regions, enemies, active laser
+beams, flying shots, camera death boundaries and corrected tile geometry. game/level.py owns these facts.
+--shape-inputs appends two local maps describing the open directions of half blocks and slopes (282 -> 524
+inputs). Older checkpoints widen while keeping their existing weights. Resume a widened checkpoint with the
+same flag. Actions and updates remain PPO-only; no learned world model or action planner is included.
 
 Phases per level: FINISH until some agent reaches the goal (progress and the finish matter most), then
 SPEED: every frame costs more, a finish pays by how close it is to the best time, a new record pays extra,
@@ -71,13 +76,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from realpath import Planner, fitness, PATH_RGB, box_distance, tile_classes
+from realpath import Planner, fitness, PATH_RGB
+from game.level import (Level, box_base, box_ids, hazard_boxes, piece_names, DECOR, _names_cache, tile_solid,   # noqa: F401
+                        identify_level, HZ, TILE, C_EMPTY, C_SOLID, C_HAZARD, C_GOAL, C_WIND, C_ORB, C_ACCEL,
+                        C_PLATFORM, S_FLOOR, S_WALL, S_LEDGE, S_CEIL, S_CEIL_WALL, S_INSIDE, PLAT_HALF,
+                        PLAT_STILL, SEALED_MAX, ACCEL_TILE)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 JS = os.path.join(HERE, "realgame.js")
 GAME_EXE = "SuperMeatBoy.exe"
-HZ = 60
-TILE = 20.0
 MAX_AGENTS = 200        # the game keeps 40 spare Meat Boys per level; more are built at the level load
 GAME_POOL = 40
 
@@ -97,17 +104,14 @@ N_HELD = 1                              # frames the jump key has been held (/ 2
                                         # jump, starts only on a new press
 WALL_REPRESS = 6                        # realgame.js: jump held this long in the air against a wall is pressed anew
 OBS = N_STATE + (2 * K + 1) ** 2 + N_PATH + N_HAZ + N_WALL + N_FX + N_SURF + N_STUCK + N_PLAT + N_HELD
-# surface codes (second local map): which sides of a solid cell are open
-S_FLOOR, S_WALL, S_LEDGE, S_CEIL, S_CEIL_WALL, S_INSIDE = 1.0, -1.0, 0.5, -0.5, -0.75, 0.25
-WALL_SLIDE = 9                          # character state while sliding down a wall
-C_EMPTY, C_SOLID, C_HAZARD, C_GOAL = 0.0, 1.0, -1.0, 0.75
-C_WIND, C_ORB, C_ACCEL = 0.3, -0.4, 0.55  # map codes: in a fan's wind column, inside an orb, accelerator tile
-C_PLATFORM = 0.85                         # map code: a moving platform (solid, but it moves)
-PLAT_HALF = (30.0, 10.0)                  # a platform is a 60 x 20 bar (20 x 60 when upright), realgame.js platforms()
-PLAT_STILL = 240                          # frames: a platform seen in place this long is a fixed one (a wall for routes)
-SEALED_MAX = 150                          # cells: a pocket the player cannot get into larger than this is left open
-                                          # (a moving saw at its start position could look like a seal)
-ACCEL_TILE = 98                           # Salt Factory surface tile (no special bit); what it does is not traced
+N_SHAPE = 2 * (2 * K + 1) ** 2
+
+
+def obs_size(shape_inputs: bool = False) -> int:
+    """The observation length: OBS, plus N_SHAPE at the end with --shape-inputs."""
+    return OBS + (N_SHAPE if shape_inputs else 0)
+
+WALL_SLIDE = 9
 
 # rewards
 R_PROGRESS = 1.0       # per tile of progress toward the goal, both ways: going back costs what going forward paid
@@ -140,413 +144,6 @@ R_EXPLORE = 0.25       # first visit this life to a 2x2-tile block, / sqrt(1 + v
 EXPLORE_BLOCK = 2      # tiles
 
 
-# ---- level ------------------------------------------------------------------------------------------
-def tile_solid(words: np.ndarray) -> np.ndarray:
-    """Cells the player cannot enter: ids 1-99, and special tiles (bit 8: crumble, lock, switch blocks)."""
-    tid = words & 0xff
-    return ((tid > 0) & (tid < 100)) | (((words >> 8) & 1).astype(bool) & (tid > 0) & (tid <= 100))
-
-
-# pieces with no type-table row that are only decoration (the game's "no row = lethal" rule would make them
-# hazards): names from the level's palette (tools/smbl_extract.py; imported files, personal use)
-DECOR = ("particle", "smoke", "quake", "portal", "sign", "bosspos", "square", "circle", "xxxxx", "poof",
-         "flap", "blablabla", "bip", "temp", "explosion", "warp", "pickup", "ghost", "break")   # not "Symbol 111": needles
-_names_cache: dict = {}
-
-
-def piece_names(level: str) -> list[str] | None:
-    """Obstacle names of the level's palette, by piece type (low byte), from the extracted game files."""
-    if level in _names_cache:
-        return _names_cache[level]
-    out = None
-    try:
-        sys.path.insert(0, os.path.join(HERE, "tools"))
-        import smbl_extract as X
-        raw = os.path.join(HERE, "imported", "smbl_raw")
-        pal = X.parse(os.path.join(raw, "Levels", level + ".smbl"))["palette"]
-        out = X.am_names(os.path.join(raw, "palettes", "pc_LevelPalettes_" + X.PALETTE_OBSTACLES[pal]))
-    except Exception:
-        out = None
-    _names_cache[level] = out
-    return out
-
-
-class Level:
-    """Facts the game reported for the current level: the collision tile layer (kept live from the game's
-    changes), goals, spawn, keys, bandages."""
-
-    def __init__(self, info: dict, tiles: bytes):
-        self.name = info["name"]
-        self.W, self.H, self.ox, self.oy = info["W"], info["H"], info["ox"], info["oy"]
-        self.words0 = np.frombuffer(tiles, dtype="<u4").reshape(self.H, self.W).copy()   # row 0 = bottom
-        self.words = self.words0.copy()
-        self.solid0 = tile_solid(self.words0)
-        self.solid = self.solid0.copy()
-        self.special = ((self.words0 >> 8) & 1).astype(bool) & self.solid0
-        self.tile_ver, self.tile_log = 0, 0
-        self.goals = [tuple(g) for g in info["goals"]]
-        self.spawn = tuple(info["spawn"])
-        self.names = piece_names(self.name)
-        nm = lambda t: (self.names[t].lower() if self.names and 0 <= t < len(self.names) else None)
-        objs = info.get("objs", [])
-        self.keys = [(x, y) for t, x, y, fl in objs if (fl >= 0 and fl & 0x40) or nm(t) == "key"]
-        self.bandages = [(x, y) for t, x, y, fl in objs if (fl >= 0 and fl & 0x08) or nm(t) == "bandaid"]
-        # which lethal pieces (by the game's rule) are really decoration; ids = piece addresses (stable)
-        self.set_lethal(info.get("lethalTypes", []), info.get("lethalIds"))
-        self.hz_level_ids = set(self.hz_ids)       # pieces there from the start (shots come later)
-        self.lock_groups = self._lock_groups()
-        # portals: the level build pairs portal pieces in their order (FUN_004c8c10)
-        pt = set(info.get("portalTypes", []))
-        ends = [(x, y) for t, x, y, fl in objs if t in pt]
-        self.portals = list(zip(ends[0::2], ends[1::2]))
-        self.accel = ((self.words0 & 0xff) == ACCEL_TILE) & ~(((self.words0 >> 8) & 1).astype(bool))
-        self.fans, self.orbs = [], []
-        self.wind = np.zeros((self.H, self.W), dtype=bool)
-        self.orb_cells = np.zeros((self.H, self.W), dtype=bool)
-        self.base = np.where(self.solid, C_SOLID, C_EMPTY).astype(np.float32)
-        self.base[self.accel & self.solid] = C_ACCEL
-        for gx, gy in self.goals:
-            c, r = self.cell(gx, gy)
-            if 0 <= c < self.W and 0 <= r < self.H:
-                self.base[r, c] = C_GOAL
-        self.set_fields(info.get("fx"))
-        self.plats, self.plat_vel, self.plat_cells, self.plat_set = [], [], [], set()
-        self.plat_seen = np.zeros((self.H, self.W), dtype=bool)   # every cell a platform has covered
-        self.plat_owner = {}                                       # (r, c) -> platforms that covered it
-        self.sealed_haz = np.zeros((self.H, self.W), dtype=bool)  # pockets inside hazards (lava pits): hazard
-        self.sealed_wall = np.zeros((self.H, self.W), dtype=bool) # pockets inside walls: solid
-        self.set_platforms(info.get("pf"))
-        self.dist = self._bfs()
-        self.diag = float(np.hypot(self.W, self.H))
-
-    def set_fields(self, fx):
-        """Fans [x, y, up x, up y, half width, range, strength] and orbs [x, y, r1, r2, s1, s2] from the game:
-        which open cells are in a wind column or inside an orb (agents' map, routes)."""
-        if not fx:
-            return
-        fans, orbs = fx.get("fans", []), fx.get("orbs", [])
-        if fans == self.fans and orbs == self.orbs:
-            return
-        self.fans, self.orbs = fans, orbs
-        cx = self.ox + (np.arange(self.W) + 0.5) * TILE
-        cy = self.oy + (np.arange(self.H) + 0.5) * TILE
-        X, Y = np.meshgrid(cx, cy)
-        self.wind[:] = False
-        for x, y, ux, uy, hw, rng, st in fans:
-            if rng <= 0:
-                continue
-            along = (X - x) * ux + (Y - y) * uy
-            lat = (X - x) * uy - (Y - y) * ux
-            self.wind |= (along >= 0) & (along <= rng) & (np.abs(lat) <= hw + 6.0)
-        self.orb_cells[:] = False
-        for x, y, r1, r2, s1, s2 in orbs:
-            self.orb_cells |= np.hypot(X - x, Y - y) <= max(r1, r2)
-        self.fx_ver = getattr(self, "fx_ver", 0) + 1
-        self.tile_ver += 1
-
-    def set_platforms(self, pf) -> bool:
-        """Moving platforms now ([x, y, upright] from the game): boxes, velocities (by order, from the last
-        frame), the cells they cover, every cell they have covered, and which of them move (a platform seen in
-        place for PLAT_STILL frames is a fixed one). True when the routes should be rebuilt: a platform
-        covered new cells, started moving, or turned out to be fixed."""
-        if not pf:
-            return False
-        boxes = [(x, y) + ((PLAT_HALF[1], PLAT_HALF[0]) if up else PLAT_HALF) + (bool(up),) for x, y, up in pf]
-        if len(self.plats) == len(boxes):
-            self.plat_vel = [((b[0] - a[0]) * HZ, (b[1] - a[1]) * HZ) for a, b in zip(self.plats, boxes)]
-        else:
-            self.plat_vel = [(0.0, 0.0)] * len(boxes)
-        changed = False
-        if len(getattr(self, "plat_start", [])) != len(boxes):   # (the level's platforms)
-            self.plat_start = [b[:2] for b in boxes]
-            self.plat_moved = [False] * len(boxes)
-            self.plat_frames = 0
-        self.plat_frames += 1
-        for k, b in enumerate(boxes):
-            if not self.plat_moved[k] and math.hypot(b[0] - self.plat_start[k][0], b[1] - self.plat_start[k][1]) > 2.0:
-                self.plat_moved[k] = changed = True
-        if self.plat_frames == PLAT_STILL and not all(self.plat_moved):
-            changed = True                             # the ones still in place now count as fixed
-        self.plats = boxes
-        cells = []
-        for k, (x, y, hw, hh, up) in enumerate(boxes):   # cells the bar covers (more than 5 units of each side)
-            c0, c1 = int((x - hw + 5 - self.ox) // TILE), int((x + hw - 5 - self.ox) // TILE)
-            r0, r1 = int((y - hh + 5 - self.oy) // TILE), int((y + hh - 5 - self.oy) // TILE)
-            for r in range(max(0, r0), min(self.H, r1 + 1)):
-                for c in range(max(0, c0), min(self.W, c1 + 1)):
-                    cells.append((r, c, up))
-                    if not self.plat_seen[r, c]:
-                        self.plat_seen[r, c] = changed = True
-                    self.plat_owner.setdefault((r, c), set()).add(k)
-        self.plat_cells = cells
-        self.plat_set = {(r, c) for r, c, _ in cells}
-        return changed
-
-    def hazard_mask(self, boxes) -> np.ndarray:
-        """Open cells a hazard box reaches (the body would touch it there), as in the agents' map."""
-        out = np.zeros((self.H, self.W), dtype=bool)
-        cx = self.ox + (np.arange(self.W) + 0.5) * TILE
-        cy = self.oy + (np.arange(self.H) + 0.5) * TILE
-        for b in boxes:
-            x, y, hw, hh, _ = b
-            far = float(np.hypot(hw, hh)) + 6.0
-            c0, c1 = max(0, int((x - far - self.ox) // TILE)), min(self.W, int((x + far - self.ox) // TILE) + 1)
-            r0, r1 = max(0, int((y - far - self.oy) // TILE)), min(self.H, int((y + far - self.oy) // TILE) + 1)
-            if c0 < c1 and r0 < r1:
-                out[r0:r1, c0:c1] |= box_distance(cx[None, c0:c1], cy[r0:r1, None], b) < 6.0
-            c, r = self.cell(x, y)
-            if 0 <= c < self.W and 0 <= r < self.H:
-                out[r, c] = True
-        return out & ~self.solid0
-
-    def set_sealed(self, boxes, seeds) -> int:
-        """Open cells the player cannot get into: not reachable from the spawn, goals, keys or portals without
-        going through a wall or a hazard (boxes: the hazards that stay put). Lava pits are drawn as a few
-        stacked lava pieces whose boxes leave gaps between them; in the game the pit is all lava. A pocket
-        that touches a hazard counts as hazard, one closed in by walls as solid (agents' map, routes,
-        monitor). Pockets over SEALED_MAX cells are left open. Returns the number of sealed cells."""
-        haz = self.hazard_mask(boxes)
-        passable = (~self.solid0 | self.special) & ~haz
-        seen = np.zeros((self.H, self.W), dtype=bool)
-        todo = []
-        for x, y in seeds:
-            c, r = self.cell(x, y)
-            if 0 <= c < self.W and 0 <= r < self.H and not seen[r, c]:
-                seen[r, c] = True
-                todo.append((r, c))
-        while todo:
-            r, c = todo.pop()
-            for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
-                if 0 <= nr < self.H and 0 <= nc < self.W and not seen[nr, nc] and passable[nr, nc]:
-                    seen[nr, nc] = True
-                    todo.append((nr, nc))
-        pocket = ~self.solid0 & ~seen & ~haz
-        self.sealed_haz[:] = False
-        self.sealed_wall[:] = False
-        done = np.zeros_like(pocket)
-        for r0, c0 in zip(*np.nonzero(pocket)):
-            if done[r0, c0]:
-                continue
-            comp, todo, touch = [], [(r0, c0)], False
-            done[r0, c0] = True
-            while todo:
-                r, c = todo.pop()
-                comp.append((r, c))
-                for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
-                    if 0 <= nr < self.H and 0 <= nc < self.W:
-                        if haz[nr, nc]:
-                            touch = True
-                        elif pocket[nr, nc] and not done[nr, nc]:
-                            done[nr, nc] = True
-                            todo.append((nr, nc))
-            if len(comp) > SEALED_MAX:
-                continue
-            rr, cc = zip(*comp)
-            (self.sealed_haz if touch else self.sealed_wall)[list(rr), list(cc)] = True
-        self.tile_ver += 1
-        return int(self.sealed_haz.sum() + self.sealed_wall.sum())
-
-    def plat_fixed(self, k: int) -> bool:
-        return self.plat_frames >= PLAT_STILL and not self.plat_moved[k]
-
-    def plat_blocks(self) -> np.ndarray:
-        """Cells of the fixed platforms: walls for the routes."""
-        out = np.zeros((self.H, self.W), dtype=bool)
-        for (r, c), ks in self.plat_owner.items():
-            if all(self.plat_fixed(k) for k in ks):
-                out[r, c] = True
-        return out
-
-    def plat_doors(self) -> np.ndarray:
-        """Every cell a moving (or not yet known) platform has covered: the routes cross them only when there
-        is no way around, like a moving saw's sweep (it may be in the way, or carry the player)."""
-        return self.plat_seen & ~self.plat_blocks()
-
-    def plat_support(self) -> np.ndarray:
-        """Open cells a route may stand in thanks to a platform: just above anywhere one has been (riding
-        it), and beside anywhere one has been (a wall to jump off)."""
-        seen = self.plat_seen
-        out = np.zeros_like(seen)
-        out[1:, :] |= seen[:-1, :]
-        out[:, 1:] |= seen[:, :-1]
-        out[:, :-1] |= seen[:, 1:]
-        return out & ~self.solid & ~seen
-
-    def surfaces(self) -> np.ndarray:
-        """Per cell, what a solid tile offers the player (live tiles): a floor to run on (open above), a wall to
-        jump off (open left or right), both (a ledge corner), a ceiling (open below), or nothing (inside)."""
-        if getattr(self, "_surf_ver", None) == self.tile_ver:
-            return self._surf
-        S = self.solid
-        H, W = S.shape
-        pad = np.pad(S, 1, constant_values=True)
-        up, down = ~pad[2:, 1:-1], ~pad[:-2, 1:-1]            # row 0 = bottom: "above" is row + 1
-        side = ~pad[1:-1, :-2] | ~pad[1:-1, 2:]
-        out = np.zeros((H, W), dtype=np.float32)
-        out[S] = S_INSIDE
-        out[S & down & ~up & ~side] = S_CEIL
-        out[S & down & side & ~up] = S_CEIL_WALL
-        out[S & side & ~up & ~down] = S_WALL
-        out[S & up & ~side] = S_FLOOR
-        out[S & up & side] = S_LEDGE
-        self._surf, self._surf_ver = out, self.tile_ver
-        return out
-
-    def wind_at(self, x: float, y: float):
-        """The wind force on a character here, as the game computes it (FUN_004c40e0)."""
-        fx = fy = 0.0
-        for fxp, fyp, ux, uy, hw, rng, st in self.fans:
-            if rng <= 0:
-                continue
-            along = (x - fxp) * ux + (y - fyp) * uy
-            lat = (x - fxp) * uy - (y - fyp) * ux
-            if along < 0 or along > rng or abs(lat) > hw + 6.0:
-                continue
-            c = 1.0 - along / rng
-            if c >= 0.5:
-                c *= 5.0
-            fx += ux * st * c
-            fy += uy * st * c
-        return fx, fy
-
-    def set_lethal(self, types: list, ids=None):
-        nm = lambda t: (self.names[t].lower() if self.names and 0 <= t < len(self.names) else None)
-        self.hz_keep = [not (nm(t) and nm(t).startswith(DECOR)) for t in types]
-        self.hz_ids = list(ids) if ids is not None else [str(k) for k in range(len(types))]
-
-    def _lock_groups(self) -> list[list[int]]:
-        """Per key: the lock tiles it opens (cell indices row * W + col). Lock tiles in touch form a group;
-        each group is opened by the key nearest to it."""
-        lock = tile_classes(self.words0)["lock"]
-        out = [[] for _ in self.keys]
-        if not self.keys or not lock.any():
-            return out
-        seen = np.zeros_like(lock)
-        for r0, c0 in zip(*np.nonzero(lock)):
-            if seen[r0, c0]:
-                continue
-            comp, q = [], [(r0, c0)]
-            seen[r0, c0] = True
-            while q:
-                r, c = q.pop()
-                comp.append((r, c))
-                for dr in (-1, 0, 1):
-                    for dc in (-1, 0, 1):
-                        rr, cc = r + dr, c + dc
-                        if 0 <= rr < self.H and 0 <= cc < self.W and lock[rr, cc] and not seen[rr, cc]:
-                            seen[rr, cc] = True
-                            q.append((rr, cc))
-            cx = [self.ox + (c + 0.5) * TILE for _, c in comp]
-            cy = [self.oy + (r + 0.5) * TILE for r, _ in comp]
-            k = min(range(len(self.keys)), key=lambda k: min(np.hypot(np.array(cx) - self.keys[k][0],
-                                                                        np.array(cy) - self.keys[k][1])))
-            out[k] += [int(r) * self.W + int(c) for r, c in comp]
-        return out
-
-    def opened_cells(self, mask: int) -> list[tuple[int, int]]:
-        """Lock tiles open for an agent holding keys `mask` (bit k = key k)."""
-        out = []
-        for k, g in enumerate(self.lock_groups):
-            if (mask >> k) & 1:
-                out += [divmod(ci, self.W) for ci in g]
-        return out
-
-    def apply_tiles(self, changes: list):
-        """Cells the game changed this frame. A special tile (crumble / lock / switch block) whose word differs
-        from the level's start is taken as gone; back to its start word, it is there again."""
-        for idx, w in changes:
-            r, c = divmod(int(idx), self.W)
-            if not (0 <= r < self.H):
-                continue
-            old = int(self.words[r, c])
-            self.words[r, c] = w
-            if self.special[r, c]:
-                solid = int(w) == int(self.words0[r, c])
-            else:
-                solid = bool(tile_solid(np.array([w], dtype=np.uint32))[0])
-            if self.tile_log < 12:             # how the game marks a broken / opened tile (for the record)
-                self.tile_log += 1
-                print(f"[tiles] {self.name}: cell ({c},{r}) 0x{old:08x} -> 0x{int(w):08x}"
-                      f" ({'solid' if solid else 'open'})", flush=True)
-            if solid != self.solid[r, c]:
-                self.solid[r, c] = solid
-                if self.base[r, c] != C_GOAL:
-                    self.base[r, c] = C_SOLID if solid else C_EMPTY
-                self.tile_ver += 1
-
-    def cell(self, x: float, y: float) -> tuple[int, int]:
-        return int((x - self.ox) // TILE), int((y - self.oy) // TILE)
-
-    def _bfs(self) -> np.ndarray:
-        """Path length (tiles) from each open cell to the nearest goal, 4-connected; inf where unreachable."""
-        d = np.full((self.H, self.W), np.inf, dtype=np.float32)
-        q = deque()
-        for gx, gy in self.goals:
-            c, r = self.cell(gx, gy)
-            if 0 <= c < self.W and 0 <= r < self.H:
-                d[r, c] = 0.0
-                q.append((c, r))
-        while q:
-            c, r = q.popleft()
-            for nc, nr in ((c + 1, r), (c - 1, r), (c, r + 1), (c, r - 1)):
-                if 0 <= nc < self.W and 0 <= nr < self.H and d[nr, nc] == np.inf and not self.solid[nr, nc]:
-                    d[nr, nc] = d[r, c] + 1.0
-                    q.append((nc, nr))
-        return d
-
-    def goal_dist(self, x: float, y: float) -> float:
-        c, r = self.cell(x, y)
-        if 0 <= c < self.W and 0 <= r < self.H and np.isfinite(self.dist[r, c]):
-            return float(self.dist[r, c])
-        gx, gy = min(self.goals, key=lambda g: (g[0] - x) ** 2 + (g[1] - y) ** 2) if self.goals else self.spawn
-        return float(np.hypot(gx - x, gy - y) / TILE) + self.diag   # off the known paths: worse than any path
-
-    def grid_with_hazards(self, boxes: list) -> np.ndarray:
-        """Cell codes now: tiles, goals, and the lethal pieces at their current positions (every open cell
-        whose centre is within the body's half size of a hazard box, and the cell the hazard is in)."""
-        g = self.base.copy()
-        if self.wind.any():
-            g[self.wind & (g == C_EMPTY)] = C_WIND
-        if self.orb_cells.any():
-            g[self.orb_cells & (g == C_EMPTY)] = C_ORB
-        g[self.sealed_haz & (g != C_SOLID)] = C_HAZARD   # pockets the player cannot get into (lava pits)
-        g[self.sealed_wall & (g != C_SOLID)] = C_SOLID
-        for r, c, _ in self.plat_cells:              # moving platforms where they are now
-            if g[r, c] != C_SOLID:
-                g[r, c] = C_PLATFORM
-        cx = self.ox + (np.arange(self.W) + 0.5) * TILE
-        cy = self.oy + (np.arange(self.H) + 0.5) * TILE
-        for b in boxes:
-            x, y, hw, hh, _ = b
-            far = float(np.hypot(hw, hh)) + 6.0
-            c0, c1 = max(0, int((x - far - self.ox) // TILE)), min(self.W, int((x + far - self.ox) // TILE) + 1)
-            r0, r1 = max(0, int((y - far - self.oy) // TILE)), min(self.H, int((y + far - self.oy) // TILE) + 1)
-            if c0 < c1 and r0 < r1:
-                m = (box_distance(cx[None, c0:c1], cy[r0:r1, None], b) < 6.0) & (g[r0:r1, c0:c1] != C_SOLID)
-                g[r0:r1, c0:c1][m] = C_HAZARD
-            c, r = self.cell(x, y)
-            if 0 <= c < self.W and 0 <= r < self.H and g[r, c] != C_SOLID:
-                g[r, c] = C_HAZARD
-        return g
-
-
-def hazard_boxes(hz: list, keep=None) -> tuple[list, list]:
-    """Lethal pieces [x, y, size w, size h, scale x, scale y, angle] (realgame.js; size from the game's
-    FUN_004ca860 at scale 1) as rotated boxes (x, y, half w, half h, angle). keep: which ones are real hazards
-    (not decoration). Returns the boxes and the indices of the entries kept."""
-    out, kept = [], []
-    for k, h in enumerate(hz):
-        if keep is not None and k < len(keep) and not keep[k]:
-            continue
-        x, y, w, hgt, sx, sy, ang = h
-        sx, sy = abs(sx or 1.0), abs(sy or 1.0)
-        if w <= 0 and hgt <= 0:
-            w = hgt = 24.0
-        out.append((x, y, 0.5 * w * sx, 0.5 * hgt * sy, ang))
-        kept.append(k)
-    return out, kept
-
-
 def route_rgb(k: int, p) -> tuple:
     """Route colour: green / blue / orange for the main routes, pink for the bandage route."""
     return PATH_RGB[3] if getattr(p, "kind", "main") == "bandage" else PATH_RGB[k % 3]
@@ -572,44 +169,22 @@ def other_trainers() -> list[str]:
             if "realgame.py" in ln and "|" in ln and ln.split("|", 1)[0].strip() != me]
 
 
-def identify_level(info: dict, tiles: bytes) -> str | None:
-    """Name of the level the game shows when attached mid-level: the extracted level file (tools/smbl_extract.py)
-    with the same size, origin and collision tiles."""
-    d = os.path.join(HERE, "imported", "smb_static")
-    if not os.path.isdir(d):
-        return None
-    t = np.frombuffer(tiles, dtype="<u4").reshape(info["H"], info["W"]) & 0xff
-    live = ((t > 0) & (t < 100)).astype(np.uint8)
-    try:   # prefer the files the game's chapters use (there are editor copies such as 4-1_TEST)
-        with open(os.path.join(d, "chapters.json")) as fh:
-            used = [c["file"] for c in json.load(fh)]
-    except (OSError, ValueError):
-        used = []
-    names = sorted(f[:-len("_semantic.json")] for f in os.listdir(d) if f.endswith("_semantic.json"))
-    names.sort(key=lambda n: (n not in used, len(n), n))
-    for n in names:
-        f = n + "_semantic.json"
-        with open(os.path.join(d, f)) as fh:
-            j = json.load(fh)
-        if (j["W"], j["H"]) != (info["W"], info["H"]) or tuple(j["origin"]) != (info["ox"], info["oy"]):
-            continue
-        tid = np.array(j["solid"], dtype=np.uint8)
-        if (tid == live).mean() > 0.98:
-            return n
-    return None
 
 
 def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float, haz=None, opened=(),
-            stuck=(0.0, 0.0), held: int = 0) -> np.ndarray:
+            stuck=(0.0, 0.0), held: int = 0, shape_inputs: bool = False) -> np.ndarray:
+    """One agent's PPO observation (obs_size(shape_inputs) floats). shape_inputs: also, at the end, the open
+    direction x and y of the local map's tiles (Level.open_dirs; the grid's window, rows top-down, 0 outside
+    the map)."""
     x, y, vx, vy, flags = s[:5]
     gx, gy = lv.goals[0] if lv.goals else lv.spawn
     d = lv.goal_dist(x, y)
     c, r = lv.cell(x, y)
-    pad = np.pad(grid, K, constant_values=C_SOLID)
+    pad = np.pad(grid, K, constant_values=C_HAZARD)   # outside the map: death (realgame.js outOfLevel), not a wall
     rr, cc = min(max(r, -K), lv.H + K - 1) + K, min(max(c, -K), lv.W + K - 1) + K
     patch = pad[rr - K:rr + K + 1, cc - K:cc + K + 1]
     if patch.shape != (2 * K + 1, 2 * K + 1):
-        patch = np.full((2 * K + 1, 2 * K + 1), C_SOLID, dtype=np.float32)
+        patch = np.full((2 * K + 1, 2 * K + 1), C_HAZARD, dtype=np.float32)
     if opened:                                     # locks this agent's keys opened (open for it alone)
         patch = patch.copy()
         for lr, lc in opened:
@@ -640,9 +215,9 @@ def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float,
         fv[5] = 1.0 if np.hypot(ox_ - x, oy_ - y) <= max(r1, r2) else 0.0
     wv = np.array([wall_touch(lv, x, y, -1, opened), wall_touch(lv, x, y, 1, opened),
                    1.0 if len(s) > 5 and s[5] == WALL_SLIDE else 0.0], np.float32)
-    sp = np.pad(lv.surfaces(), K, constant_values=S_INSIDE)[rr - K:rr + K + 1, cc - K:cc + K + 1]
+    sp = np.pad(lv.surfaces(), K, constant_values=0.0)[rr - K:rr + K + 1, cc - K:cc + K + 1]   # outside: no surface
     if sp.shape != (2 * K + 1, 2 * K + 1):
-        sp = np.full((2 * K + 1, 2 * K + 1), S_INSIDE, dtype=np.float32)
+        sp = np.zeros((2 * K + 1, 2 * K + 1), dtype=np.float32)
     if lv.plat_cells:                              # platforms: a floor to ride (upright ones: a wall)
         sp = sp.copy()
         for pr, pc_, up in lv.plat_cells:
@@ -656,8 +231,14 @@ def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float,
         if np.hypot(px - x, py - y) < 10 * TILE:
             vx_, vy_ = lv.plat_vel[k] if k < len(lv.plat_vel) else (0.0, 0.0)
             plv[:] = np.clip([(px - x) / 200.0, (py - y) / 200.0, vx_ / 300.0, vy_ / 300.0], -2, 2)
-    return np.concatenate([vec, patch[::-1].ravel(), pv, hv, wv, fv, sp[::-1].ravel(),   # patch rows top-down
-                           np.asarray(stuck, np.float32), plv, np.array([min(1.0, held / 20.0)], np.float32)])
+    parts = [vec, patch[::-1].ravel(), pv, hv, wv, fv, sp[::-1].ravel(),   # patch rows top-down
+             np.asarray(stuck, np.float32), plv, np.array([min(1.0, held / 20.0)], np.float32)]
+    if shape_inputs:                               # appended last: an older policy is widened (load_policy)
+        od = lv.open_dirs(K)[:, rr - K:rr + K + 1, cc - K:cc + K + 1]
+        if od.shape[1:] != (2 * K + 1, 2 * K + 1):
+            od = np.zeros((2, 2 * K + 1, 2 * K + 1), np.float32)
+        parts += [od[0, ::-1].ravel(), od[1, ::-1].ravel()]
+    return np.concatenate(parts)
 
 
 def wall_touch(lv: Level, x: float, y: float, side: int, opened=()) -> float:
@@ -696,8 +277,9 @@ class Policy(nn.Module):
 
 
 def load_policy(policy: Policy, path: str):
-    """Load a saved model; one from before the route inputs existed keeps its weights for the old inputs and
-    starts the new input columns small."""
+    """Load a saved model; one from before the route inputs (or the --shape-inputs maps) existed keeps its
+    weights for the old inputs and starts the new input columns small. A model with more inputs than this
+    policy (trained with --shape-inputs, loaded without it) is an error."""
     sd = torch.load(path, map_location="cpu")["policy"]
     own = policy.state_dict()
     widened = False
@@ -710,6 +292,9 @@ def load_policy(policy: Policy, path: str):
             own[k][:, :v.shape[1]] = v
             own[k][:, v.shape[1]:] *= 0.1
             widened = True
+        elif v.dim() == 2 and own[k].shape[0] == v.shape[0] and v.shape[1] > own[k].shape[1]:
+            raise ValueError(f"{path}: {k} takes {v.shape[1]} inputs, this policy {own[k].shape[1]} "
+                             f"(--shape-inputs adds {N_SHAPE}: start with the same choice)")
     policy.load_state_dict(own)
     return widened
 
@@ -777,11 +362,12 @@ class Trainer:
         self.args = args
         self.run_dir = os.path.join(HERE, "runs", args.name)
         os.makedirs(self.run_dir, exist_ok=True)
-        self.policy = Policy()
+        self.shape_inputs = bool(getattr(args, "shape_inputs", False))
+        self.policy = Policy(obs_size(self.shape_inputs))
         if args.load:
             p = args.load if args.load.endswith(".pt") else os.path.join(args.load, "model.pt")
             widened = load_policy(self.policy, p)
-            print(f"loaded {p}" + (" (older model: the route inputs start untrained)" if widened else ""))
+            print(f"loaded {p}" + (" (older model: added observation inputs start untrained)" if widened else ""))
         self.ppo = PPO(self.policy)
         self.level: Level | None = None
         self.traj, self.best_d, self.acts, self.alive = [], [], [], []
@@ -823,22 +409,32 @@ class Trainer:
         self.visits = {}                   # 2x2-tile block -> agent visits on this level (exploration bonus)
         n = info["agents"]
         lv = self.level
-        decor = sum(1 for k in lv.hz_keep if not k)
+        rows = info.get("hz", [])
+        if rows and all(len(h) > 7 and h[7] is not None for h in rows):   # the game's kill shapes decide
+            decor = sum(1 for h in rows if not h[7])
+            decor_why = "with no kill shape now"
+        else:
+            decor = sum(1 for k in lv.hz_keep if not k)
+            decor_why = "decoration"
         print(f"[level] {info['name']}: {lv.W}x{lv.H}, {len(lv.goals)} goal(s), {info['lethal']} lethal pieces"
-              + (f" ({decor} of them decoration)" if decor else "")
+              + (f" ({decor} of them {decor_why})" if decor else "")
               + (f", {len(lv.keys)} key(s)" if lv.keys else "") + (f", {len(lv.bandages)} bandage(s)" if lv.bandages else "")
               + (f", {int(lv.special.sum())} crumble/lock/switch tiles" if lv.special.any() else "")
               + (f", {len(lv.fans)} fan(s)" if lv.fans else "") + (f", {len(lv.orbs)} orb(s)" if lv.orbs else "")
               + (f", {len(lv.portals)} portal pair(s)" if lv.portals else "")
               + (f", {int(lv.accel.sum())} accelerator tiles" if lv.accel.any() else "")
               + f", {n} agents", flush=True)
+        kb = lv.kill_box
+        print(f"[level] {info['name']}: " + (f"kill box x {kb[0]:.0f}..{kb[1]:.0f}, y {kb[2]:.0f}..{kb[3]:.0f} "
+                                             f"({int(lv.outside_cells.sum())} map cells outside it)" if kb else
+                                             "no kill box from the game: map edges +10 / -60 rule"), flush=True)
         self.new_wave(n)
         if lv.keys:
             print(f"[keys] {lv.name}: " + ", ".join(f"key {k + 1} opens {len(g)} lock tile(s)"
                                                    for k, g in enumerate(lv.lock_groups)), flush=True)
         if "hz" in info:                     # the game waits for this (no agent moves meanwhile)
             self.boxes, kept = hazard_boxes(info["hz"], lv.hz_keep)
-            self.track_hazards(self.boxes, [lv.hz_ids[k] for k in kept])
+            self.track_hazards(self.boxes, box_ids(kept, lv.hz_ids))
             self.build_paths(reset=False)
 
     def assign_paths(self, n: int) -> list[int]:
@@ -910,7 +506,7 @@ class Trainer:
     def route(self, i: int):
         return self.paths[self.path_of[i]] if self.paths and i < len(self.path_of) else None
 
-    def on_frame(self, m: dict) -> dict:
+    def on_frame(self, m: dict, data=None) -> dict:
         lv, states = self.level, m["s"]
         if lv is None:
             return {"a": [[0, 0, 0, 0]] * len(states), "leader": 0}
@@ -921,6 +517,11 @@ class Trainer:
             lv.apply_tiles(m["tc"])
         if m.get("fx"):
             lv.set_fields(m["fx"])
+        if m.get("kb") and lv.set_kill_box(m["kb"]):   # the camera's view changed size (rare): new kill box
+            kb = lv.kill_box
+            print(f"[level] {lv.name}: kill box now x {kb[0]:.0f}..{kb[1]:.0f}, y {kb[2]:.0f}..{kb[3]:.0f} "
+                  f"(frame {m['frame']})", flush=True)
+            self.path_dirty = True
         if m.get("pf") and lv.set_platforms(m["pf"]) and self.paths_built:
             self.path_dirty = True           # a platform reached new cells: the routes may ride it there
         if m.get("lt"):                      # pieces came or went (shots): the hazard list changed
@@ -931,7 +532,7 @@ class Trainer:
                 print(f"[hazards] {lv.name}: pieces came or went, {before} -> {len(lv.hz_ids)} lethal "
                       f"(frame {m['frame']})", flush=True)
         boxes, kept = hazard_boxes(m["hz"], lv.hz_keep)
-        ids = [lv.hz_ids[k] if k < len(lv.hz_ids) else str(k) for k in kept]
+        ids = box_ids(kept, lv.hz_ids, prefix="")
         for sid, x, y, rad in m.get("sh", []):   # flying shots (seen by the agents, not planned around)
             boxes.append((x, y, rad, rad, 0.0))
             ids.append(f"shot{sid}")
@@ -1076,7 +677,8 @@ class Trainer:
             obs = np.stack([observe(lv, grid, states[i], self.route(i), self.cur_s[i], self.cur_off[i],
                                     moving_features(states[i][0], states[i][1], pos, self.hz_vel, moving),
                                     lv.opened_cells(self.keys_of[i]) if self.keys_of[i] else (),
-                                    self.stuck_inputs(i, m["frame"]), self.jump_held[i]) for i in live])
+                                    self.stuck_inputs(i, m["frame"]), self.jump_held[i], self.shape_inputs)
+                            for i in live])
             if self.args.test:
                 a = np.array([self.scripted(m["frame"], i) for i in live])
                 lp = v = np.zeros(len(live), np.float32)
@@ -1207,17 +809,17 @@ class Trainer:
             self.hz_start = {}
         level_ids = self.level.hz_level_ids if self.level is not None else set()
         for b, hid in zip(boxes, ids):
-            if hid not in level_ids:
+            if box_base(hid) not in level_ids:
                 continue
             if hid not in self.hz_start:
                 self.hz_start[hid] = b
                 continue
             x, y, hw, hh, a = b
-            x0, y0, _, _, a0 = self.hz_start[hid]
-            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05:
+            x0, y0, hw0, hh0, a0 = self.hz_start[hid]
+            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05 or abs(hw - hw0) > 1 or abs(hh - hh0) > 1:
                 if hid not in self.moving:
                     self.moving.add(hid)
-                    self.sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw, hh, round(a0, 1)))
+                    self.sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw0, hh0, round(a0, 1)))
                 key = (round(x / 4) * 4, round(y / 4) * 4, hw, hh, round(a, 1))
                 if key not in self.sweep:
                     self.sweep.add(key)
@@ -1277,7 +879,8 @@ class Trainer:
         self.paths = Planner(lv.words0, lv.ox, lv.oy, lv.spawn, lv.goals, static, sweeps, lv.keys, lv.bandages,
                              list(lv.portals) + list(self.links), lift=lv.wind | lv.plat_support(),
                              blocks=lv.plat_blocks() | lv.sealed_haz | lv.sealed_wall,
-                             doors=lv.plat_doors()).find(self.args.paths)
+                             doors=lv.plat_doors(),
+                             outside=lv.outside_cells if lv.kill_box is not None else None).find(self.args.paths)
         self.route_stats = []
         if hasattr(self, "best_k"):          # new routes: progress on them starts again (no reward for that)
             self.best_k = [[None] * len(self.paths) for _ in self.best_k]
@@ -1331,8 +934,9 @@ class Trainer:
 
     # saving
     def save(self, path=None):
-        torch.save({"policy": self.policy.state_dict(), "obs": OBS, "actions": ACTIONS},
-                   path or os.path.join(self.run_dir, "model.pt"))
+        extra = {"shape_inputs": True} if self.shape_inputs else {}    # without the flag: the file as before
+        torch.save({"policy": self.policy.state_dict(), "obs": obs_size(self.shape_inputs), "actions": ACTIONS,
+                    **extra}, path or os.path.join(self.run_dir, "model.pt"))
 
     def save_best(self, level: str, t: float, agent: int):
         d = os.path.join(self.run_dir, "levels", level)
@@ -1481,6 +1085,8 @@ def main():
     ap.add_argument("--name", default=None, help="run folder name under runs/ (default real_<time>)")
     ap.add_argument("--test", action="store_true", help="scripted inputs, no learning (checks the mod)")
     ap.add_argument("--no-monitor", action="store_true", help="no monitor window")
+    ap.add_argument("--shape-inputs", action="store_true",
+                    help="append half-block/slope open-direction maps; widens older PPO policies")
     ap.add_argument("--debug-spawn", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
     args.paths = max(1, min(args.paths, 3))

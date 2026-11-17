@@ -1,0 +1,23 @@
+{
+  "source_branch": "main",
+  "target_branch": "ONLYPPO",
+  "source_sha256_lf": {
+    "realgame.py": "477ac30aa3817b289d13ffa9d71ab8cebf8bd1554bfb4b643c923952e156cb0a",
+    "realgame.js": "c6c2979750699eb8bcc4d86d24138529ae4da9b54a50bba4d3c73263e16837e7",
+    "game/level.py": "db82455a6c7bdf322cd1ca63d75eab940153d40fb46c252d63381bee4f8e2d1d",
+    "realpath.py": "b473f3f0df27d7761affb80e9c90ac023224316c525b5be843e8b47a321149d4",
+    "monitor.py": "01d666957d970299b54d7ea17df4cdebe6512897aa1b541621ac8ad1feb5a9c5"
+  },
+  "excluded": [
+    "wm/",
+    "mpc/",
+    "plan/",
+    "agent.py",
+    "learned dynamics",
+    "future rollout",
+    "online learner",
+    "A+ reward changes",
+    "realtest",
+    "time-step locking"
+  ]
+}

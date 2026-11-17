@@ -190,3 +190,21 @@ Older models load: new input columns start small.
 - What accelerator tiles (id 98) do.
 - Whether the lava fill ever closes a real area (pockets over 150 cells stay open).
 - Moving saws on tracks are assumed to update their piece position like other movers.
+
+## 2026-11-17 — current PPO perception, still PPO only
+
+The user requested that ONLYPPO see everything main's PPO can see, with no world model or action planner.
+Ported live kill-region/enemy/laser/projectile observations and camera death boundaries from `realgame.js`,
+plus their PPO geometry consumers into `game/level.py`. The trainer uses main's observation construction,
+stable hazard identities and optional half-block/slope input maps. The monitor shares the corrected tile
+decoder. The old reward-route generator remains, with its geometry/boundary/portal fixes; it does not choose
+actions. PPO rewards, updates, action space, manual S saving and the branch's time-step behaviour are unchanged.
+
+`--shape-inputs` enables the same 524-input layout as main; without it existing 282-input policies still load.
+Older checkpoints can widen while keeping learned columns; wider checkpoints require the flag when resumed.
+No `wm/`, `mpc/`, `plan/`, `agent.py`, online learner, future predictions or A+ training/realtest features were
+added. See PROJECT_STATE.md for usage, feature boundaries and source provenance.
+
+Validation: 8 focused tests passed, including main/PPO observation parity, real PPO updates from synthetic
+game messages, checkpoint compatibility, blocked forbidden imports and native adapter execution in fake
+memory. Syntax/compilation checks passed. Native live-game behaviour is not yet verified.

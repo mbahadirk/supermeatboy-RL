@@ -50,6 +50,11 @@ function vcall(obj, off, ...args) {               // thiscall virtual with int-s
 }
 const V_RESPAWN = 0x30, V_RUN = 0x38, V_JUMP = 0x3c, V_LEFT = 0x40, V_RIGHT = 0x44;
 
+// Read the actual update duration for observed shrapnel calibration. No time-step patch.
+let timer = null;
+Interceptor.attach(img(0x450e70), { onEnter() { timer = this.context.ecx; } });
+function stepMs() { return timer ? rd(() => 1000 * timer.add(0x68).readFloat()) : null; }
+
 let active = true;
 rpc.exports = { shutdown() { if (active) { active = false; releaseMain(); } return true; } };   // only when no frame waits
 
@@ -69,7 +74,7 @@ Interceptor.attach(img(0x4e9020), { onEnter(a) {
   curName = n; main = null; settle = 0; ready = false; agents = []; crowd = []; agentSet = new Set(); pendingWave = false; holdFrames = 0;
   keyPos = []; keyLocks = []; lockWord = new Map(); lockOpen = new Map(); keysOf = [];
   finishing = 0; finishRequested = false; best = null; leader = -1; wave = 0; frame = 0;
-  tilemap = null; levelOY = null; paths = []; prevTiles = null;   // the new level has its own tile map, pool and paths
+  tilemap = null; levelOY = null; levelBox = null; paths = []; prevTiles = null; kb = null; kbShown = false; kbPending = null;   // the new level has its own tile map, pool and paths
   send({ ev: 'level', name: n });
 } });
 
@@ -133,7 +138,58 @@ function setupAgents() {
 }
 
 // static level facts from the game's memory: tile layer 0, origin, size; goal pieces (type flag 0x02)
-let tilemap = null, levelOY = null;
+let tilemap = null, levelOY = null, levelBox = null;   // levelBox: [left, right, top] edges of the map
+// out of the level: the player (mode 0 only) dies when its position (+0x84, +0x88) leaves the camera's view
+// enlarged by 15% (FUN_00520d30, 0x520fd3..0x521092: the view box is copied from camera+0x144, camera =
+// [game+0x20]; half extents at box+0x8c / +0x90, times 1.15 (0x3f933333); centre box+0x50 / +0x60). The camera
+// (FUN_004a30c0) is clamped so its view stays inside the level's camera bounds ([game+0x24] = the level
+// object: min x +0x1d38, min y +0x1d3c, max x +0x1d40, max y +0x1d44; about +-1e8 when the level has none),
+// centred on an axis where the bounds are smaller than the view. Our agents are mode 2 (no such check), so for
+// a player the camera follows the kill lines per axis are: bounds wider than the view: [min - 0.15 h,
+// max + 0.15 h]; else [c - 1.15 h, c + 1.15 h] around the bounds' centre c (h: view half extent). That is
+// killBox(); an axis without bounds keeps the older rule: OUT_SIDE past the map's left / right / top edge,
+// OUT_BOTTOM below it.
+const OUT_SIDE = 10, OUT_BOTTOM = 60, VIEW_KILL = 1.15, NO_BOUNDS = 1e7;
+let kb = null, kbShown = false, kbPending = null;   // kb: [left, right, bottom, top] now (null: older rule)
+function camera() { return rd(() => GAME.readPointer().add(0x20).readPointer()); }
+function killBox() {                                 // {kb, cam_bounds, view_half, centre} or null
+  const lv = levelObj(), cam = camera();
+  if (!lv || lv.isNull() || !cam || cam.isNull() || !levelBox) return null;
+  const b = rd(() => [0x1d38, 0x1d3c, 0x1d40, 0x1d44].map(o => lv.add(o).readFloat()));
+  const view = cam.add(0x144);
+  const h = rd(() => [view.add(0x8c).readFloat(), view.add(0x90).readFloat()]);
+  const centre = rd(() => [view.add(0x50).readFloat(), view.add(0x60).readFloat()]);
+  if (!b || !h || !b.every(Number.isFinite) || !h.every(v => Number.isFinite(v) && v > 0 && v < 1e5)) return null;
+  const axis = (lo, hi, hh) => {
+    if (!(Math.abs(lo) < NO_BOUNDS && Math.abs(hi) < NO_BOUNDS && hi > lo)) return null;   // no bounds here
+    if (hi - lo >= 2 * hh) return [lo - (VIEW_KILL - 1) * hh, hi + (VIEW_KILL - 1) * hh];
+    const c = (lo + hi) / 2;
+    return [c - VIEW_KILL * hh, c + VIEW_KILL * hh];
+  };
+  const x = axis(b[0], b[2], h[0]), y = axis(b[1], b[3], h[1]);
+  if (!x && !y) return null;                         // no camera bounds at all: the older rule
+  const r = v => +v.toFixed(2);
+  const box = [...(x || [levelBox[0] - OUT_SIDE, levelBox[1] + OUT_SIDE]),
+               ...(y || [levelOY - OUT_BOTTOM, levelBox[2] + OUT_SIDE])].map(r);
+  return { kb: box, cam_bounds: b.map(r), view_half: h.map(r), centre: centre ? centre.map(r) : null };
+}
+function updateKillBox(where) {                     // at the level info and every wave start (camera zoom)
+  const k = killBox();
+  if (!k) return null;
+  const moved = !kb || k.kb.some((v, j) => Math.abs(v - kb[j]) > 1);
+  if (moved) {
+    if (where !== 'info') kbPending = k.kb;          // changed after the level info: goes with the next frame
+    kb = k.kb;
+  }
+  if (!kbShown || (moved && where !== 'info')) {
+    kbShown = true;
+    send({ ev: 'debug', msg: `level kill box: x ${kb[0].toFixed(1)}..${kb[1].toFixed(1)}, y ${kb[2].toFixed(1)}..${kb[3].toFixed(1)} ` +
+                             `(camera bounds ${k.cam_bounds.map(v => v.toFixed(1)).join(', ')}, view half ${k.view_half[0].toFixed(1)} x ${k.view_half[1].toFixed(1)}; ` +
+                             `camera centre ${k.centre ? k.centre.map(v => v.toFixed(1)).join(', ') : '?'}; map x ${levelBox[0].toFixed(0)}..${levelBox[1].toFixed(0)}, ` +
+                             `y ${levelOY.toFixed(0)}..${levelBox[2].toFixed(0)}; ${where})` });
+  }
+  return k;
+}
 Interceptor.attach(img(0x465b00), { onEnter() { if (!tilemap) tilemap = this.context.ecx; } });
 function validTilemap(G) {                           // levels are centred: origin = -(size * 10)
   const W = rd(() => G.add(0x20).readU16()), H = rd(() => G.add(0x22).readU16());
@@ -165,6 +221,7 @@ function sendLevelInfo() {
   const W = G.add(0x20).readU16(), H = G.add(0x22).readU16();
   const ox = G.add(0x18).readFloat(), oy = G.add(0x1c).readFloat();
   levelOY = oy;
+  levelBox = [ox, ox + W * 20, oy + H * 20];
   const tiles = G.readPointer().readByteArray(W * H * 4);
   tileCount = W * H; prevTiles = new Uint32Array(tiles.slice(0));
   goalPieces = [];
@@ -178,10 +235,17 @@ function sendLevelInfo() {
   const sp = levelObj().add(0x1d2c);
   spawnX = sp.readFloat(); spawnY = sp.add(4).readFloat();
   buildLethal(w);
+  enemyProbe = 3;                                    // log the enemies' fields on the first 3 frames
+  laserProbe = 3;
+  kb = null; kbPending = null;
+  const k = rd(() => updateKillBox('info'));
+  if (!k && !kbShown) { kbShown = true; send({ ev: 'debug', msg: 'level kill box: none (no camera bounds or unreadable): map edges +10 / -60 rule' }); }
   send({ ev: 'info', name: curName, W, H, ox, oy, goals: goalPieces, spawn: [sp.readFloat(), sp.add(4).readFloat()],
          agents: agents.length, lethal: lethal.length, hz: hazards(), objs,
-         lethalTypes: lethal.map(pc => pc.add(0x10).readU16() & 0xff), lethalIds: lethalInfo().ids,
-         fx: rd(() => forceFields(w)), portalTypes: rd(() => portalTypes(w)) || [], pf: rd(() => platforms(w)) || [] }, tiles);
+         lethalTypes: lethalInfo().types, lethalIds: lethalInfo().ids, enemies: enemies.length,
+         fx: rd(() => forceFields(w)), portalTypes: rd(() => portalTypes(w)) || [], pf: rd(() => platforms(w)) || [],
+         kb: kb, cam_bounds: k ? k.cam_bounds : null, view_half: k ? k.view_half : null,
+         lzp: lasers.length ? rd(() => laserParams(w)) : undefined }, tiles);
   waitGo();                                          // Python builds the reward paths now
   return true;
 }
@@ -215,43 +279,297 @@ function buildLethal(w) {
     if (fl === null || (fl & 1)) lethal.push(pc);
   }
   lethalSize = lethal.map(pc => old.get(pc.toString()) || pieceSize(w, pc));
+  rd(() => Memory.copy(KILL_SHAPE, w.add(0x70).readPointer(), 0xa0));   // this level's animation library (+0x20)
+  buildEnemies(w);
+  buildLasers(w);
+}
+
+// ---- kill regions: what the game's narrow phase really tests ----------------------------------------
+// FUN_004cd350 (the pieces check) copies each lethal piece into the world's scratch shape [world+0x70]
+// (0x4cd745..0x4cd7cb: +0x14..+0x20 -> +0x24..+0x30; scale +0x24/+0x28 times the flips of +0x10 bits 10-11
+// (FUN_004976c0: 1 -> x, 2 -> y, 3 -> both) -> +0x34; angle +0x2c -> +0x3c and +0x40; type -> +0x10; animation
+// time +0x38 + +0x30 -> +0x4c; +0x34 -> +0x60) and calls FUN_0045a0e0(shape, character box). That builds the
+// piece's matrix (FUN_00494b20: scale + rotation, translation = position) and asks the type's animation
+// (library [shape+0x20]+0x30, vtable 0x6b7474, +0xc = FUN_0045ad90 -> FUN_0045a990) at that time: a Flash-like
+// timeline (+0x10 loop flag, +0x18 length s, +0x24 layers {keyframes: length, start, tween flag, 0x98-byte
+// children}) whose active children are composed (FUN_0045a1b0: position, scale, rotation, pivot, tweened to the
+// next keyframe) and recursed into. A child with collision kind +0x84 = 1 / 2 ends in FUN_0045b160 (sprite
+// entries, vtable 0x6b745c; the other entry class, 0x6b7448, never collides), which builds
+//   kind 1: a circle at the matrix's translation, radius |max(w, h) x max(scale x, scale y)| (entry +0xc/+0x10,
+//           scale from FUN_004952f0) -> {flags 0x11, r +4, centre +8/+0xc}, tested at 0x45b225;
+//   kind 2: a box of half size |w x scale x x 0.5|, |h x scale y x 0.5|, turned with the matrix
+//           (FUN_00475e30: axis 0 +0x44/+0x54, centre +0x50/+0x60, half sizes +0x84/+0x88), tested at 0x45b39a,
+// each through FUN_00476720 against the character's box (an OBB of half size 6). The shapes move inside the
+// animation while the piece stays put: on 1-14 the "movin" saws keep +0x14/+0x18 and their circle (r 20.35 at
+// scale 0.6) travels 93.6 units over the 2.667 s loop; the "particle" pieces only follow the saws and test no
+// shape at all. The wave reset (FUN_004d2060) sets every piece's +0x30 to 0, so the same wave frame has the
+// same shapes in every wave.
+// So the shapes are read from the game itself: a private copy of the scratch shape (game memory is never
+// written), filled as above, goes through FUN_0045a0e0 against a copy of a real character box moved far away
+// (no test can succeed, so every active shape is tested), and the two test sites record what they are given.
+// killShapes must run inside a replaced function (here: the update, Interceptor.replace): called from an
+// Interceptor.attach callback, Frida does not run the test sites' listeners and every piece reads as empty.
+const NARROW = new NativeFunction(img(0x45a0e0), 'int', ['pointer', 'pointer'], 'thiscall');
+const KILL_SHAPE = Memory.alloc(0x100), FAR_BOX = Memory.alloc(0x100);
+const KILL_MAX = 32;                               // shapes per piece (more are dropped)
+let killGot = null, killTid = -1, killReady = false, killErr = 0;
+const r2 = v => Math.round(v * 100) / 100;
+function killErrMsg(e) { if (killErr++ < 3) send({ ev: 'debug', msg: 'kill shapes: ' + e.message }); }
+Interceptor.attach(img(0x45b225), function () {      // circle: [esp] = {flags, r, centre x, centre y}
+  if (killGot === null || this.threadId !== killTid || killGot.length >= KILL_MAX) return;
+  try {
+    const s = this.context.esp.readPointer(), r = r2(s.add(4).readFloat());
+    killGot.push([1, r2(s.add(8).readFloat()), r2(s.add(12).readFloat()), r, r, 0]);
+  } catch (e) { killErrMsg(e); }
+});
+Interceptor.attach(img(0x45b39a), function () {      // box: eax = the OBB
+  if (killGot === null || this.threadId !== killTid || killGot.length >= KILL_MAX) return;
+  try {
+    const s = this.context.eax;
+    killGot.push([2, r2(s.add(0x50).readFloat()), r2(s.add(0x60).readFloat()), r2(s.add(0x84).readFloat()),
+                  r2(s.add(0x88).readFloat()),
+                  Math.round(Math.atan2(s.add(0x54).readFloat(), s.add(0x44).readFloat()) * 1000) / 1000]);
+  } catch (e) { killErrMsg(e); }
+});
+let boxHook = Interceptor.attach(img(0x4cd350), { onEnter(a) {   // a real character box (args[1], else char+0x44)
+  if (killReady) return;
+  try {
+    const bx = a[1].isNull() ? a[0].add(0x44).readPointer() : a[1];
+    if ((bx.readU32() & 0xf) !== 0) return;          // an OBB (Bounds type 0), as the characters' boxes are
+    Memory.copy(FAR_BOX, bx, 0xa0);
+    for (const o of [0x10, 0x20, 0x50, 0x60]) FAR_BOX.add(o).writeFloat(1e7);   // matrix and centre copies
+    killReady = true;
+  } catch (e) { killErrMsg(e); }
+} });
+function killShapes(pc) {   // the piece's shapes now: [[1, x, y, r, r, 0] | [2, x, y, half w, half h, angle]], null unknown
+  if (!killReady) return null;
+  if (boxHook) { boxHook.detach(); boxHook = null; }
+  try {
+    const S = KILL_SHAPE, u = (pc.add(0x10).readU16() >> 10) & 3, a = pc.add(0x2c).readFloat();
+    for (const o of [0, 4, 8, 12]) S.add(0x24 + o).writeU32(pc.add(0x14 + o).readU32());
+    S.add(0x34).writeFloat(pc.add(0x24).readFloat() * (u === 1 || u === 3 ? -1 : 1));
+    S.add(0x38).writeFloat(pc.add(0x28).readFloat() * (u >= 2 ? -1 : 1));
+    S.add(0x3c).writeFloat(a); S.add(0x40).writeFloat(a);
+    S.add(0x10).writeU32(pc.add(0x10).readU16() & 0xff);
+    S.add(0x4c).writeFloat(pc.add(0x38).readFloat() + pc.add(0x30).readFloat());
+    S.add(0x60).writeU32(pc.add(0x34).readU32());
+    killGot = []; killTid = Process.getCurrentThreadId();
+    NARROW(S, FAR_BOX);
+    return killGot;
+  } catch (e) { killErrMsg(e); return null; } finally { killGot = null; }
 }
 // pieces can be added or removed while the level runs (shots): the list is checked every frame
 let pieceSig = '';
 function sig(all) { return all.length + ':' + (all.length ? all[0] + ',' + all[all.length - 1] : ''); }
-function lethalInfo() {   // types and ids (addresses) of the lethal pieces, in the order hazards() lists them
-  return { types: lethal.map(pc => pc.add(0x10).readU16() & 0xff), ids: lethal.map(pc => pc.toString()) };
+function lethalInfo() {   // types and ids (addresses) of the lethal pieces, in the order hazards() lists them;
+                          // then the enemies (ENEMY_TYPE + their kind, id "enemy<address>")
+  return { types: lethal.map(pc => pc.add(0x10).readU16() & 0xff).concat(enemies.map(e => ENEMY_TYPE + e.kind))
+                  .concat(lasers.map(() => LASER_TYPE)),
+           ids: lethal.map(pc => pc.toString()).concat(enemies.map(e => 'enemy' + e.a)).concat(lasers.map(l => 'laser' + l.a)) };
 }
-function hazards() {                    // [x, y, size w, size h, scale x, scale y, angle] per lethal piece, now
+// per lethal piece, now: [x, y, size w, size h, scale x, scale y, angle, kill shapes] (the piece itself, size
+// from FUN_004ca860 at scale 1: the world model's inputs; then what kills: killShapes, [] = nothing now); then one
+// row per enemy (enemyRows)
+function hazards() {
   return lethal.map((pc, k) => [pc.add(0x14).readFloat(), pc.add(0x18).readFloat(), lethalSize[k][0],
                                 lethalSize[k][1], pc.add(0x24).readFloat(), pc.add(0x28).readFloat(),
-                                pc.add(0x2c).readFloat()]);
+                                pc.add(0x2c).readFloat(), killShapes(pc)]).concat(enemyRows()).concat(laserRows());
+}
+
+// ---- enemies: the crawlers and fliers (Hospital and later) are not pieces --------------------------------
+// They are SMBAnimal objects (SMBAnimal.cpp; vtable 0x682488, ctor FUN_005129e0, 0x1e8 bytes) of the animal
+// manager [[0x7035c4] + 0x2e48] (FUN_00513430 adds one: u16 count +0x18, u16 capacity +0x1a, pointer array +0x28).
+// Kind +0x1cc indexes the name table at 0x6f1a00: 0-3 groundcritter, 4-7 aircritter (background, never lethal),
+// 8-11 groundenemy, 12-15 airenemy, 16 bosscritter, 17 charger, 18 boo, 19 hellbossboy. The character update
+// (FUN_00520d30 at 0x5218ef, right after the pieces check FUN_004cd350) calls FUN_00513200(char, char box +0x71c):
+// every animal of kind 8-15 or 17-19 whose state +0x1d0 is not 5 is tested with the bounds-vs-bounds test
+// FUN_00476720 against its bounds at +0x13c: type 1 = a circle {flags (& 0xf = 1), radius +0x140, centre
+// +0x144 / +0x148} (set to radius 10 in the ctor). A touch kills (the same death path as a lethal piece, so agents
+// die through CANDIE as for pieces). Read straight from the game: nothing is written.
+const ENEMY_TYPE = 1000;                             // lethal type ids of enemies: ENEMY_TYPE + kind (not a piece type)
+const ENEMY_KINDS = new Set([8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19]);
+let enemies = [];                                    // [{a: address, kind}] of this level, in manager order
+function buildEnemies(w) {
+  enemies = [];
+  const mgr = rd(() => w.add(0x2e48).readPointer());
+  if (!mgr || mgr.isNull()) return;
+  const n = rd(() => mgr.add(0x18).readU16()) || 0, arr = rd(() => mgr.add(0x28).readPointer());
+  if (!arr || arr.isNull() || n > 4096) return;
+  for (let i = 0; i < n; i++) {
+    const a = rd(() => arr.add(4 * i).readPointer());
+    if (!a || a.isNull()) continue;
+    const kind = rd(() => a.add(0x1cc).readS32());
+    if (kind !== null && ENEMY_KINDS.has(kind)) enemies.push({ a, kind });
+  }
+}
+// per enemy, now: [x, y, 2r, 2r, 1, 1, 0, kill shapes]: the circle's centre and diameter as the piece box (the
+// world model's inputs), and [[1, x, y, r, r, 0]] while it can kill (state not 5; bounds a circle), else []
+function enemyRows() {
+  return enemies.map(e => {
+    const a = e.a;
+    const fl = rd(() => a.add(0x13c).readU32()), r = rd(() => a.add(0x140).readFloat());
+    const x = rd(() => a.add(0x144).readFloat()), y = rd(() => a.add(0x148).readFloat());
+    const st = rd(() => a.add(0x1d0).readS32());
+    if (x === null || y === null || r === null) return [0, 0, 0, 0, 1, 1, 0, null];
+    const on = st !== 5 && fl !== null && (fl & 0xf) === 1;
+    return [r2(x), r2(y), r2(2 * r), r2(2 * r), 1, 1, 0, on ? [[1, r2(x), r2(y), r2(r), r2(r), 0]] : []];
+  });
+}
+// ---- lasers: the beams are not pieces either --------------------------------------------------------------
+// The level build (FUN_004c8c10 at 0x4c96ec) puts every laser piece (world type ids lazeron +0x2fc4, lazeroff
+// +0x2fc8, lazerwait +0x2fcc; homing ones +0x2fd4..) into the world's array at +0x2ce8 (u16 count +0x2d00, u16
+// capacity +0x2d02, pointer +0x2d10, 0x24 bytes each: +0 its piece, +8 1 while the beam kills). The pieces check
+// FUN_004cd350 tests every entry with +8 == 1 by FUN_004cbd40(char, char box, entry): the beam is the segment from
+// +0x14/+0x18 to +0x1c/+0x20 and it kills when it crosses the character's box (half size 6). Read, never written.
+const LASER_TYPE = 2000;                             // lethal type id of a laser beam (not a piece type)
+let lasers = [];                                     // [{a: entry address, piece}] of this level
+function buildLasers(w) {
+  lasers = [];
+  const n = rd(() => w.add(0x2d00).readU16()) || 0, arr = rd(() => w.add(0x2d10).readPointer());
+  if (!arr || arr.isNull() || n > 256) return;
+  for (let i = 0; i < n; i++) lasers.push({ a: arr.add(0x24 * i), piece: rd(() => arr.add(0x24 * i).readPointer()) });
+}
+// per laser, now: [mid x, mid y, length, 0, 1, 1, angle, kill shapes]: the beam as the piece box (the world
+// model's inputs), and [[3, x0, y0, x1, y1, 0]] (a segment) while it kills (+8 == 1), else []
+function laserRows() {
+  return lasers.map(l => {
+    const f = o => rd(() => l.a.add(o).readFloat());
+    const x0 = f(0x14), y0 = f(0x18), x1 = f(0x1c), y1 = f(0x20), on = rd(() => l.a.add(8).readS32());
+    if (x0 === null || y0 === null || x1 === null || y1 === null) return [0, 0, 0, 0, 1, 1, 0, null];
+    const len = Math.hypot(x1 - x0, y1 - y0), ang = Math.atan2(y1 - y0, x1 - x0);
+    return [r2((x0 + x1) / 2), r2((y0 + y1) / 2), r2(len), 0, 1, 1, Math.round(ang * 1000) / 1000,
+            on === 1 && len > 0 ? [[3, r2(x0), r2(y0), r2(x1), r2(y1), 0]] : []];
+  });
+}
+// per laser, now (exchange's "lz", in the lasers' order = their "laser<entry>" ids in lethalInfo): [state (+8: 0 off,
+// 2 wait, 1 on = kills), timer (+4, float s, counts up), piece angle (+0x2c, radians, whole turns kept), piece
+// animation time (+0x30)] (rules.md 1.3). null fields: unreadable.
+function laserState() {
+  return lasers.map(l => {
+    const pc = l.piece, ok = pc && !pc.isNull();
+    return [rd(() => l.a.add(8).readS32()), rd(() => l.a.add(4).readFloat()),
+            ok ? rd(() => pc.add(0x2c).readFloat()) : null, ok ? rd(() => pc.add(0x30).readFloat()) : null];
+  });
+}
+// once per level (info "lzp", and a frame's "lzp" when the lasers were rebuilt): the wait animation's length
+// (world +0x2fd0) and per laser {id, piece (address: the eye's lethal id), kind (+0xc: 1 homing, 0 plain), x, y
+// (piece +0x14/+0x18: the eye centre, the beam's start), flip ((+0x10 >> 10) & 3: 1 / 3 turn the beam round),
+// angle (+0x2c), params: piece +0x34, +0x38, +0x3c (off time s), +0x40 (on time s) as floats, +0x44 raw u32,
+// +0x48 s32 (the homing turn divisor)} (rules.md 1)
+function laserParams(w) {
+  return { wait_len: rd(() => w.add(0x2fd0).readFloat()), lasers: lasers.map(l => {
+    const pc = l.piece, ok = pc && !pc.isNull();
+    const f = o => ok ? rd(() => pc.add(o).readFloat()) : null;
+    return { id: 'laser' + l.a, piece: ok ? pc.toString() : null, kind: rd(() => l.a.add(0xc).readS32()),
+             x: f(0x14), y: f(0x18), flip: ok ? rd(() => (pc.add(0x10).readU16() >> 10) & 3) : null, angle: f(0x2c),
+             params: [f(0x34), f(0x38), f(0x3c), f(0x40), ok ? rd(() => pc.add(0x44).readU32()) : null,
+                      ok ? rd(() => pc.add(0x48).readS32()) : null] };
+  }) };
+}
+let laserProbe = 0, laserLast = '';
+function probeLasers() {                             // the raw entries on the first frames and whenever they change
+  if (!lasers.length) return;
+  const raw = lasers.map(l => [0x4, 0x8, 0xc, 0x10].map(o => rd(() => l.a.add(o).readS32()))
+    .concat([0x14, 0x18, 0x1c, 0x20].map(o => rd(() => r2(l.a.add(o).readFloat())))));
+  const key = JSON.stringify(raw.map(r => r.slice(0, 4)));
+  if (laserProbe > 0 || (key !== laserLast && laserProbe > -40)) {
+    laserProbe--;
+    laserLast = key;
+    send({ ev: 'debug', msg: `lasers frame ${frame}: ` + JSON.stringify(raw) });
+  }
+}
+// the first frames of a level: everything read about each enemy (to check the layout above against the game)
+let enemyProbe = 0;
+function probeEnemies() {
+  if (enemyProbe <= 0 || !enemies.length) return;
+  enemyProbe--;
+  send({ ev: 'debug', msg: 'enemies: ' + JSON.stringify(enemies.slice(0, 12).map(e => {
+    const a = e.a, f = o => rd(() => r2(a.add(o).readFloat()));
+    return { kind: e.kind, state: rd(() => a.add(0x1d0).readS32()), bounds: rd(() => a.add(0x13c).readU32()),
+             r: f(0x140), centre: [f(0x144), f(0x148)], pos: [f(0xd8), f(0xdc)], spawn: [f(0xe8), f(0xec)] };
+  })) });
 }
 // Shots (thrown saws, missiles): not pieces. Each shooter / launcher is an entity in the world's array
 // (u16 count +0x2c30, pointer +0x2c40, 0x9d4 bytes each; +0 its piece, +0x14 kind) with 10 shot slots of
-// 0xf8 bytes: position +0xa8/+0xac, state +0xfc (0 = flying, the only state that kills). Radius per kind
-// (world +0x2f20 kinds 0/3, +0x2f40 kind 1, +0x2f60 kind 2, +0x2fb8 kind 4) x the piece's scale
-// (FUN_004cd350 tests exactly these). [[id, x, y, radius], ...] of the flying ones.
-const SHOT_R = { 0: 0x2f20, 3: 0x2f20, 1: 0x2f40, 2: 0x2f60, 4: 0x2fb8 };
+// 0xf8 bytes: position +0xa8/+0xac, velocity +0xc0/+0xc4, state +0xfc (0 = flying, the only state that kills).
+// Radius per kind (world +0x2f20 kinds 0/3, +0x2f40 kind 1, +0x2f60 kind 2, +0x2fb8 kind 4) x the piece's scale
+// (FUN_004cd350 tests exactly these); kind 5 (launcher2's missile2, analysis/reactive_hazards_20261117/rules.md
+// 2.4) has no case in that switch: the default radius 1.0 x the piece's scale (null below: no world offset).
+// shots(w): [[[id, x, y, radius], ...] of the flying ones (id = entity x 10 + slot), then the missile shrapnel
+// (shrapnel(): ids SHRAP_ID + element), and [[kind, vx, vy], ...] in the same order (null when there is none)].
+const SHOT_R = { 0: 0x2f20, 3: 0x2f20, 1: 0x2f40, 2: 0x2f60, 4: 0x2fb8, 5: null };
 function shots(w) {
   const out = [];
+  let ext = null;
   const n = w.add(0x2c30).readU16();
-  if (!n || n > 64) return out;
-  const arr = w.add(0x2c40).readPointer();
-  if (arr.isNull()) return out;
-  for (let i = 0; i < n; i++) {
-    const e = arr.add(i * 0x9d4), kind = e.add(0x14).readS32();
-    const ro = SHOT_R[kind];
-    if (ro === undefined) continue;
-    const pc = e.readPointer();
-    const r = w.add(ro).readFloat() * (pc.isNull() ? 1 : Math.abs(pc.add(0x24).readFloat() || 1));
-    for (let j = 0; j < 10; j++) {
-      const o = e.add(j * 0xf8);
-      if (o.add(0xfc).readU32() !== 0) continue;
-      out.push([i * 10 + j, o.add(0xa8).readFloat(), o.add(0xac).readFloat(), r]);
+  const arr = n && n <= 64 ? w.add(0x2c40).readPointer() : null;
+  if (arr && !arr.isNull()) {
+    for (let i = 0; i < n; i++) {
+      const e = arr.add(i * 0x9d4), kind = e.add(0x14).readS32();
+      if (!Object.prototype.hasOwnProperty.call(SHOT_R, kind)) continue;
+      const ro = SHOT_R[kind];
+      const pc = e.readPointer();
+      const r = (ro === null ? 1.0 : w.add(ro).readFloat()) * (pc.isNull() ? 1 : Math.abs(pc.add(0x24).readFloat() || 1));
+      for (let j = 0; j < 10; j++) {
+        const o = e.add(j * 0xf8);
+        if (o.add(0xfc).readU32() !== 0) continue;
+        const x = o.add(0xa8).readFloat(), y = o.add(0xac).readFloat();
+        const vx = o.add(0xc0).readFloat(), vy = o.add(0xc4).readFloat();
+        out.push([i * 10 + j, x, y, r]);
+        (ext || (ext = [])).push([kind, vx, vy]);
+      }
     }
   }
+  const sp = rd(() => shrapnel(w));                  // a failure there never loses the shots
+  if (sp) for (const [row, x] of sp) { out.push(row); (ext || (ext = [])).push(x); }
+  return [out, ext];
+}
+// Missile shrapnel (rules.md 2.4: FUN_004d30a0 adds 6 per missile2 wall hit to the world's array at +0x2c80: u16
+// count +0x2c98, data pointer +0x2ca8, 0xe0 bytes each; straight at 300 units/s, removed on the first tile; a
+// circle of radius 10 kills, FUN_004c7e50). Sent as shots of kind SHRAP_KIND (not a game launcher kind) with ids
+// SHRAP_ID + element index and radius SHRAP_R. The element's position / velocity offsets are not decoded
+// (rules.md does not give them): they are found live (shrapCalibrate: the float pair that moves 300 x dt between two
+// frames and the pair that is that velocity), reported once as a debug message, and nothing is sent before that.
+const SHRAP_KIND = 16, SHRAP_ID = 9000, SHRAP_R = 10, SHRAP_SIZE = 0xe0, SHRAP_SPEED = 300;
+let shrapPos = -1, shrapVel = -1, shrapPrev = null, shrapProbe = 0, shrapFail = 0;
+function shrapnel(w) {
+  const n = w.add(0x2c98).readU16();
+  if (!n || n > 64) { shrapPrev = null; return null; }
+  const a = w.add(0x2ca8).readPointer();
+  if (a.isNull()) { shrapPrev = null; return null; }
+  if (shrapPos < 0) { shrapCalibrate(a, n); if (shrapPos < 0) return null; }
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const e = a.add(i * SHRAP_SIZE);
+    const x = e.add(shrapPos).readFloat(), y = e.add(shrapPos + 4).readFloat();
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const vx = shrapVel >= 0 ? e.add(shrapVel).readFloat() : 0, vy = shrapVel >= 0 ? e.add(shrapVel + 4).readFloat() : 0;
+    out.push([[SHRAP_ID + i, x, y, SHRAP_R], [SHRAP_KIND, vx, vy]]);
+  }
   return out;
+}
+function shrapCalibrate(a, n) {                      // only while not calibrated and shrapnel is alive (rare)
+  const cur = [];
+  for (let i = 0; i < n; i++) cur.push(new Float32Array(a.add(i * SHRAP_SIZE).readByteArray(SHRAP_SIZE)));
+  if (shrapProbe < 3) { shrapProbe++; send({ ev: 'debug', msg: `shrapnel frame ${frame}: ${n} live, element 0 floats ` + JSON.stringify(Array.from(cur[0]).map(r2)) }); }
+  const prev = shrapPrev;
+  shrapPrev = cur;
+  if (!prev || prev.length !== n) return;
+  const dt = (stepMs() || 16.667) / 1000, d = SHRAP_SPEED * dt, F = SHRAP_SIZE / 4;
+  const vel = [];                                    // float pairs of speed SHRAP_SPEED in every element
+  for (let q = 0; q + 1 < F; q++) if (cur.every(c => Math.abs(Math.hypot(c[q], c[q + 1]) - SHRAP_SPEED) < 3)) vel.push(q);
+  const pos = [];                                    // pairs that moved by that velocity x dt since the last frame
+  for (let o = 0; o + 1 < F; o++) {
+    const q = vel.find(q => q !== o && cur.every((c, i) => Math.abs(c[o] - prev[i][o] - c[q] * dt) < 0.05 * d &&
+                                                       Math.abs(c[o + 1] - prev[i][o + 1] - c[q + 1] * dt) < 0.05 * d));
+    if (q !== undefined) pos.push([o, q]);
+  }
+  // the previous-position copy moves the same way one frame behind: keep the pair no other one lags behind
+  const lead = pos.filter(([o]) => !pos.some(([p]) => p !== o && cur.every((c, i) => c[o] === prev[i][p] && c[o + 1] === prev[i][p + 1])));
+  if (!lead.length) { if (pos.length === 0 && shrapFail++ < 3) send({ ev: 'debug', msg: `shrapnel: no moving position pair found yet (${n} live, ${vel.length} velocity pairs)` }); return; }
+  shrapPos = lead[0][0] * 4;
+  shrapVel = lead[0][1] * 4;
+  send({ ev: 'debug', msg: `shrapnel layout found: position +0x${shrapPos.toString(16)}, velocity +0x${shrapVel.toString(16)} (candidates ${JSON.stringify(lead.map(([o, q]) => [o * 4, q * 4]))})` });
 }
 // Fans and orbs (FUN_004c40e0, run in each character's update):
 //   fans: array at world+0x2cb4 (u16 count +0x2ccc, data pointer +0x2cdc, 0x24 bytes each): +0 the fan
@@ -358,6 +676,7 @@ function startWave() {
   const want = Math.max(1, Math.min(wantAgents, crowd.length));
   if (want !== agents.length) { agents = crowd.slice(0, want); resetArrays(); leader = 0; }   // monitor slider
   wave++; frame = 0;
+  rd(() => updateKillBox('wave ' + wave));         // camera zoom can change the observed death boundary
   vcall(main, V_RESPAWN);                          // resets the level's moving parts
   agents.forEach((c, i) => {
     const fl = c.add(0x7b4).readU32();
@@ -430,7 +749,12 @@ function exchange(w) {                              // lockstep: send states, wa
   const t0 = Date.now();
   const changed = sig(pieces(w)) !== pieceSig;
   if (changed) buildLethal(w);                       // pieces came or went: the hazard list changes
-  const msg = { ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards(), sh: rd(() => shots(w)) || [] };
+  const shx = rd(() => shots(w));
+  const msg = { ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards(), sh: shx ? shx[0] : [] };
+  if (shx && shx[1] && shx[1].length === shx[0].length) msg.shx = shx[1];
+  if (lasers.length) msg.lz = laserState();
+  if (changed && lasers.length) msg.lzp = rd(() => laserParams(w));
+  if (kbPending) { msg.kb = kbPending; kbPending = null; }
   if ((frame & 7) === 0) msg.fx = rd(() => forceFields(w));   // fans / orbs (they rarely move)
   const pf = rd(() => platforms(w));
   if (pf && pf.length) msg.pf = pf;                  // moving platforms: every frame
@@ -491,7 +815,7 @@ function stepAgents() {
       }
       if (Math.hypot(x1 - x0, y1 - y0) > 150 && (jumpDbg++ < 40))   // (falling tops out near 50 per frame)
         send({ ev: 'debug', msg: `jump: agent ${i} wave ${wave} frame ${frame}: (${x0.toFixed(0)}, ${y0.toFixed(0)}) -> (${x1.toFixed(0)}, ${y1.toFixed(0)}) status ${status[i]}, frame gap ${gap} ms` });
-      if (status[i] === 0 && agents[i].add(0x88).readFloat() < levelOY - 60) status[i] = 1;
+      if (status[i] === 0 && outOfLevel(x1, y1)) status[i] = 1;
     }
   } finally {
     curAgent = -1; mask.writeU32(m0);
@@ -507,6 +831,11 @@ function stepAgents() {
   const quota = CFG.finish_quota > 0 ? Math.min(CFG.finish_quota, agents.length) : Infinity;
   if (status.filter(s => s === 2).length >= quota) endWave('quota');
   else if (status.every(s => s !== 0) || frame >= CFG.wave_frames) endWave(frame >= CFG.wave_frames ? 'time' : 'done');
+}
+function outOfLevel(x, y) {
+  if (kb) return x < kb[0] || x > kb[1] || y < kb[2] || y > kb[3];
+  if (levelOY !== null && y < levelOY - OUT_BOTTOM) return true;
+  return levelBox !== null && (x < levelBox[0] - OUT_SIDE || x > levelBox[1] + OUT_SIDE || y > levelBox[2] + OUT_SIDE);
 }
 function endWave(why) {
   send({ ev: 'wave_end', wave, frame, why, status: status.slice(), finish: finishFrame.slice() });

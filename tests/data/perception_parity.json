@@ -1,0 +1,123 @@
+{
+  "cases": {
+    "spawn": {
+      "obs": [
+        "459582dbba0e9da83492352463faf7867d7dff623a2532c6cc652cfdd890f3c1",
+        "0a7f2e15f1fcb0e36e951e25370ae9db2d919acaef22a28b6984c4083482e55a"
+      ],
+      "sizes": [
+        282,
+        524
+      ],
+      "grid": "3eceaab22b3c5a431ef3a08fd0682ecc4e89dfa52543048e5e52dd86ae080bd4",
+      "surfaces": "74816bb314381adbfa06ee543bf041ab6dba0aac9a04f56d068d3b05f5b76bcf"
+    },
+    "shapes": {
+      "obs": [
+        "46e25646d53bfdb3b7f2ddf444a952c4e817a12f175e2b68d1cf68cc995c9399",
+        "85df3d108b8a2fd334c6e668664db69d72ea3c12da6aafe8c066cb7e4a0265cd"
+      ],
+      "sizes": [
+        282,
+        524
+      ],
+      "grid": "3eceaab22b3c5a431ef3a08fd0682ecc4e89dfa52543048e5e52dd86ae080bd4",
+      "surfaces": "74816bb314381adbfa06ee543bf041ab6dba0aac9a04f56d068d3b05f5b76bcf"
+    },
+    "key_holder": {
+      "obs": [
+        "73b9e0122c05f0e3cbc964266df6e0d80cf9e683fb5411aa31e88edc6079e77b",
+        "53f39ea6fe333686fce545d5dd12f47be6242e58896181e848e70d4a740653df"
+      ],
+      "sizes": [
+        282,
+        524
+      ],
+      "grid": "3eceaab22b3c5a431ef3a08fd0682ecc4e89dfa52543048e5e52dd86ae080bd4",
+      "surfaces": "74816bb314381adbfa06ee543bf041ab6dba0aac9a04f56d068d3b05f5b76bcf"
+    },
+    "hazards": {
+      "obs": [
+        "9fa79f191c9bcef52a71f548865d3868d30b5feacb4955a74fcbb3b5d7232630",
+        "86f81e40743c56aaa25c2c847c059c61c1b81f7fbc31f1e7ee2815c669fb5388"
+      ],
+      "sizes": [
+        282,
+        524
+      ],
+      "grid": "3eceaab22b3c5a431ef3a08fd0682ecc4e89dfa52543048e5e52dd86ae080bd4",
+      "surfaces": "74816bb314381adbfa06ee543bf041ab6dba0aac9a04f56d068d3b05f5b76bcf"
+    },
+    "outside": {
+      "obs": [
+        "cc415db4ef30d05c93fcd93e4820a2fb39caf4baecd901f0b5eeecd232f87f5f",
+        "61e366a958230e4f524f1dd4c582cf23162f470515196f764341c9a911ae43f1"
+      ],
+      "sizes": [
+        282,
+        524
+      ],
+      "grid": "3eceaab22b3c5a431ef3a08fd0682ecc4e89dfa52543048e5e52dd86ae080bd4",
+      "surfaces": "74816bb314381adbfa06ee543bf041ab6dba0aac9a04f56d068d3b05f5b76bcf"
+    },
+    "changed": {
+      "obs": [
+        "6615c645350e02683093c2241d99c7778d1f435876795be6f1e2014137b3b669",
+        "3cca81836e68ceeaddeca1a605f97ed4a2a23f5932c5f0e513696900e52cad8b"
+      ],
+      "sizes": [
+        282,
+        524
+      ],
+      "grid": "d89058c921b884e4c82f5cb9584a17d19091feaaed6328b9820ad2d5a6018d2d",
+      "surfaces": "f330be07c8898f85a99e5b19ca1f172fd1298314f883aa543af69ba58a10a0ae"
+    }
+  },
+  "boxes": [
+    [
+      -30.0,
+      -30.0,
+      10.0,
+      10.0,
+      0.0
+    ],
+    [
+      55.0,
+      45.0,
+      23.288961158560348,
+      21.29493271739659,
+      0.6
+    ],
+    [
+      20.0,
+      30.0,
+      8.0,
+      8.0,
+      0.0
+    ],
+    [
+      20.0,
+      35.0,
+      66.84615384615384,
+      1.8461538461538467,
+      0.3947911196997615
+    ]
+  ],
+  "ids": [
+    "saw",
+    "needle",
+    "enemy1",
+    "laser1"
+  ],
+  "lock_groups": [
+    [
+      50,
+      64
+    ]
+  ],
+  "source_hashes": {
+    "realgame.py": "acad02ab9e6ac54e6f9f66143c57a2370055c5f004a8b1dd791ceca947927622",
+    "game/level.py": "db82455a6c7bdf322cd1ca63d75eab940153d40fb46c252d63381bee4f8e2d1d",
+    "realpath.py": "b473f3f0df27d7761affb80e9c90ac023224316c525b5be843e8b47a321149d4"
+  }
+}
