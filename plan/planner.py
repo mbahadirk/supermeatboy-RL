@@ -168,6 +168,7 @@ Ground movement states 5, 10, 15, 4: rule ground 97-99.9% (1-5), 88-99% (1-13); 
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -203,6 +204,13 @@ class PlanCancelled(Exception):
 
 
 CANCEL = None          # a threading.Event set by the plan-ahead thread for its plan (None: nothing to call off)
+
+
+def _copy_state(v):
+    """A planning cache's entry (Planner.long / stalls) copied for Plan._effects (None stays None)."""
+    return None if v is None else copy.deepcopy(v)
+
+
 # penalties in frames, from the former V-unit weights by FX_GROUND frames per tile (on open ground 1 V unit ~ 1 tile)
 DEAD_END = 100.0                             # the former weight (V units)
 DEAD_END_FRAMES = DEAD_END * FX_GROUND       # an end with T = +inf: T(start) + this
@@ -2913,30 +2921,62 @@ class Planner:
         if trial is not None and mode == "route-trial":          # not overridden by the reflex
             plan.trial_frames = int(sum(b - a for nm, a, b in segs if nm != "pad"))
 
-        def apply():                                 # the decision's effects on the planner's memories
-            if route_using == "drop":
-                self.route.using.pop(agent, None)
-            elif route_using is not None:
-                self.route.using[agent] = route_using
-            if plan.trial_frames:
-                info = {k: v for k, v in trial.items() if k not in ("key", "spot")}
-                plan.route_trial = self.trials.start(agent, frame, trial["key"], plan.path, plan.trial_frames, info,
-                                                     spot=trial["spot"])
-            self.prev[agent] = plan
-            if not plan.from_prev:                   # a kept plan keeps the predictions of its adoption
-                self.surprise.add(plan)
-            if self.moves is not None:
-                self.moves.decided(agent, frame, cell0, plan.chosen[0] if plan.chosen else "pad", safe_alts,
-                                   adopted=not plan.from_prev)
-            if T0_ok:                                # judged by its own prediction when the agent comes back
-                key0 = self.state_key(cell0, bool(sup0[0]), float(row["vx"][0]) * dt_ms / 1000.0, float(vy0[0]))
-                self.memory.decided(agent, frame, key0, first_name[best], plan.chosen, T0, float(t_end3[best]),
-                                    int(frames_used[best]))
+        # the decision's effects on the planner's memories, as data (Planner.adopt applies them: here at once, at
+        # commit_fn for a plan made ahead, or in another planner process that adopts this plan)
+        plan._effects = {
+            "route_using": route_using,
+            "trial": None if not plan.trial_frames else {
+                "key": trial["key"], "spot": trial["spot"],
+                "info": {k: v for k, v in trial.items() if k not in ("key", "spot")}},
+            "cell0": cell0, "safe_alts": safe_alts,
+            "memory": None if not T0_ok else (       # judged by its own prediction when the agent comes back
+                self.state_key(cell0, bool(sup0[0]), float(row["vx"][0]) * dt_ms / 1000.0, float(vy0[0])),
+                first_name[best], T0, float(t_end3[best]), int(frames_used[best])),
+            # this decision's planning caches (written by every plan made, adopted or not): another process that
+            # adopts the plan takes them, so the processes' next plans start from the same state
+            "long": _copy_state(self.long.get(agent)), "stall": _copy_state(self.stalls.get(int(agent)))}
         if defer:
-            plan.commit_fn = apply
+            plan.commit_fn = lambda: self.adopt(plan)
         else:
-            apply()
+            self.adopt(plan)
         return plan
+
+    def adopt(self, plan: Plan):
+        """A decision's effects on the planner (plan._effects, made by Planner.plan here or in another planner
+        process): the best route's use, the route trial it starts, the previous plan, the surprise check's
+        predictions (not for a kept plan: it keeps those of its adoption), the move and failure memories, and the
+        decision's planning caches (the long-safe plan, the stall rule's state). Planner.plan applies them at once
+        (or at plan.commit_fn() when deferred); agent.py --planners N sends every committed plan to the other
+        processes, which adopt it, so every process holds the same state. Returns the route trial event (None)."""
+        eff = plan._effects
+        agent, frame = int(plan.agent), int(plan.frame)
+        ru = eff["route_using"]
+        if ru == "drop":
+            self.route.using.pop(agent, None)
+        elif ru is not None:
+            self.route.using[agent] = tuple(ru)
+        tr = eff["trial"]
+        if plan.trial_frames and tr is not None:
+            plan.route_trial = self.trials.start(agent, frame, tr["key"], plan.path, plan.trial_frames,
+                                                 dict(tr["info"]), spot=tr["spot"])
+        self.prev[agent] = plan
+        if not plan.from_prev:                       # a kept plan keeps the predictions of its adoption
+            self.surprise.add(plan)
+        if self.moves is not None:
+            self.moves.decided(agent, frame, eff["cell0"], plan.chosen[0] if plan.chosen else "pad", eff["safe_alts"],
+                               adopted=not plan.from_prev)
+        if eff["memory"] is not None:
+            key0, first, t0, t_end, used = eff["memory"]
+            self.memory.decided(agent, frame, key0, first, plan.chosen, t0, t_end, used)
+        if eff["long"] is None:
+            self.long.pop(agent, None)
+        else:
+            self.long[agent] = _copy_state(eff["long"])
+        if eff["stall"] is None:
+            self.stalls.pop(agent, None)
+        else:
+            self.stalls[agent] = _copy_state(eff["stall"])
+        return getattr(plan, "route_trial", None)
 
     def predict_start(self, row, actions, worlds: list, dt_ms: float = 16.667, frame: int | None = None):
         """The agent's state after it plays `actions` (frames, a whole number of model steps) from `row`, as the

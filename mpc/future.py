@@ -155,6 +155,11 @@ class FutureWorld:
         self._now = {}
         kb, kept, ksh = _kill(rec[0], self.keep)
         ids = box_ids(kept)
+        # the previous observed frame's kill boxes, comparable with this frame's by id (same pieces kept, same
+        # number of pieces: box_ids are their indices) for hazard_motion
+        prev_k = getattr(self, "kill_now", None)
+        self._kill_cmp = (prev_k[1], prev_k[3]) if (same_keep and self.last is not None and prev_k is not None
+                                                     and len(self.last[1]) == len(rec[0])) else None
         runs = self.runs
         for j, i in enumerate(ids):
             run = runs.get(i)
@@ -166,6 +171,31 @@ class FutureWorld:
             self.kill_shape = shapes          # kept when equal: its identity tells the kept checks it is unchanged
         self.periodic = None                  # this frame's periodic boxes (periods), once
         self.prev, self.last = self.last, (frame, rec[0], rec[1], rec[2], dt_ms)
+
+    def hazard_motion(self) -> tuple[float, str | None]:
+        """How far a kill box moved from the previous observed frame to this one (units, its centre), matched by
+        id, and that box's id: the largest such move; (0.0, None) when no box is comparable (the first frame of
+        a wave, the pieces kept or their number changed). agent.py --async-wait auto: more than 0.5 units is a
+        moving hazard."""
+        cmp_ = getattr(self, "_kill_cmp", None)
+        if cmp_ is None:
+            return 0.0, None
+        kb0, ids0 = cmp_
+        _, kb, _, ids = self.kill_now
+        if not len(kb) or not len(kb0):
+            return 0.0, None
+        if ids == ids0:
+            d = np.hypot(kb[:, 0] - kb0[:, 0], kb[:, 1] - kb0[:, 1])
+            k = int(np.argmax(d))
+            return float(d[k]), ids[k]
+        at = {b: n for n, b in enumerate(ids0)}
+        pairs = [(n, at[b]) for n, b in enumerate(ids) if b in at]
+        if not pairs:
+            return 0.0, None
+        a, b = np.array(pairs).T
+        d = np.hypot(kb[a, 0] - kb0[b, 0], kb[a, 1] - kb0[b, 1])
+        k = int(np.argmax(d))
+        return float(d[k]), ids[int(a[k])]
 
     def _shots_seen(self, frame: int, sh: list):
         """Flights and launchers from this frame's shots: a shot whose flight starts here (shot_track has only this
