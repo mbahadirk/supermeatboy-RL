@@ -102,6 +102,36 @@ def test_key_legs_follow_the_route_order():
     assert pf.values([x, x, x], [y, y, y], leg=[0, 1, 2]).tolist() == pytest.approx([v0, v1, v2])
 
 
+def test_a_shaft_above_a_portal_end_is_climbed_by_coming_out_of_it():
+    """As level 4-10: a key above a 1-wide shaft (col 8, rows 9-12) whose bottom cell (8, 8) is a portal end,
+    reachable on foot from the spawn's room (cols 2-8, rows 2-8); the other end (15, 6) is in a sealed room.
+    Walked into on foot, (8, 8) only leads to (15, 6); stepping out there and back in comes out at (8, 8),
+    which then moves on up the shaft. Walking in and coming out of the same end are different search states:
+    the route passes (8, 8) twice and (15, 6) twice. The goal is back in the spawn's room."""
+    w = np.ones((18, 24), np.uint32)
+    w[2:9, 2:9] = 0                                  # the spawn's room
+    w[9:13, 8] = 0                                   # the shaft
+    w[13, 7:9] = 0                                   # the key's pocket at its top
+    w[5:9, 15:19] = 0                                # the sealed room
+    a, b, key = (8, 8), (15, 6), (7, 13)
+    args = (w, 0.0, 0.0, at(3, 2), [at(2, 2)], [], [], [at(*key)], [], [(at(*a), at(*b))])
+    pf = ProgressField(*args)
+    assert pf.found_route and pf.n_legs == 2 and pf.key_order == [[0]] and pf.leg_locks == ["closed", "open"]
+    cells = pf.route_cells
+    assert key in cells
+    i = cells.index(a)
+    assert cells[i + 1] == b                         # walked in: out of the other end
+    j = cells.index(a, i + 1)
+    assert cells[j - 1] == b and cells[j + 1] == (8, 9)      # back in at b, out at a and on up the shaft
+    sc, sr = pf.start
+    assert pf.V_support[0, sr, sc] == pytest.approx(pf.route_cost)
+    route = Planner(*args).find(1)[0]
+    assert route.cells == cells and route.warp.sum() == 4   # the key leg's two portal crossings, and back
+    # without the portal, the shaft is just climbed (its bottom is an ordinary cell)
+    plain = ProgressField(*args[:-1], [])
+    assert plain.n_legs == 2 and a in plain.route_cells and b not in plain.route_cells
+
+
 @pytest.mark.skipif(not os.path.exists(os.path.join(DATA, "levels", f"{LEVEL}.npz")),
                     reason="recorded level data not found")
 def test_recorded_level_spawn_value_is_the_planner_route_cost():

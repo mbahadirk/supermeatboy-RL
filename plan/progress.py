@@ -13,7 +13,8 @@ How it is built (one backward search per leg):
   (JUMP[0] + 1) x (JUMP[1] + 1) x 2 states (one state without jump limits); a cell with a floor below or a wall
   beside (Planner "support") only ever holds its fresh state, since arriving there resets the jump. Portal
   cells get one extra node, "arrived through the portal" (the Planner's walk-in rule: a portal entered on foot
-  only leads out of the other end, one arrived through moves on normally).
+  only leads out of the other end, one arrived through moves on normally, as a fresh jump; the Planner's
+  search keeps the two apart the same way, with a flag in its state).
 - Every state's moves are expanded once with the Planner's rules (realpath.Planner._dijkstra: the geometry of
   Planner._moves, closed cells, the falling and jump-limit rules, the step costs), vectorised with numpy,
   into an explicit edge list. Dijkstra then runs on the reversed edges from the leg's target states (scipy's

@@ -536,8 +536,12 @@ class Planner:
 
     def _dijkstra(self, start, goals, closed, cost, support, moves, wall, jumps=JUMP):
         """Cheapest cell route (A*). With jumps the state is (cell, rise used, sideways used, falling); without,
-        just the cell. The start and goal cells are open even when a hazard is close (a spawn next to a saw).
-        Gives up (no route) after MAX_POPS expansions."""
+        just the cell. Either way a last flag marks a portal cell arrived at through the other end: it moves on
+        normally (as a fresh jump: the game keeps the velocity, so one may have jumped into the other end),
+        while the same cell walked into on foot only leads out of the other end. They are different states, so
+        a route may walk past a portal end and later come out of it (or step out of an end and back in). The
+        start and goal cells are open even when a hazard is close (a spawn next to a saw). Gives up (no route)
+        after MAX_POPS expansions."""
         ends = goals | {start}
         sc, sr = start
         if not (0 <= sc < self.W and 0 <= sr < self.H) or wall[sr, sc]:
@@ -555,7 +559,7 @@ class Planner:
                     best = v
             return best
 
-        s0 = (sc, sr, 0, 0, 0)
+        s0 = (sc, sr, 0, 0, 0, 0)
         dist = {s0: 0.0}
         prev = {}
         front = {}                                       # (c, r, falling) -> [(up, side, dist)] not beaten by another
@@ -564,7 +568,7 @@ class Planner:
         pops = 0
         while pq:
             f, st = heapq.heappop(pq)
-            c, r, up, side, falling = st
+            c, r, up, side, falling, through = st
             d = dist[st]
             if f > d + h(c, r) + 1e-9:
                 continue
@@ -577,10 +581,9 @@ class Planner:
                     path.append(prev[path[-1]])
                 return [(q[0], q[1]) for q in path[::-1]]
             grounded = support[r][c] or (c, r) == start
-            came = prev.get(st)
-            if (c, r) in links and (c, r) != start and not (came and (came[0], came[1]) == links[(c, r)]):
-                # a portal (entered on foot, not just arrived through it): the only way on is out of the other end
-                nst = (*links[(c, r)], 0, 0, 0)
+            if not through and (c, r) in links and (c, r) != start:
+                # a portal entered on foot (not arrived through it): the only way on is out of the other end
+                nst = (*links[(c, r)], 0, 0, 0, 1)
                 nd = d + 1.0
                 if nd < dist.get(nst, math.inf):
                     dist[nst], prev[nst] = nd, st
@@ -595,7 +598,7 @@ class Planner:
                     continue
                 sup = support[nr][nc]
                 if not jumps or sup:
-                    nst = (nc, nr, 0, 0, 0)                  # on (or against) something again
+                    nst = (nc, nr, 0, 0, 0, 0)               # on (or against) something again
                 else:
                     if falling and not grounded and dr >= 0:
                         continue                             # falling: only down
@@ -603,7 +606,7 @@ class Planner:
                     s1 = side0 + (1 if dc and dr >= 0 else 0)
                     if u1 > max_up or s1 > max_side:
                         continue
-                    nst = (nc, nr, u1, s1, 1 if dr < 0 else 0)
+                    nst = (nc, nr, u1, s1, 1 if dr < 0 else 0, 0)
                 nd = d + ln * (1.0 + (0.0 if sup else AIR_COST) + cost[nr][nc])
                 if nd >= dist.get(nst, math.inf):
                     continue
