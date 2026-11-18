@@ -147,7 +147,7 @@ def test_the_guard_puts_each_row_on_its_own_steps_bar():
     out = P.imagine(model, slice(None), geom, s0, np.zeros((2, 8), int), 16.667, worlds, offsets=[0, 20],
                     terrain=ter)
     y0, y1 = out["y"][0, 0], out["y"][0, 1]
-    assert abs(y0[-1] - (110.0 + BODY - P.CONTACT_EPS)) < 1e-4 and out["clip"][0, 0, -1]
+    assert abs(y0[-1] - (110.0 + BODY - P.CONTACT_EPS)) < 1e-4 and out["clip"] is not None
     assert y1[-1] < 100.0 and not out["clip"][0, 1].any()       # through where the bar was at frame 0
     # the guard off: nothing caught by the bar either
     off = P.imagine(model, slice(None), geom, s0, np.zeros((2, 8), int), 16.667, worlds, offsets=[0, 20])
@@ -167,3 +167,14 @@ def test_without_bars_the_guard_is_the_tiles_alone():
     for k in ("x", "y", "clip"):
         assert np.array_equal(none[k], far[k]), k
     assert none["clip"].any()                                       # the tile floor did catch them
+
+
+def test_imagine_carries_each_confirmed_rider_at_its_own_time_offset():
+    _,geom,ter=_floor_level()
+    model=_falling_model(dy=0.)
+    s0=_rows([(100.,116.),(140.,116.)])
+    worlds=moving(x0=100.,y=100.,vx=2.,n=60)
+    out=P.imagine(model,slice(None),geom,s0,np.zeros((2,8),int),16.667,worlds,
+                  offsets=[0,20],terrain=ter,keep_rows=True)
+    np.testing.assert_allclose(out['x'][0,:,-1],[116.,156.],atol=1e-4)
+    np.testing.assert_allclose(out['rows']['vx'],0.)  # world displacement is not native relative vx

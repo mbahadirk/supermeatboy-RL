@@ -20,6 +20,10 @@ process:
    level by forgetting the old ones is refused); the pending waves are then absorbed. A refused cycle leaves them
    pending: they are trained on again next cycle with the newer ones.
 The fresh wave is trained on in the next cycle (the test always comes from play the candidate never saw).
+New agent.py shards (finish-aplus-v1) record finish rewards 5 / A+ 15 (targets after scaling: 1 / 3).
+A+ trajectories get twice the sampling weight within pending/absorbed own rows; replay remains 90% of each
+batch, validation is unweighted, and the publication gates are unchanged. Legacy/PPO shards are not relabelled.
+This trains the world model, not a policy: the planner still chooses actions by estimated time and risk.
 Every cycle adds a line to OUT/online.log. Below-normal priority (Windows), --threads 2: the game keeps its speed.
 
 Settings (runs/experiments/online_v1: 5 recorded 3-2 waves of runs/human_v3_check01, human_v3): lr 1e-4 with half
@@ -46,6 +50,8 @@ import numpy as np
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
+
+from wm.rewards import REWARD_PROTOCOL, FINISH_REWARD, A_PLUS_BONUS, A_PLUS_SAMPLE_WEIGHT
 
 LR = 3e-5
 OWN_EPOCHS = 4                     # passes over the pending own transitions per cycle
@@ -83,10 +89,12 @@ def featurize(shard: str, model, tmp: str, log=None) -> dict | None:
     its level file), with the targets the model trains on (yc in its res_scale units; wc: full chains). None: the
     shard has no usable transitions (its level file missing, or nothing alive). log(text): told how many samples
     went through a game portal and were dropped (wm.features.build), when any."""
-    from wm.features import RES_SCALE, build, model_layout, model_prior
+    from wm.features import RES_SCALE, build, model_layout, model_prior, demo_key
     d = os.path.dirname(shard)
     base = os.path.basename(shard)[:-4]
-    meta = json.loads(str(np.load(shard)["meta"]))
+    with np.load(shard) as z:
+        meta = json.loads(str(z["meta"]))
+        rows = z["rows"]
     lv = meta.get("level")
     level_file = os.path.join(d, "levels", f"{lv}.npz")
     if not os.path.exists(level_file):
@@ -97,9 +105,13 @@ def featurize(shard: str, model, tmp: str, log=None) -> dict | None:
         shutil.copy2(shard, os.path.join(work, base + ".npz"))
         shutil.copy2(os.path.join(d, base + "_world.json.gz"), os.path.join(work, base + "_world.json.gz"))
         shutil.copy2(level_file, os.path.join(work, "levels", f"{lv}.npz"))
+        # Reuse build's per-agent/frame selection so weighting stays aligned even
+        # when portal-crossing transitions are dropped. Old/PPO rewards are not relabelled.
+        examples = aplus_examples(meta, rows)
+        demos = {demo_key(work): {int(rows["wave"][0]): examples}} if examples else None
         counts = {}
         b = build([work], log=lambda *a: None, step=model.step, protocol=model_layout(model).protocol,
-                  prior_protocol=model_prior(model), counts=counts)
+                  prior_protocol=model_prior(model), counts=counts, demos=demos)
         if counts.get("teleport_dropped") and log is not None:
             log(f"{base}: {counts['teleport_dropped']} samples through a game portal dropped")
     finally:
@@ -107,12 +119,30 @@ def featurize(shard: str, model, tmp: str, log=None) -> dict | None:
     if not len(b["X"]):
         return None
     out = {"X": b["X"], "yb": b["yb"], "ys": b["ys"], "yr": b["yr"], "level": np.full(len(b["X"]), lv)}
+    out["sample_weight"] = np.where(b["demo"], A_PLUS_SAMPLE_WEIGHT, 1.0).astype(np.float32)
+    if examples and log is not None:
+        log(f"{base}: {len(examples)} A+ trajectories, {int(b['demo'].sum())} transitions sampled "
+            f"at {A_PLUS_SAMPLE_WEIGHT:g}x within own-data batches ({REWARD_PROTOCOL})")
     if model.step > 1:
         out["yc"] = (b["yc"] * RES_SCALE / np.asarray(model.res_scale, np.float32)).astype(np.float32)
         out["wc"] = b["full"].astype(np.float32)
     else:
         out["yc"] = b["yc"].astype(np.float32)
     return out
+
+
+def aplus_examples(meta, rows):
+    """Exact rewarded finish rows identify A+ lives, including partial-wave captures."""
+    if meta.get("reward_protocol") != REWARD_PROTOCOL:
+        return []
+    finished = rows[(rows["status"] == 2) & (rows["reward"] >= FINISH_REWARD + A_PLUS_BONUS)]
+    return [(int(row["agent"]), 0, int(row["frame"])) for row in finished]
+
+
+def own_probabilities(data):
+    """A+ lives get twice the sampling weight; replay share and validation stay unchanged."""
+    weights = data.get("sample_weight")
+    return None if weights is None else weights.astype(np.float64) / weights.sum(dtype=np.float64)
 
 
 def cat(parts: list) -> dict:
@@ -154,12 +184,23 @@ def fine_tune(model, pending: dict, replay: dict, rng, old: dict | None = None) 
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.0 if ANCHOR else 1e-5)
     start = [p.detach().clone() for p in model.parameters()] if ANCHOR else None
     rtr = np.nonzero(~replay["val"])[0]
+    p_pend = own_probabilities(pending)
+    p_old = own_probabilities(old) if n_old else None
+    # Build cumulative weights once, not an O(all rows) choice table on every step.
+    cdf_pend = np.cumsum(p_pend) if p_pend is not None else None
+    cdf_old = np.cumsum(p_old) if p_old is not None else None
+    if cdf_pend is not None:
+        cdf_pend[-1] = 1.0
+    if cdf_old is not None:
+        cdf_old[-1] = 1.0
     model.train()
     for _ in range(steps):
-        a = rng.integers(0, n_pend, k_pend)
+        a = (rng.integers(0, n_pend, k_pend) if cdf_pend is None else
+             np.searchsorted(cdf_pend, rng.random(k_pend), side="right"))
         b = rtr[rng.integers(0, len(rtr), BATCH - k_own)]
         if k_old:
-            c = rng.integers(0, n_old, k_old)
+            c = (rng.integers(0, n_old, k_old) if cdf_old is None else
+                 np.searchsorted(cdf_old, rng.random(k_old), side="right"))
             batch = {k: np.concatenate([pending[k][a], old[k][c], replay[k][b]]) for k in KEYS if k in pending}
         else:
             batch = {k: np.concatenate([pending[k][a], replay[k][b]]) for k in KEYS if k in pending}

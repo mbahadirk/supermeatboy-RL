@@ -1598,13 +1598,13 @@
        {
         "continuation": "keep",
         "frames": 0,
-        "on": "ground",
+        "on": "wall",
         "died": []
        },
        {
         "continuation": "keep",
         "frames": 0,
-        "on": "ground",
+        "on": "wall",
         "died": []
        }
       ]

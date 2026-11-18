@@ -91,6 +91,8 @@ class Collector:
                 "objs": info.get("objs", []), "lethalTypes": info.get("lethalTypes", []),
                 # the camera-bounds kill box [left, right, bottom, top] and what it came from (realgame.js)
                 "kb": info.get("kb"), "cam_bounds": info.get("cam_bounds"), "view_half": info.get("view_half")}
+        if info.get("lzp"):                      # the lasers' parameters (realgame.js laserParams; plan.lasers)
+            meta["lzp"] = info["lzp"]
         if hasattr(lv, "wm_geometry_metadata"):
             meta.update(lv.wm_geometry_metadata())
         np.savez_compressed(p, words=lv.words0.astype(np.uint32), meta=json.dumps(meta))
@@ -98,6 +100,12 @@ class Collector:
     def frame(self, m: dict, hz_ids: list, hz_keep: list | None = None):
         """The level's moving parts this frame (and the game's time step for the update that follows)."""
         rec = {"f": m["frame"], "dt": m.get("dt"), "hz": _r(m.get("hz", [])), "sh": _r(m.get("sh", []))}
+        if m.get("shx"):                        # per shot [kind, vx, vy] (realgame.js shots: 16 = missile shrapnel)
+            rec["shx"] = _r(m["shx"])
+        if m.get("lz"):                         # per laser [state, timer s, angle rad, animation time]: 6 decimals
+            rec["lz"] = _r(m["lz"], 6)          # (the eyes' angles turn by ~1e-3 rad a frame)
+        if m.get("lzp"):
+            rec["lzp"] = m["lzp"]
         if m.get("gap") is not None:            # real ms since the last frame (how long the game waited)
             rec["gap"] = m["gap"]
         if m.get("pf"):

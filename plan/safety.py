@@ -17,6 +17,11 @@ own motion up to where it entered the trigger and from the exit to its end (a re
 Decision rule: contact within the first VETO_FRAMES frames is a hard veto. Later contact or near contact is a
 soft risk, with a margin from the world model's measured 90% position error at that horizon (ERR90),
 counted once (not on top of the members' spread).
+
+Homing laser eyes (plan/lasers.py) aim at the trajectory itself: their beams are not boxes of the frames but a
+plan.lasers.Beams carried by the frames (FrameBoxes.beams = (Beams, frame offset): plan.planner.future_inputs) or
+given to sweep (beams=). Each path gets its own beam future; its contacts are KIND_LASER with the laser's id, as
+extra boxes of every frame (veto, soft risk, nearest). Without one (every level without homing eyes) nothing changes.
 """
 from __future__ import annotations
 
@@ -54,9 +59,9 @@ DEATH_HALF = 8.0            # half size of a remembered death's box (contact add
 TRAIL_KEEP = 1 << 18
 TRAIL_CHUNK = 4096          # samples gathered in a list before they become one float32 chunk of the trail
 
-KIND_NONE, KIND_HAZARD, KIND_SHOT, KIND_OUT, KIND_MEMORY, KIND_FLOOR = -1, 0, 1, 2, 3, 4
+KIND_NONE, KIND_HAZARD, KIND_SHOT, KIND_OUT, KIND_MEMORY, KIND_FLOOR, KIND_LASER = -1, 0, 1, 2, 3, 4, 5
 KIND_NAMES = {KIND_NONE: "none", KIND_HAZARD: "hazard", KIND_SHOT: "shot", KIND_OUT: "out of level",
-              KIND_MEMORY: "remembered death", KIND_FLOOR: "out of level (map bottom)"}
+              KIND_MEMORY: "remembered death", KIND_FLOOR: "out of level (map bottom)", KIND_LASER: "laser"}
 OUT_ID = "out"
 FLOOR_ID = "map bottom"
 
@@ -76,12 +81,15 @@ class FrameBoxes:
     """The deadly shapes of one frame: (M, 5) geometry (x, y, half w, half h, angle), what each is (KIND_HAZARD /
     KIND_SHOT / KIND_MEMORY), a stable id (hazard index in the frame's list, shot id, or the remembered death's
     position), its shape type (game.level SHAPE_*: how the game tests it; None: all SHAPE_BOX, the contact
-    convention) and grow (M,), a future's uncertainty radius (None: 0). game.level.kill_clearance is the rule."""
+    convention) and grow (M,), a future's uncertainty radius (None: 0). game.level.kill_clearance is the rule.
+    beams: (plan.lasers.Beams, frame offset from its decision frame) when the level has homing eyes (their beams
+    follow each trajectory: sweep / beam_ref), else None."""
     boxes: np.ndarray
     kind: np.ndarray
     ids: list
     shape: np.ndarray | None = None
     grow: np.ndarray | None = None
+    beams: object = None
 
     def __len__(self):
         return len(self.ids)
@@ -95,7 +103,7 @@ class FrameBoxes:
     def take(self, idx) -> "FrameBoxes":
         idx = np.asarray(idx, np.int64)
         return FrameBoxes(self.boxes[idx], self.kind[idx], [self.ids[i] for i in idx], self.shapes()[idx],
-                          self.grows()[idx])
+                          self.grows()[idx], self.beams)
 
     def clearance(self, px, py) -> np.ndarray:
         """(n points, M): game.level.kill_clearance of character centres against these shapes."""
@@ -130,6 +138,16 @@ def frame_boxes(hz, keep=None, sh=(), memory=None, hz_ids=None) -> FrameBoxes:
 def record_boxes(rec: dict, keep=None, memory=None) -> FrameBoxes:
     """frame_boxes of a recorded world frame (wm_data *_world.json.gz) or a live frame message."""
     return frame_boxes((rec or {}).get("hz", []), keep, (rec or {}).get("sh", []), memory)
+
+
+def beam_ref(frames, step: int = 1):
+    """The homing eyes the frames carry (FrameBoxes.beams) as (plan.lasers.Beams, frame offset of column 0) for a
+    path whose column c is frames[c] (step frames per column), or None."""
+    for c, fb in enumerate(frames):
+        r = getattr(fb, "beams", None) if fb is not None else None
+        if r is not None:
+            return r[0], int(r[1]) - c * int(step)
+    return None
 
 
 # ---- level bounds ---------------------------------------------------------------------------------------
@@ -236,7 +254,8 @@ class Sweep:
     to each box over the trajectory and the frame of it (+inf / -1 for boxes absent then);
     out_min / out_frame (E, n): the same for the level's edge; step_clear (E, n, K): smallest clearance to
     anything at each step (index k-1 = step k-1 -> k). step: frames per column (a step-k world model's
-    positions); every frame above (contact_frame, clear_frame, out_frame) is in frames (column x step)."""
+    positions); every frame above (contact_frame, clear_frame, out_frame) is in frames (column x step).
+    beam_theta (E, n, eyes): the homing eyes' angles at the last column along each path (None without eyes)."""
     contact_frame: np.ndarray
     contact_kind: np.ndarray
     contact_box: np.ndarray
@@ -248,13 +267,14 @@ class Sweep:
     out_frame: np.ndarray
     step_clear: np.ndarray
     step: int = 1
+    beam_theta: np.ndarray | None = None
 
     def frames_of(self) -> np.ndarray:
         """The frame of each step_clear column (1..K x step)."""
         return np.arange(1, self.step_clear.shape[2] + 1) * self.step
 
 
-def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps | None = None) -> Sweep:
+def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps | None = None, beams=None) -> Sweep:
     """xs, ys: (E, n, K+1) positions, frame 0 = now. frames: K+1 FrameBoxes (or None for none), frames[k] =
     the hazards at trajectory frame k (frames[0] is not used: the start is a fact). bounds: level_bounds(lv)
     for the out-of-level rule, or None. floor: a plan.geometry.Terrain (or None): a step ending on the padding
@@ -263,7 +283,8 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps |
     (plan.planner's per-step rule, its moving platforms where the column's frame has them) gives each column's
     rule: at(k x step). step: frames per column (frames[k] then holds the boxes of frame k x step; the segment
     test covers the motion between columns). jumps (game.level.Jumps of xs' shape, or None): steps through a
-    game portal, tested as the module docstring says."""
+    game portal, tested as the module docstring says. beams: homing eyes as (plan.lasers.Beams, frame offset of
+    column 0, their angles there (E, n, eyes) or None: Beams.seed) instead of the ones the frames carry (beam_ref)."""
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
     E, n, K1 = xs.shape
     K = K1 - 1
@@ -278,7 +299,24 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps |
                 col[i] = len(ids)
                 ids.append(i)
                 kinds.append(int(k))
-    U, P = len(ids), E * n
+    P = E * n
+    X, Y = xs.reshape(P, K1), ys.reshape(P, K1)
+    J = _flat(jumps, P, K1)
+    if beams is None:
+        ref = beam_ref(frames, step)
+        beams = None if ref is None else (ref[0], ref[1], None)
+    lz = lth = None
+    if beams is not None and len(beams[0]):            # homing eyes: their contacts along each path
+        bm, k0, th = beams
+        th = None if th is None else np.asarray(th).reshape(P, len(bm))
+        lclear, lth = bm.columns(X, Y, step, k0, th, J, want_theta=True)
+        lz = (lclear, np.arange(len(ids), len(ids) + len(bm)), np.full(len(bm), KIND_LASER, np.int8))
+        for i in bm.ids:
+            i = i if i not in col else f"{i} (model)"     # (a recorded segment of the same id: kept apart)
+            col[i] = len(ids)
+            ids.append(i)
+            kinds.append(KIND_LASER)
+    U = len(ids)
     clear_min = np.full((P, U), np.inf)
     clear_frame = np.full((P, U), -1, np.int64)
     out_min = np.full(P, np.inf)
@@ -287,8 +325,6 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps |
     contact_frame = np.full(P, -1, np.int64)
     contact_kind = np.full(P, KIND_NONE, np.int8)
     contact_box = np.full(P, -1, np.int64)
-    X, Y = xs.reshape(P, K1), ys.reshape(P, K1)
-    J = _flat(jumps, P, K1)
     floor_at = getattr(floor, "at", None)
     for k in range(1, K1):
         fb = frames[k]
@@ -298,8 +334,14 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps |
             r, ax, ay, bx, by = pre
             c2, o2 = segment_clearance(ax, ay, bx, by, fb, bounds)
             clear[r], oc[r] = np.minimum(clear[r], c2), np.minimum(oc[r], o2)
-        if len(fb):
-            idx = np.fromiter((col[i] for i in fb.ids), np.int64, len(fb))
+        fkind = fb.kind
+        if lz is not None:                              # the homing beams: boxes of every frame
+            clear = np.concatenate([clear, lz[0][:, k - 1]], 1)
+            fkind = np.concatenate([np.asarray(fb.kind, np.int8).reshape(-1), lz[2]])
+            idx = np.concatenate([np.fromiter((col[i] for i in fb.ids), np.int64, len(fb)), lz[1]])
+        if lz is not None or len(fb):
+            if lz is None:
+                idx = np.fromiter((col[i] for i in fb.ids), np.int64, len(fb))
             better = clear < clear_min[:, idx]
             clear_min[:, idx] = np.where(better, clear, clear_min[:, idx])
             clear_frame[:, idx] = np.where(better, k, clear_frame[:, idx])
@@ -321,7 +363,7 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps |
         contact_frame[hit_box | hit_out] = k
         if hit_box.any():
             contact_box[hit_box] = idx[j[hit_box]]
-            contact_kind[hit_box] = fb.kind[j[hit_box]]
+            contact_kind[hit_box] = fkind[j[hit_box]]
         contact_kind[hit_out] = KIND_OUT
         if pad is not None:
             contact_kind[hit_out & pad] = KIND_FLOOR
@@ -331,7 +373,8 @@ def sweep(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps |
             a[a > 0] *= step
     return Sweep(contact_frame.reshape(sh2), contact_kind.reshape(sh2), contact_box.reshape(sh2), ids,
                  np.asarray(kinds, np.int8), clear_min.reshape(sh3), clear_frame.reshape(sh3),
-                 out_min.reshape(sh2), out_frame.reshape(sh2), step_clear.reshape(E, n, K), int(step))
+                 out_min.reshape(sh2), out_frame.reshape(sh2), step_clear.reshape(E, n, K), int(step),
+                 None if lth is None else lth.reshape(E, n, -1))
 
 
 def first_contact(xs, ys, boxes, first=None, upto=None, step: int = 1, jumps: Jumps | None = None):
@@ -472,10 +515,11 @@ def assess(sw: Sweep) -> Safety:
     return Safety(veto, veto_frame, veto_kind, veto_id, soft_risk, soft_frame, nearest, sw)
 
 
-def check(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps | None = None) -> Safety:
+def check(xs, ys, frames, bounds=None, floor=None, step: int = 1, jumps: Jumps | None = None,
+          beams=None) -> Safety:
     """sweep + assess: the planner's safety verdict for (E, n, K+1) trajectories (step: frames per column;
-    jumps: their teleports, sweep's)."""
-    return assess(sweep(xs, ys, frames, bounds, floor, step, jumps))
+    jumps: their teleports, sweep's; beams: sweep's)."""
+    return assess(sweep(xs, ys, frames, bounds, floor, step, jumps, beams))
 
 
 # ---- deaths the geometry did not predict ----------------------------------------------------------------

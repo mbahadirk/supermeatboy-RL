@@ -23,6 +23,11 @@ Two views of each frame's hazards: the model inputs (wm.features.hazard_boxes: e
 world model was trained) and the boxes that kill (game.level.hazard_boxes: the game's kill shapes, which move
 inside a piece's animation while the piece stays put). The recording is trusted while both match.
 
+Homing laser eyes (plan/lasers.py, set_lasers: an EyeTracker on levels that have them) aim at the agent, so their
+recorded or extrapolated beam segments are wrong for any other path: their rows' kill shapes are left out of the
+deadly boxes and of the recording's match (_offset), and beam_context gives the decision's eye state instead (the
+planner rolls each trajectory's own beams). Plain lasers stay as recorded. Without a tracker nothing changes.
+
 Each recorded wave frame is worked out once per wave (FRAME_CACHE, _RecFrame): a sliding window asks for the same
 wave frame about 48 times (the per-frame danger check) and parsing its rows was most of the planner's per-frame
 time (runs/online_check04, 3-2: 12.8 ms per danger check, 37 ms per decision's full window). What depends on the
@@ -81,7 +86,19 @@ class FutureWorld:
         self._keep_seen = None                # tuple(keep) the kept recorded frames were parsed with
         self.terrain = None                   # the live tiles (plan.geometry.Terrain) shots stop in; None unknown
         self.launchers: dict[tuple, Launcher] = {}   # spawn point -> what fires there (Launcher)
+        self.lasers = None                    # plan.lasers.EyeTracker of a level with homing eyes (set_lasers)
+        self._skip = frozenset()              # hz rows whose kill shapes are not deadly boxes (homing beams)
         self.new_wave()
+
+    def set_lasers(self, tracker):
+        """The level's homing eyes (plan.lasers.EyeTracker, or None: none). Set after new_level()."""
+        self.lasers = tracker
+        self._skip = frozenset()
+        self._rec = {}
+
+    def beam_context(self, frame: int, H: int):
+        """The homing eyes at this observed frame for a decision of H frames (plan.lasers.Beams), or None."""
+        return None if self.lasers is None else self.lasers.context(frame, H)
 
     def new_wave(self) -> dict:
         """The wave ended: it extends the recording when it is the level's first or matched it. Returns what this
@@ -112,6 +129,8 @@ class FutureWorld:
         self.flights: dict = {}               # shot id -> its current flight {key, birth, pts, last}
         for L in getattr(self, "launchers", {}).values():
             L.last = None                     # wave frames start again: the phase is seen anew in each wave
+        if getattr(self, "lasers", None) is not None:
+            self.lasers.new_wave()
         self.last = None                      # (frame, hz, pf, sh, dt_ms) now
         self.prev = None                      # the frame before
         self._rec: dict[int, _RecFrame] = {}  # wave frame -> what the recording gives every window asking for it
@@ -120,11 +139,19 @@ class FutureWorld:
         self._kill_prev = None                # the previous frame's (kill boxes, kept) when keep is unchanged
         return info
 
-    def observe(self, frame: int, hz: list, pf, sh, keep, fans, dt_ms: float, terrain=None):
+    def observe(self, frame: int, hz: list, pf, sh, keep, fans, dt_ms: float, terrain=None, lz=None, target=None):
         """This frame's hazards rows, platforms, flying shots, and the live tiles (a plan.geometry.Terrain, held by
-        reference: its owner keeps it current; None: unknown, shots are then not stopped by walls)."""
+        reference: its owner keeps it current; None: unknown, shots are then not stopped by walls). lz: realgame.js's
+        laser states; target: the leader's position (the homing eyes' target), both for set_lasers' tracker."""
         self.terrain = terrain
         same_keep = True
+        if self.lasers is not None:
+            self.lasers.observe(frame, hz or [], lz, target)
+            skip = self.lasers.beam_rows()
+            if skip != self._skip:            # the kept frames were parsed with the other rows
+                self._skip = skip
+                self._rec = {}
+                same_keep = False
         if keep is not None:
             self.keep = keep
             seen = tuple(keep)
@@ -138,7 +165,7 @@ class FutureWorld:
         self.cur[frame] = rec
         ref = self.ref.get(frame)
         if ref is not None and self.trusted:
-            off = _offset(ref[0], rec[0])
+            off = _offset(ref[0], rec[0], self._skip)
             if off > MATCH_TOL:
                 self.trusted = False
                 self.mismatch = (frame, off)
@@ -153,7 +180,7 @@ class FutureWorld:
         else:
             self._kill_prev = None
         self._now = {}
-        kb, kept, ksh = _kill(rec[0], self.keep)
+        kb, kept, ksh = _kill(rec[0], self.keep, self._skip)
         ids = box_ids(kept)
         # the previous observed frame's kill boxes, comparable with this frame's by id (same pieces kept, same
         # number of pieces: box_ids are their indices) for hazard_motion
@@ -342,7 +369,7 @@ class FutureWorld:
         future_frames, 101, plus agent.py's async lead), not a whole wave (about 1,200 frames)."""
         e = self._rec.get(f) if FRAME_CACHE else None
         if e is None:
-            kr, kept_r, _ = _kill(rec[0], self.keep)
+            kr, kept_r, _ = _kill(rec[0], self.keep, self._skip)
             e = _RecFrame((_ro(kr), _ro(np.full(len(kr), REC_RADIUS)), box_ids(kept_r)))
             if FRAME_CACHE:
                 self._rec[f] = e
@@ -420,7 +447,7 @@ class FutureWorld:
             if FRAME_CACHE and self._kill_prev is not None:
                 k1, kept1 = self._kill_prev   # observe kept them (the same keep)
             else:
-                k1, kept1, _ = _kill(self.prev[1], self.keep)
+                k1, kept1, _ = _kill(self.prev[1], self.keep, self._skip)
             if kept1 == kept0:                # the same shapes of the same pieces: their own motion
                 kvel = (kill0[:, :2] - k1[:, :2]) / dt_s
             if len(self.prev[2]) == len(pf0) and len(pf0):
@@ -687,18 +714,23 @@ def shot_alive(centre: np.ndarray, margin: np.ndarray, terrain) -> int:
     return int(idx[np.argmax(solid)]) if solid.any() else H
 
 
-def _kill(hz: list, keep):
+def _kill(hz: list, keep, skip=frozenset()):
     """The shapes that kill (game.level.hazard_shapes: the game's own geometry) as an (M, 5) array, their pieces'
-    indices and their shape types (M,)."""
+    indices and their shape types (M,). skip: rows whose kill shapes are left out (homing beams)."""
+    if skip:
+        hz = [list(h[:7]) + [[]] if k in skip else h for k, h in enumerate(hz)]
     b, kept, shape = hazard_shapes(hz, keep)
     return np.asarray(b, np.float64).reshape(-1, 5), kept, np.asarray(shape, np.int8)
 
 
-def _offset(a: list, b: list) -> float:
+def _offset(a: list, b: list, skip=frozenset()) -> float:
     """How far two frames' hazards are apart: the pieces' positions and their kill shapes' centres (inf when
-    the pieces or their shapes differ in number)."""
+    the pieces or their shapes differ in number). skip: rows left out (homing beams: they follow the agent)."""
     if len(a) != len(b):
         return float("inf")
+    if skip:
+        a = [h for k, h in enumerate(a) if k not in skip]
+        b = [h for k, h in enumerate(b) if k not in skip]
     if not a:
         return 0.0
     pa, pb = np.array([h[:2] for h in a], float), np.array([h[:2] for h in b], float)

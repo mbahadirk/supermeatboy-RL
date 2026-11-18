@@ -53,6 +53,11 @@ smbrl/best_times.json; the old best.json is not used); the [level] line and the 
 S in the game (focused) finishes the level the game's way and writes the planned agents' best for it as the
 level's time (the game keeps it only if better than its record); 999.99 without one. The save file
 (UserData/savegame.dat next to the game) is copied to smbrl/backups/save_<date-time>/ before the first write.
+--realtest automatically uses that native save/next-level flow only for this run's planned A+ finishes.
+Other finishes retry the level. It uses the actual current finish time, not a historical best; a failed save
+backup prevents the automatic finish. With --online, finishes train reward targets of 5 (ordinary) or 15 (A+),
+and A+ trajectories receive twice the sampling weight within own-data batches. --realtest alone does not
+enable training; add it to an existing --online command to combine both behaviours.
 In the game (unless --no-overlay): the first planned agent's chosen path (green), its airborne completion (fainter
 green, dashed) with its landing (yellow), predicted landings (yellow),
 wall jumps (cyan), where it touches the princess (pink) or picks a key (gold), and the top rejected
@@ -134,7 +139,7 @@ from mpc.candidates import ACTIONS                                       # noqa:
 from mpc.future import FutureWorld                                       # noqa: E402
 from plan import safety as S                                             # noqa: E402
 from plan.commit import Committer, MIN_TUBE, REPLAN_DEFAULT, TUBE_DEFAULT, kind_of  # noqa: E402
-from levels_smb import a_plus_time                                       # noqa: E402
+from wm.rewards import REWARD_PROTOCOL, finish_outcome, outcome_rewards  # noqa: E402
 from plan.moves import LIBRARY                                           # noqa: E402
 from plan.planner import (STALL_FREE, DEATH_MIN_FRAMES, EXPLORE_EVERY, HYSTERESIS_FRAMES, TRIAL_GAIN, MoveMemory, Planner,   # noqa: E402
                           future_inputs, state_row)
@@ -174,7 +179,7 @@ COL_GOAL, COL_KEY = 0xF0FF78B9, 0xF0FFE628      # where the plan touches the pri
 COL_COMP = 0x9020E040                             # the airborne completion after the plan (fainter, dashed)
 # the chosen path in its planning mode's colour (plan/planner.py MODES; viz/viewer.py uses the same colours)
 MODE_COL = {"long-safe": 0xE04080FF, "normal": COL_PLAN, "reflex": 0xE0FF3030, "explore": 0xE0B040F0,
-            "best-route": 0xE0FFC020}
+            "best-route": 0xE0FFC020, "passage": 0xE020D8D0, "carrier": 0xE03090FF}
 OVERLAY_ALTS, PLAN_STEP, ALT_STEP = 3, 3, 4
 COL_DEMO = 0xE0FFFFFF                             # --demo: the demo's path (white)
 DEMO_TRAIL_EVERY = 15                             # --demo without recorded positions: redraw agent 0's path this often
@@ -611,6 +616,7 @@ class Runner:
     def __init__(self, args, telemetry=None):
         from plan.first_eval import validate_args
         validate_args(args)
+        validate_realtest_args(args)
         self.args = args
         self.run_dir = os.path.join(HERE, "runs", args.name)
         first = bool(getattr(args, "eval_first", None))
@@ -740,6 +746,7 @@ class Runner:
         self.find_save = locate_save            # S: where the game's save is (tests replace it)
         self.backup_root = BACKUPS
         self.save_backup = None                 # the folder the save was copied to (once per run), None not yet
+        self.realtest_finishing = False
         self.lock = None                        # the time-step lock: True / False once realgame.js said so
         self.dt_ms = 16.667                     # the frame time of the last frame message (ms)
         self.cost = FrameCost()
@@ -763,6 +770,8 @@ class Runner:
                 self.wm = Collector(os.path.join(self.run_dir, "wm_data"), source=src)
                 self.wm.meta_extra = {"agent_sources": {"planner": list(range(self.n_plan)),
                                                         "explore": list(range(self.n_plan, self.n_total))}}
+        if self.wm is not None:
+            self.wm.meta_extra["reward_protocol"] = REWARD_PROTOCOL
         self.wm_held = None                     # --online: the held-out levels' play (runs/<name>/wm_heldout: never in
         if self.wm is not None and getattr(args, "online", False) and self.evaluation is None:   # offline training)
             from wm.buffer import Collector
@@ -828,6 +837,7 @@ class Runner:
 
     # ---- level / waves ---------------------------------------------------------------------------------------
     def new_wave(self, n: int):
+        self.realtest_candidate = None
         self.wave_shard = self.wm.n_shards if self.wm is not None else None   # this wave's shard number
         self.alive = [True] * n
         self.held = [0] * n
@@ -896,6 +906,9 @@ class Runner:
         if self.rec is not None:
             self.rec.level(lv, info)
         self.fw.new_level()
+        from plan.lasers import EyeTracker
+        self.fw.set_lasers(EyeTracker.for_level(lv))   # homing eyes (plan/lasers.py): None on levels without them
+        self.eye_leader = 0                        # the leader the game's eyes aim at (the last answer's)
         self.commit.tube.refresh()                 # the surprise threshold, fixed for this level
         self.hz_start, self.moving, self.sweep = None, set(), set()
         self.field_built, self.field_dirty, self.rebuilds = False, False, 0
@@ -953,8 +966,10 @@ class Runner:
         if self.hz_start is None:
             self.hz_start = {}
         level_ids = self.level.hz_level_ids
+        eyes = getattr(getattr(self, "fw", None), "lasers", None)
+        reactive = eyes.progress_ids() if eyes is not None else ()
         for b, hid in zip(boxes, ids):
-            if box_base(hid) not in level_ids:
+            if box_base(hid) not in level_ids or box_base(hid) in reactive:
                 continue
             if hid not in self.hz_start:
                 self.hz_start[hid] = b
@@ -1009,6 +1024,7 @@ class Runner:
                                        corner=getattr(self.args, "corner_risk", "on") == "on",
                                        early_margin=getattr(self.args, "reflex", "veto") == "veto",
                                        stall_free=getattr(self.args, "stall_free", STALL_FREE),
+                                       stall_window=self.replan,
                                        modes=self.args.modes == "on",
                                        route_trial_gain=getattr(self.args, "route_trial_gain", TRIAL_GAIN))
                 cm = self.commit                    # route trials: deviation = the surprise trigger's tube
@@ -1032,6 +1048,7 @@ class Runner:
                             "corner": getattr(self.args, "corner_risk", "on") == "on",
                             "early_margin": getattr(self.args, "reflex", "veto") == "veto",
                             "stall_free": getattr(self.args, "stall_free", STALL_FREE),
+                            "stall_window": self.replan,
                             "modes": self.args.modes == "on",
                             "route_trial_gain": getattr(self.args, "route_trial_gain", TRIAL_GAIN)}
                     self.proc.call("init", self.model_path, lv, field, opts,
@@ -1137,8 +1154,15 @@ class Runner:
             pl = self.planner
         dt = float(m.get("dt") or 16.667)
         self.dt_ms = dt
+        if m.get("lzp") and lv.set_lasers(m["lzp"]) and self.fw.lasers is None:   # lasers rebuilt with the pieces
+            from plan.lasers import EyeTracker
+            self.fw.set_lasers(EyeTracker.for_level(lv))
+        # the homing eyes aim at the hidden main character, parked on the leader of the last answer (realgame.js)
+        el = getattr(self, "eye_leader", 0)
+        tgt = (states[el][0], states[el][1]) if self.fw.lasers is not None and 0 <= el < n else None
         self.fw.observe(frame, m.get("hz", []), m.get("pf"), m.get("sh", []), lv.hz_keep, lv.fans, dt,
-                        terrain=pl.terrain if pl is not None else None)     # live tiles: where shots stop
+                        terrain=pl.terrain if pl is not None else None,     # live tiles: where shots stop
+                        lz=m.get("lz"), target=tgt)
         if getattr(self, "auto_wait", False):       # --async-wait auto: the first moving part seen switches to events
             self.auto_check(frame, m, lv)
         if self.rec is not None:
@@ -1295,6 +1319,7 @@ class Runner:
         won = [i for i, s in enumerate(states) if int(s[6]) == 2]
         live = [i for i, s in enumerate(states) if int(s[6]) == 0 and self.alive[i]]
         leader = won[0] if won else (live_plan[0] if live_plan else (live[0] if live else 0))
+        self.eye_leader = int(leader)
         self._write(self.f_states, {"frame": frame, "wave": self.wave_no, "level": lv.name,
                                     "agents": [[i, round(float(states[i][0]), 2), round(float(states[i][1]), 2),
                                                 round(float(states[i][2]), 2), round(float(states[i][3]), 2),
@@ -1309,8 +1334,11 @@ class Runner:
                 self.skip_frame(m, frame, states, act_idx, boxes, kept, fboxes, dt)
         if self.rec is not None:
             C.go("wm_data")
-            self.rec.agents(self.wave_no, frame, states, alive_before, held_before, act_idx, [float("nan")] * n)
+            self.rec.agents(self.wave_no, frame, states, alive_before, held_before, act_idx,
+                            outcome_rewards(lv.name, frame, states, self.dt_ms, self.lock))
         C.go("other")
+        if self.realtest_candidate is not None:
+            return {"a": acts, "leader": int(leader), "end": "realtest A+"}
         if self.demo is not None and frame >= self.demo.end_frame:
             # the demo's actions ran out a second ago: copies still standing count as done (they would keep the
             # wave going to --wave-seconds); realgame.js ends the wave on "end" before stepping anyone
@@ -2019,21 +2047,26 @@ class Runner:
             self.demo_fin = int(finish_frame)
         lv = self.level.name if self.level else None
         frames = int(finish_frame) + 1
-        seconds = round(frames * self.dt_ms / 1000.0, 3)
+        outcome = finish_outcome(lv, frames, self.dt_ms, self.lock)
+        seconds, par = outcome["seconds"], outcome["a_plus_seconds"]
         rec = {"level": lv, "wave": self.wave_no, "agent": int(i), "source": source, "frame": int(finish_frame),
                "frames": frames, "seconds": seconds, "dt_ms": round(self.dt_ms, 3), "lock": self.lock,
-               "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+               "time": time.strftime("%Y-%m-%d %H:%M:%S"), **outcome, "reward_protocol": REWARD_PROTOCOL}
         self._write(self.f_times, rec)
+        if (getattr(self.args, "realtest", False) and planned and outcome["a_plus"] is True
+                and not self.realtest_finishing and self.evaluation is None):
+            if self.realtest_candidate is None or seconds < self.realtest_candidate["seconds"]:
+                self.realtest_candidate = rec
         self.fin.setdefault(source, []).append(seconds)
         if human:
-            par = a_plus_time(lv)
-            ok = par is not None and seconds <= par
+            ok = outcome["a_plus"] is True
             print(f"[human] {lv} wave {self.wave_no}: finished in {seconds:.2f} s"
                   + (f" (A+ {par:g} s: {'UNDER A+, kept as an A+ example' if ok else 'over A+'})" if par is not None
                      else " (no A+ time known)") + ("" if self.lock is True else "; the time step is NOT locked"),
                   flush=True)
             self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds, source=source,
-                       dt_ms=rec["dt_ms"], lock=self.lock, a_plus_seconds=par, a_plus=ok)
+                       dt_ms=rec["dt_ms"], lock=self.lock, a_plus_seconds=par, a_plus=outcome["a_plus"],
+                       reward=outcome["reward"])
         if planned and self.planner is not None:
             self.pl_sync(drop="the agent finished")
             r = (self.proc.call("finished", i, int(finish_frame)) if self.proc is not None
@@ -2063,10 +2096,9 @@ class Runner:
                 if self.learn and self.wm is not None and not self.protected:
                     self.add_self_demo(i, int(finish_frame), lv, seconds)
             best = self.best.best(lv, "planned") if lv is not None else None
-            par = a_plus_time(lv)                      # the game's A+ time: the target (levels_smb)
             self.event("finish", int(finish_frame), agent=i, x=x, y=y, frames=frames, seconds=seconds,
                        dt_ms=rec["dt_ms"], lock=self.lock, best=float(best["seconds"]) if best else None,
-                       new_best=new, a_plus_seconds=par, a_plus=None if par is None else seconds <= par)
+                       new_best=new, a_plus_seconds=par, a_plus=outcome["a_plus"], reward=outcome["reward"])
             if par is not None:
                 print(f"[finish] {lv} wave {self.wave_no}: {seconds:.2f} s, A+ {par:g} s: "
                       f"{'yes' if seconds <= par else f'no (+{seconds - par:.2f} s)'}", flush=True)
@@ -2198,7 +2230,9 @@ class Runner:
         self.pl_sync(drop="the wave ended")
         lv = self.level
         if self.rec is not None:
-            self.rec.wave_end(m["wave"], m, held=list(self.held))
+            self.rec.wave_end(m["wave"], m, held=list(self.held),
+                              rewards=outcome_rewards(lv.name if lv else None, int(m.get("frame", 0)),
+                                                      m.get("s") or [], self.dt_ms, self.lock))
         self.wave_no = int(m.get("wave", self.wave_no))
         status = m.get("status", [])
         frame = int(m.get("frame", 0))
@@ -2369,6 +2403,7 @@ class Runner:
             self.load_live()                        # between waves only: a newer published model
         if self.online is not None:
             self.load_online()                      # between waves only: the online learner's newer model
+        self.complete_realtest()                    # terminal shard is durable before native saving/advancing
         self.new_wave(len(status) if status else len(self.alive))
         self.post_overlay(0, force=True)
         self.flush()
@@ -2391,6 +2426,7 @@ class Runner:
             if ev == "frame":
                 reply = self.on_frame(p, data)
             elif ev == "info":
+                self.realtest_finishing = False
                 self.on_info(p, data)
             elif ev == "wave_end":
                 self.on_wave_end(p)
@@ -2420,6 +2456,8 @@ class Runner:
                     self.evaluation.invalidate("game error: " + str(p.get("msg")))
                     self.stopping = True
                 print(f"[game error] {p.get('msg')}", flush=True)
+                if str(p.get("msg", "")).startswith("paths:"):
+                    self.event("overlay error", None, msg=p.get("msg"))
                 if "time step lock" in str(p.get("msg", "")):
                     print("the time step could not be locked: the planner needs it (it assumes every future step is "
                           "the game's fixed step); stopping", flush=True)
@@ -2431,6 +2469,9 @@ class Runner:
                     self.lock = True
                     self.event("lock", None, ok=True)
                 print(f"[game] {p.get('msg')}", flush=True)
+            elif ev == "overlay":
+                self.event("overlay", None, **{k:v for k,v in p.items() if k != "ev"})
+                print(f"[overlay] {p.get('stage')}", flush=True)
             elif ev in ("ready", "wave", "continue", "level_end"):
                 if ev != "wave":
                     print(f"[game] {ev} {p}", flush=True)
@@ -2458,6 +2499,38 @@ class Runner:
             self.script.post({"type": "act", "payload": reply})
             self.cost.end()
 
+    def ensure_save_backup(self):
+        """One backup per run, shared by manual S and automatic realtest finishes."""
+        if self.save_backup is not None:
+            return None
+        save, why = self.find_save()
+        if save is None:
+            return why or "game save not found"
+        try:
+            self.save_backup = backup_save(save, self.backup_root)
+        except OSError as e:
+            return f"could not back up {save}: {e}"
+        return None
+
+    def complete_realtest(self):
+        """Use this wave's planned A+ result, never a historical best or an explore finish."""
+        rec = self.realtest_candidate
+        if (rec is None or self.realtest_finishing or self.stopping or self.lock is not True
+                or self.level is None or rec["level"] != self.level.name):
+            return
+        why = self.ensure_save_backup()
+        if why is not None:
+            self.event("realtest save skipped", None, reason=why, seconds=rec["seconds"])
+            print(f"[realtest] A+ save/advance skipped: {why}", flush=True)
+            return
+        self.pl_sync(drop="realtest A+ finish")
+        self.script.post({"type": "finish", "payload": {"time": rec["seconds"]}})
+        self.realtest_finishing = True
+        self.event("realtest finish requested", rec["frame"], seconds=rec["seconds"],
+                   agent=rec["agent"], backup=self.save_backup)
+        print(f"[realtest] {rec['level']}: A+ {rec['seconds']:.3f} s; native save and next level requested "
+              f"(backup: {self.save_backup})", flush=True)
+
     def on_save(self, level):
         """S in the game: realgame.js walks the main character into the goal (the game's own level end) and
         writes the level time it records (hud+0x384) on every frame of that finish. The time sent is the planned
@@ -2470,12 +2543,7 @@ class Runner:
         secs = float(b["seconds"]) if b and b.get("seconds") is not None else None
         why = None
         if secs is not None and self.save_backup is None:
-            save, why = self.find_save()
-            if save is not None:
-                try:
-                    self.save_backup = backup_save(save, self.backup_root)
-                except OSError as e:
-                    why = f"could not back up {save}: {e}"
+            why = self.ensure_save_backup()
         if secs is not None and self.save_backup is not None:
             print(f"[S] finishing {level} the game's way with the agent's best {secs:.2f} s (save backed up to "
                   f"{self.save_backup})", flush=True)
@@ -2768,6 +2836,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="one frozen-model life on this level, with no persistent memories, training or replay; "
                          "auto-stops after success/death/timeout; writes run.json and evaluation.json")
     ap.add_argument("--agents", type=int, default=1, help="planned agents (default 1)")
+    ap.add_argument("--realtest", action="store_true",
+                    help="save this run's planned A+ finishes through the game's native completion flow, then "
+                         "advance to the next level; backs up the game save first; non-A+ finishes retry")
     ap.add_argument("--explore", type=int, default=0,
                     help="extra agents with sticky random actions and random library move chains (world-model data)")
     ap.add_argument("--wave-seconds", type=float, default=20.0, help="wave time limit (default 20)")
@@ -2931,9 +3002,19 @@ def setup_demo(args, entries=None):
 
 
 def validate_learning_args(args):
+    validate_realtest_args(args)
     if getattr(args, "learn", False) and not (getattr(args, "dataset_manifest", None) or
                                              getattr(args, "legacy_split", False)):
         raise SystemExit("--learn requires --dataset-manifest FILE or explicit --legacy-split before attaching")
+
+
+def validate_realtest_args(args):
+    if not getattr(args, "realtest", False):
+        return
+    if (args.eval_first or args.human or args.search or args.demo or args.demo_level
+            or args.no_lock_step or args.agents < 1):
+        raise SystemExit("--realtest requires planned agents and the fixed time step; not with "
+                         "--eval-first / --human / --search / --demo / --demo-level / --no-lock-step")
 
 
 def main():

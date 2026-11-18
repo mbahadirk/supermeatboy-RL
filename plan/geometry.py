@@ -5,7 +5,8 @@ So support is derived from the tiles around the body (BODY = 6, realpath.BODY: t
 
 - on the ground: solid at GROUND_PROBE = BODY + 1.5 units below the centre, under either foot (x - FOOT_DX or
   x + FOOT_DX, FOOT_DX = BODY - 0.5: half a unit inside the body's edges), in the tile map or a moving
-  platform. On a 45-degree slope the body rests on one bottom corner; a probe 1.5 below and 0.5 inside the
+  platform, with that foot clear of solid at body-centre height. A foot embedded in a vertical face is
+  wall contact, not a standable top surface. On a 45-degree slope the body rests on one bottom corner; a probe 1.5 below and 0.5 inside the
   corner is 1 unit inside the slope (the brief's 1 below / 1 inside lies exactly on the slope's surface);
 - on a wall: solid WALL_PROBE = BODY + 1 units beside the centre (1 unit past the body's edge) at the body's
   mid height; side -1 = wall on the left, +1 = on the right (left wins when both).
@@ -205,14 +206,19 @@ class Terrain:
         x = np.asarray(x, np.float64)
         y = np.asarray(y, np.float64)
         yb = y - GROUND_PROBE
-        ground = self.point_solid(x - FOOT_DX, yb) | self.point_solid(x + FOOT_DX, yb)
+        feet = (x - FOOT_DX, x + FOOT_DX)
+        below = [self.point_solid(xf,yb) for xf in feet]
+        inside = [self.point_solid(xf,y) for xf in feet]
         left = self.point_solid(x - WALL_PROBE, y)
         right = self.point_solid(x + WALL_PROBE, y)
         if plats:
-            ground |= _in_plats(plats, x - FOOT_DX, yb) | _in_plats(plats, x + FOOT_DX, yb)
+            for k,xf in enumerate(feet):
+                below[k] |= _in_plats(plats,xf,yb)
+                inside[k] |= _in_plats(plats,xf,y)
             left |= _in_plats(plats, x - WALL_PROBE, y)
             right |= _in_plats(plats, x + WALL_PROBE, y)
         side = np.where(left, -1, np.where(right, 1, 0)).astype(np.int8)
+        ground = (below[0] & ~inside[0]) | (below[1] & ~inside[1])
         return ground, side
 
     def on_padding(self, x, y, plats=None, tol: float = PAD_TOL, dy=None) -> np.ndarray:

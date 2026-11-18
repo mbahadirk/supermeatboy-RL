@@ -152,8 +152,11 @@ after the tile guard, the bars of the step's end frame). The guard has the bars'
 from above a bar's top (its position at the step's start) to more than the tolerance below it (its position at
 the step's end), with the end x within the bar plus the body's half width, is put back on top (vy 0). Sides and
 bottoms are open to the guard (a body can pass up through a bar or into an upright bar's side as the model puts
-it). No carry: a body on a bar keeps the model's x (the bar's push on what stands on it is unmeasured); a bar
-rising into the feet pushes them up through the top rule. (Until 2026-11-15 the support rule used the bars at
+it). Continuing horizontal-bar riders use measured support displacement plus integrated relative vx
+(carry_bars, before tile collision), replacing learned dx so carry is not counted twice. Descending non-upright
+bars also carry continuing riders down, preserving the observed contact offset. Takeoff/new landing and
+rising/upright bars keep model motion. A bar rising into the feet pushes them up through the top rule.
+(Until 2026-11-15 the support rule used the bars at
 the decision frame for every step and the guard had none: online_check01 4-4 wave 15, the f440 plan's "ground"
 landing at +16 at (141.7, -97.3) stood on the bar's f432 position, which had moved on.) Real states (observe, the
 committer's support trigger on the real state) use the live bars (Level.plats). Not yet per step: the
@@ -199,10 +202,12 @@ from mpc.candidates import ACTIONS, act
 from plan import safety as S
 from plan.explain import Plan, SurpriseTracker, HORIZONS
 from plan.geometry import Terrain
+from plan.carrier import Carrier, on_bar as carrier_contact, proof as carrier_proof, choose as carrier_choose, station as carrier_station
 from realpath import BODY, tile_classes
 from plan.moves import LIBRARY, BY_NAME, CORE_SECOND, MAX_LEN, padded
 from plan.progress import FX_GROUND, ProgressField
 from wm.buffer import ROW
+from wm.rollout import ACT_JUMP
 from wm.features import (BIN_NAMES, N_STATES, EVENTS, LevelGeom, actions_into, box_distances, featurize,
                          hazard_features, model_layout, model_prior, platform_features, prior, require_geom,
                          tile_patch)
@@ -249,13 +254,15 @@ NO_PROGRESS = 0.0                            # frames: "no progress" when T(star
 # The stall rule (Planner.stall_free, stall_penalty). A plan that waits is scored frames + T at its end, as if the
 # way on were free after the wait; where the way on costs soft risk, waiting stayed cheaper at every decision and
 # the agent stood for 1,000 frames (3-2 at (41, 226): wait 268-274, the plans that go on 303-328). So a plan that
-# does not get below the best T this wave has reached pays the frames already spent without getting below it.
+# does not get below the best T within its executable prefix pays the frames already spent without it;
+# partial progress buys a proportional share off, including progress within one tile.
+# Far-end progress after a new wait cannot waive that charge (4-17: wait 16f reset every 8f).
 STALL_FREE = 60                              # frames without progress that cost nothing (timing a hazard, a wall)
 STALL_STEP = 10.0                            # frames of T: progress that resets the stall, and frees a plan of it
 # Daring: while stalled, a vetoed plan (a touch within the first frames) is no longer ranked below every other: it
 # costs one death (soft risk 1), so once the stall charge outgrows a death the agent tries it (the user, 2026-11-14:
 # "if progress does not move it should be penalized and dare to die to move on"); REFLEX does not override it then.
-# Curiosity (Planner.novelty): while stalled, a plan pays the stall charge only for the share of its path that runs
+# Curiosity (Planner.novelty): while stalled, a plan pays the stall charge only for the share of its PREFIX that runs
 # through tiles the run has already been in on this level (any wave); the unvisited share counts as progress. Every
 # wave repeated the same decisions (the time step is locked), so a stall was the same stall each wave and nothing new
 # was ever tried, or learned (3-2: the passage's left side never entered in 5 waves; 1-2: 1,155 frames on a stretch
@@ -329,7 +336,7 @@ HAZ_FAR = 300.0                              # wm.features.hazard_features clips
 COLLIDE_TOL = 1.0                            # units: the collision guard moves imagined bodies overlapping more
 # planning modes (Planner(modes=True), module docstring): the ensemble members' roles
 MEMBERS = {"long-safe": 0, "normal": 1, "reflex": 2, "explore": (3, 4)}
-MODES = ("long-safe", "normal", "reflex", "explore")
+MODES = ("long-safe", "normal", "reflex", "explore", "passage", "carrier")
 H_LONG = 96                                  # frames: the long-safe horizon
 LONG_EVERY = 32                              # frames: a long-safe plan older than this is searched again (supported)
 LONG_RISK = 0.05                             # soft risk at most this (and no veto) for a long-safe plan
@@ -455,6 +462,16 @@ def imagine(model, members: slice, geom: LevelGeom, s0: np.ndarray, actions: np.
         move = (o[:, :N_CONT] * rs).numpy() + prior_into(s, dt_step, f, pp, groups, wk)
         pb = torch.sigmoid(o[:, _BIN]).numpy()
         s2 = advance(s, a_all[:, k], move, pb, o[:, _STATE].argmax(-1).numpy())
+        if bars:
+            # Reconstruct supported horizontal motion once, BEFORE tile collision. Native vx is
+            # relative to the bar; replacing dx avoids adding carry twice to learned displacement.
+            for offset, gi in groups:
+                private = s2[gi].copy()
+                aj=ACT_JUMP[a_all[gi,k]]
+                resting=~(aj.any(1) if aj.ndim>1 else aj)
+                carry_bars(s[gi], private, bars_at(worlds, offset+k*f),
+                           bars_at(worlds, offset+(k+1)*f), dt_ms, f, resting=resting)
+                s2[gi] = private
         if clip is not None:
             clipped = np.zeros(len(s), bool)
             for (_, gi), t in ([((0, slice(None)), tiles[0])] if same else zip(groups, tiles)):
@@ -611,6 +628,54 @@ def has_bars(worlds) -> bool:
     return bool(worlds) and any(w.pf for w in worlds)
 
 
+def carry_bars(prev, s, before, after, dt_ms, frames=1, resting=None):
+    """Measured horizontal/descending-bar riding: relative motion + support displacement.
+
+    Only continuing top contact on non-upright bars moving horizontally or descending. Takeoffs,
+    new landings, rising/upright bars and non-riders retain learned motion. Never add carry twice.
+    Linear per-frame velocity integration uses end-of-frame velocities, matching native updates.
+    """
+    moved = np.zeros(len(s), bool)
+    if not before or len(before) != len(after):
+        return moved
+    dt = dt_ms / 1000.0
+    for (x0,y0,hw0,hh0,u0),(x1,y1,hw1,hh1,u1) in zip(before,after):
+        dy = y1-y0
+        if u0 or u1 or dy > .1:
+            continue
+        # Descending riders retain their observed contact offset (native body follows one frame
+        # behind the reported bar). Accept learned none/partial/full carry, then replace it once.
+        descending = dy < -.1
+        near = ((s['y'] >= prev['y']+dy-1.5) & (s['y'] <= prev['y']+1.5) if descending else
+                np.abs(s['y']-BODY-y1-hh1) < 1.5)
+        if resting is not None:
+            # A confirmed rider with no jump input cannot spontaneously take off in model noise.
+            # Actual walk-off is decided by the integrated horizontal footprint below.
+            near |= np.asarray(resting,bool)
+        riding = (~moved & (np.abs(prev['x']-x0) < hw0+BODY-.5)
+                  & (np.abs(prev['y']-BODY-y0-hh0) < 1.5)
+                  & (np.abs(prev['vy']) < 1.)
+                  & near)
+        if not riding.any():
+            continue
+        x = prev['x'].astype(float).copy()
+        contact = riding.copy()
+        shift = (x1-x0)/frames
+        for j in range(1,frames+1):
+            # Stop carrying once a walking rider leaves the edge within this coarse model step.
+            contact &= np.abs(x-(x0+shift*(j-1))) < hw0+BODY-.5
+            velocity = prev['vx']+(s['vx']-prev['vx'])*(j/frames)
+            x += velocity*dt+np.where(contact,shift,0.)
+        np.copyto(s['x'],x,where=riding,casting='unsafe')
+        # A continuing support does not accumulate the model's small vertical rest drift.
+        landed = riding & contact & (np.abs(x-x1) < hw1+BODY-.5)
+        np.copyto(s['y'],prev['y']+dy if descending else y1+hh1+BODY-CONTACT_EPS,
+                  where=landed,casting='unsafe')
+        np.copyto(s['vy'],0.,where=landed,casting='unsafe')
+        moved |= riding
+    return moved
+
+
 def collide_bars(prev: np.ndarray, s: np.ndarray, before: list, after: list, tol: float = COLLIDE_TOL) -> np.ndarray:
     """The collision guard's moving platforms, their top only: rows s (just stepped from prev) whose feet (y -
     BODY) were at most `tol` below a bar's top at the step's start (the bar in `before`, the same bar by order;
@@ -618,8 +683,8 @@ def collide_bars(prev: np.ndarray, s: np.ndarray, before: list, after: list, tol
     end x within the bar's half width plus the body's (BODY - tol, the tile guard's shrunk box), are put back on
     top: y = top + BODY - CONTACT_EPS (CONTACT_EPS of overlap, as collide), vy 0, x kept (x moves first, as the
     tile guard's free-x case). A body falling through a bar in one step lands on it. Sides and bottoms are open:
-    a body below a bar can rise through it, one beside an upright bar can move into its side. No carry: the bar's
-    motion does not move what stands on it (unmeasured); a top rising into the feet pushes them up. In place;
+    a body below a bar can rise through it, one beside an upright bar can move into its side. Horizontal carry
+    is handled separately by carry_bars before tile collision; a top rising into the feet pushes them up. In place;
     returns which rows were moved."""
     moved = np.zeros(len(s), bool)
     if not after:
@@ -642,15 +707,17 @@ def collide_bars(prev: np.ndarray, s: np.ndarray, before: list, after: list, tol
 
 
 def stall_penalty(stalled: float, best: float, t_end) -> np.ndarray:
-    """The stall rule's frames for plans that end with T = t_end (array), when the agent has been `stalled` frames
-    (beyond the free ones) without getting STALL_STEP below `best`, the lowest T it has reached: the whole
-    `stalled` for a plan that does not end STALL_STEP below `best` either, none for one that does (waiting again
-    is expected to cost what it has cost so far; a plan that gets on does not pay it). No part credit: a hop in
-    place lowers T by a few frames for a moment (3-2: 225 -> 218) and would buy most of the charge off."""
+    """Charge for the executable prefix's continuous T, relative to the best observed T.
+
+    No progress pays the full accumulated charge; STALL_STEP improvement pays none. Between them, give
+    proportional credit: a short useful action must beat waiting even when it cannot deliver a full reset.
+    Real stall history still resets only after STALL_STEP actual progress, so a temporary predicted hop
+    does not reset the clock. Future tails and novelty are excluded by prefix_stall before this rule."""
     t_end = np.asarray(t_end, np.float64)
     if stalled <= 0 or not math.isfinite(best):
         return np.zeros(t_end.shape)
-    return np.where(np.isfinite(t_end) & (t_end <= best - STALL_STEP), 0.0, float(stalled))
+    drop = np.where(np.isfinite(t_end), np.maximum(0.0, best-t_end), 0.0)
+    return float(stalled) * (1.0-np.clip(drop/STALL_STEP, 0.0, 1.0))
 
 
 def corner_risk(ter: Terrain | None, xs, ys, frames, step: int, upto, bounds=None, offset: int = 0,
@@ -811,7 +878,9 @@ def future_inputs(future, frame: int, H: int, dt_ms: float, level_name: str | No
     shapes with the future's uncertainty radius, flying shots, and remembered deaths (a
     plan.safety.DeathMemory) at their wave frames. Also how many steps came from the recording. deadly_only: no
     model inputs (worlds None), the same deadly boxes (the per-frame danger check). A recorded frame's FrameBoxes
-    is made once and shared (FutureWorld.derived, while the death memory's version is unchanged): read-only."""
+    is made once and shared (FutureWorld.derived, while the death memory's version is unchanged): read-only. On a
+    level with homing eyes (FutureWorld.beam_context) every frame k carries them as FrameBoxes.beams = (the eyes now,
+    k): each sweep rolls them along its own paths (plan.safety.sweep, plan.commit.path_check)."""
     worlds, check, recorded = future.worlds(frame, H, dt_ms, deadly_only=deadly_only)
     memory = deaths if deaths is not None and level_name is not None else None
     derived = getattr(future, "derived", None)
@@ -824,6 +893,10 @@ def future_inputs(future, frame: int, H: int, dt_ms: float, level_name: str | No
         f = frame + k
         frames.append(_frame_boxes(c, memory, level_name, f, kinds) if derived is None else
                       derived(f, c, key, _frame_boxes, c, memory, level_name, f, kinds))
+    bc = getattr(future, "beam_context", None)
+    beams = bc(frame, H) if bc is not None else None
+    if beams is not None:                            # homing eyes: every frame carries them (their offset from now)
+        frames = [None] + [replace(fb, beams=(beams, k)) for k, fb in enumerate(frames[1:], start=1)]
     return worlds, frames, recorded
 
 
@@ -1815,8 +1888,9 @@ class Planner:
                  complete_max: int = COMPLETE_MAX, modes: bool = False, key_pickup=True,
                  route_trial_gain: float = TRIAL_GAIN, veto_members: int = 1,
                  death_min: float = DEATH_MIN_FRAMES, risk_members: str = "second", corner: bool = True,
-                 early_margin: bool = True, stall_free: float = STALL_FREE):
+                 early_margin: bool = True, stall_free: float = STALL_FREE, stall_window: int = 8):
         self.stall_free = float(stall_free)           # the stall rule's free frames (agent.py --stall-free; < 0: off)
+        self.stall_window = max(1, int(stall_window)) # credit only before the next timed decision, not at H
         self.model = WorldModel.load(model).eval() if isinstance(model, str) else model
         self.veto_members = max(1, int(veto_members))   # _verdict's quorum on the final stage's members
         self.death_min = float(death_min)             # DEATH_FRAMES' floor (agent.py --death-min)
@@ -1850,7 +1924,8 @@ class Planner:
     def future_frames(self) -> int:
         """How many future frames a decision's inputs should cover (worlds; frames + 1): H + completion (the
         long-safe horizon with modes)."""
-        return max(self.H + self.complete_max, H_LONG if self.modes else 0)
+        from plan.passage import WINDOW
+        return max(self.H + max(self.complete_max,WINDOW), H_LONG if self.modes else 0)
 
     # ---- level state -------------------------------------------------------------------------------------
     def set_level(self, level, field: ProgressField, memory: FailureMemory | None = None):
@@ -1870,6 +1945,8 @@ class Planner:
         self._now = 0                                # the wave frame of the decision being made
         self.stalls = {}                             # agent -> {"best": lowest T reached, "since": its wave frame}
         self.tiles_changed = False                   # a tile differs from the level's start (crumble, lock, switch)
+        self.passages = {}                           # only adopted same-exit crossings, per agent
+        self.launches = {}                           # real last supported platform-level state, per agent
         self.terrain = Terrain(level.words0, level.ox, level.oy)
         self.guard = Terrain(level.words0, level.ox, level.oy, slopes=False)    # the collision guard's tiles
         self._guard_keys = {}
@@ -1893,6 +1970,9 @@ class Planner:
     def set_field(self, field: ProgressField):
         """A (rebuilt) progress field: also T_support at the spawn (the point-of-no-return charge's scale)."""
         self.field = field
+        self.passages = {}                           # exits are tied to this objective/field
+        self.launches = {}
+        self.carrier = Carrier()
         sc, sr = field.start
         ok = 0 <= sc < field.W and 0 <= sr < field.H
         self.t_spawn = float(field.T_support[0, sr, sc]) if ok else math.inf
@@ -1959,6 +2039,52 @@ class Planner:
         if s is None or T0 <= s["best"] - STALL_STEP or frame < s["since"]:
             s = self.stalls[int(agent)] = {"best": float(T0), "since": int(frame)}
         return max(0.0, float(frame - s["since"]) - self.stall_free), s["best"]
+
+    def prefix_stall(self, out, first_frames, keys, worlds, stalled, best, death=None, step=None):
+        """Stall cost from the executable prefix, never from a postponed tail/continuation.
+
+        Stop before the earlier of the next timed decision and first move end. Round
+        DOWN to an observed model boundary; interpolated future states earn no credit.
+        Novelty is also restricted to this prefix. Each member keeps its private keys,
+        velocity and that frame's platforms. step=1 supports verified real-route paths.
+        Returns (cost, mean prefix T, credited frames); inactive stall costs no lookups.
+        """
+        xs, ys, vy = out["x"], out["y"], out["vy"]
+        E, n, K = xs.shape[0], xs.shape[1], xs.shape[2] - 1
+        f = self.f if step is None else int(step)
+        cols = np.minimum(np.minimum(np.asarray(first_frames, np.int64), self.stall_window) // f, K)
+        cols = np.broadcast_to(np.maximum(cols, 0), (n,))
+        frames = cols * f
+        if stalled <= 0 or not math.isfinite(best):
+            return np.zeros(n), np.full(n, np.nan), frames
+        upto = int(cols.max(initial=0))
+        X, Y = xs[..., :upto + 1], ys[..., :upto + 1]
+        J = out.get("jumps")
+        J = None if J is None else J.cols(upto + 1)
+        masks = (np.broadcast_to(np.asarray(keys, np.uint32), (E, n))[..., None] if upto == 0 else
+                 self.geom.lock_context.pickup_path(X, Y, keys, step=f,
+                     upto=np.minimum(frames, np.where(death > 0, death-1, frames))
+                     if death is not None else frames, jumps=J)[0])
+        times = np.full((E, n), np.inf)
+        novel = np.zeros(n)
+        mx, my, _ = member_mean(X, Y, J)
+        for c in np.unique(cols):
+            idx = np.nonzero(cols == c)[0]
+            values = self.time_to_go(xs[:, idx, c], ys[:, idx, c], masks[:, idx, c * f],
+                                     vy=vy[:, idx, c], at=int(c * f), worlds=worlds, subcell=True)[0]
+            times[:, idx] = values
+            if c > 0:
+                novel[idx] = self.novelty(mx[idx, :c+1], my[idx, :c+1])
+        prefix_t = self._tt(times).mean(0)
+        start_t = self._tt(self.time_to_go(xs[..., 0], ys[..., 0], masks[...,0], vy=vy[..., 0], at=0,
+                                         worlds=worlds, subcell=True)[0]).mean(0)
+        # Historical progress cannot discount a new wait: only this prefix's own improvement counts.
+        cost = stall_penalty(stalled, 0.0, prefix_t-start_t) * (1.0-novel)
+        if death is not None:
+            # A predicted death before the credited boundary cannot earn an exemption.
+            blocked = ((death > 0) & (death <= frames)).any(0)
+            cost = np.where(blocked, float(stalled), cost)
+        return cost, prefix_t, frames
 
     def _corner(self, xs, ys, frames, upto, keys, jumps=None):
         """corner_risk of imagined paths on the guard's tiles for these keys (None with the guard or the rule off),
@@ -2083,7 +2209,10 @@ class Planner:
         """A new wave: per-wave state cleared. Returns the events of route trials the wave left open."""
         self.prev = {}
         self.long = {}                               # agent -> the last long-safe plan {frame, actions, segs, valid}
+        self.passages = {}
         self.crumble, self._stages = {}, {}          # the level is whole again
+        self.launches = {}
+        self.carrier = Carrier()
         self.stalls = {}                             # agent -> {"best": lowest T reached, "since": its wave frame}
         self._tp_seen, self._tp_last = {}, {}        # no teleport yet this wave
         self.memory.new_wave()
@@ -2156,7 +2285,7 @@ class Planner:
             leg = int(leg) if np.ndim(leg) == 0 else leg
         return self.field.values(x, y, leg, sup), sup, g, side, leg
 
-    def time_to_go(self, x, y, keys=0, leg=None, vy=None, at=None, worlds=None):
+    def time_to_go(self, x, y, keys=0, leg=None, vy=None, at=None, worlds=None, subcell=False):
         """T (frames to the goal, plan/progress.py) at positions for an agent holding `keys` or on leg `leg`:
         (T, supported, ground, wall side, leg). Supported by Planner.support (cling rule with vy; at, worlds: the
         moving platforms of imagined positions' frames); airborne bodies take T_rise when vy > 0 (units /
@@ -2166,7 +2295,36 @@ class Planner:
         if leg is None:
             leg = self.field.leg_of(np.asarray(keys, np.int64))
             leg = int(leg) if np.ndim(leg) == 0 else leg
-        return self.field.times(x, y, leg, sup, vy), sup, g, side, leg
+        return self.field.times(x, y, leg, sup, vy, subcell=subcell), sup, g, side, leg
+
+    def observe_launch(self, agent, frame, y, keys, t, ground):
+        """Only real observations own transfer history; async plans/adoptions cannot rewind it.
+
+        A supported state refreshes the departure baseline; an airborne replan keeps it until
+        landing, death, objective/level/wave reset. No history on worlds without live platforms.
+        """
+        agent = int(agent)
+        old = self.launches.get(agent)
+        if old is not None and frame < old['frame']:
+            return
+        if not self.lv.plats or (old is not None and old['keys'] != keys):
+            self.launches.pop(agent,None)
+        if self.lv.plats and ground and math.isfinite(t):
+            self.launches[agent] = dict(frame=int(frame),y=float(y),t=float(t),keys=int(keys))
+
+    def landing_time(self, times, ground):
+        """Credit launch progress on platform levels only after a predicted ground/platform landing.
+
+        A wall touch or still-airborne end is not a demonstrated landing. Ground at its own future
+        frame (including a platform) restores ordinary credit. Actual goal touches keep goal priority.
+        This is a terminal-score rule, not a change to support geometry or collision physics.
+        """
+        launch = getattr(self,'_launch',None)
+        if launch is None:
+            return times
+        _,t0 = launch
+        unlanded = ~np.asarray(ground,bool)
+        return np.where(unlanded,np.maximum(times,t0),times)
 
     def _path_keys(self, xs, ys, keys=0, upto=None, death=None, jumps=None):
         if death is not None:
@@ -2208,6 +2366,8 @@ class Planner:
             self.touch(int(frame), float(x), float(y))
             self.visit(float(x), float(y))
         if dead:
+            self.launches.pop(int(agent),None)
+            self.carrier.observe(agent,frame,x,y,vy,keys,self.lv.plats,dead=True)
             ev = ev + self.memory.update(agent, frame, dead=True)
             at = self.route.dead(agent, frame)
             if at is not None:
@@ -2217,8 +2377,15 @@ class Planner:
             vyf = None if vy is None else float(vy) * dt_ms / 1000.0
             vxf = None if vx is None else float(vx) * dt_ms / 1000.0
             self.route.observe(agent, frame, x, y, vxf, vyf, keys=keys, held=held)
-            t, sup, _, _, _ = self.time_to_go(np.array([x]), np.array([y]), keys,
+            t, sup, ground, _, _ = self.time_to_go(np.array([x]), np.array([y]), keys,
                                               vy=None if vyf is None else np.array([vyf]))
+            self.observe_launch(agent,frame,y,keys,float(t[0]),bool(ground[0]))
+            sg,ss = self.support_terrain(keys).support(np.array([x]),np.array([y])) if self.lv.plats else (np.array([False]),np.array([0]))
+            self.carrier.observe(agent,frame,x,y,vy,keys,self.lv.plats,static_ground=bool(sg[0]),
+                                 static_supported=bool(sg[0] or ss[0]!=0))
+            observed_t = self.field.times(np.array([x]),np.array([y]),self.field.leg_of(keys),sup,
+                                         None if vyf is None else np.array([vyf]),subcell=True)
+            self.stalled(agent,frame,float(observed_t[0]))
             cell = self.cell(x, y)
             ev = ev + self.memory.update(agent, frame, cell, float(t[0]),
                                          key=lambda: self.state_key(cell, bool(sup[0]), vxf, vyf))
@@ -2257,7 +2424,7 @@ class Planner:
                 "route_book": None if book is before else book}
 
     # ---- airborne completion -----------------------------------------------------------------------------
-    def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H, tp=None):
+    def complete(self, rows, a_last, legs, worlds, frames, dt_ms, keys, H, tp=None, beam_theta=None):
         """C1b: from each candidate's main-member end row at H (rows (m,) ROW, its last action a_last (m,), its
         leg there legs (m,)), the continuation fan (continuations()) rolled out with the main member up to
         complete_max frames in batches of COMPLETE_CHUNK (rows that landed or died stop; all stopped: early
@@ -2268,7 +2435,9 @@ class Planner:
         the frames rolled out. A step-f model: complete_max and the batches round up to whole steps; the paths
         are per step, every frame reported is a frame. tp: on a level with game portals, the rows' (tp_ready,
         tp_off) at H (imagine's, of the rollouts they end); a path through a portal has "jumps" in its record
-        (the path points reached by a teleport)."""
+        (the path points reached by a teleport). beam_theta (m, eyes): on a level with homing eyes (the frames carry
+        them) their angles at H along each candidate's main member (the final sweep's beam_theta); the eyes then
+        go on aiming along each continuation (None: plan.lasers.Beams.seed)."""
         m_all = len(rows)
         f = self.f
         fan = [continuations(a) for a in a_last]
@@ -2306,6 +2475,10 @@ class Planner:
             Jc = Jumps.empty((n, Kmax // f + 1))
         done, rolled = 0, 0
         clipped = np.zeros(n, bool)
+        bref = S.beam_ref(frames)                        # homing eyes: angles carried row by row, chunk to chunk
+        eye_th = None
+        if bref is not None and beam_theta is not None:
+            eye_th = np.repeat(np.asarray(beam_theta, np.float32).reshape(m_all, -1), nf, 0)
         while done < Kmax:
             act_i = np.nonzero(state == 0)[0]
             if not len(act_i):
@@ -2324,7 +2497,13 @@ class Planner:
             fr = [frames[min(H + done + k * f, len(frames) - 1)] if k else None for k in range(Kc + 1)]
             fr = _near_frames(fr, x[None], y[None])
             sw = S.sweep(x[None], y[None], fr, self.bounds, self.floor_for(worlds, H + done), f,
-                         jumps=None if jo is None else jo[0:1])
+                         jumps=None if jo is None else jo[0:1],
+                         beams=None if bref is None else (bref[0], bref[1] + H + done,
+                                                          None if eye_th is None else eye_th[act_i]))
+            if bref is not None and sw.beam_theta is not None:
+                if eye_th is None:
+                    eye_th = np.zeros((n, sw.beam_theta.shape[-1]), np.float32)
+                eye_th[act_i] = sw.beam_theta[0]
             cf = sw.contact_frame[0]
             tg = S.first_contact(x[None], y[None], self.goal_boxes, step=f,
                                  jumps=None if jo is None else jo[0:1])[0][0] if len(self.goal_boxes) else \
@@ -2381,10 +2560,12 @@ class Planner:
         k = np.nonzero(state == 1)[0]
         if len(k):
             t_land[k] = self.field.times(xe[k], ye[k], leg[k], True)
+            t_land[k] = self.landing_time(t_land[k],on[k]=='ground')
         t_fly = np.full(n, np.inf)
         k = np.nonzero(state == 0)[0]
         if len(k):
             t_fly[k] = self.field.times(xe[k], ye[k], leg[k], False, last_vy[k])
+            t_fly[k] = self.landing_time(t_fly[k],False)
         res = []
         for c in range(m_all):
             idx = np.arange(c * nf, (c + 1) * nf)
@@ -2537,6 +2718,7 @@ class Planner:
         (previous plan, best-route use, route trial, surprise / move / failure memories) wait for
         plan.commit_fn() (agent.py --async-plan: a plan made ahead counts only if it is adopted)."""
         t0 = time.perf_counter()
+        self._launch = None
         self._now = int(frame)                       # imagine_options: the crumble stages count from here
         f = self.f                                   # frames per model step; arrays are per step (column)
         H = -(-self.H // f) * f                      # frames, whole steps
@@ -2547,24 +2729,68 @@ class Planner:
         t0a, sup0, g0, side0, leg = self.time_to_go(np.array([x0]), np.array([y0]), keys, vy=vy0, at=0, worlds=worlds)
         T0 = float(t0a[0])
         T0_ok = math.isfinite(T0)
+        launch = self.launches.get(int(agent))
+        if has_bars(worlds):
+            if T0_ok and bool(g0[0]):
+                self._launch = (y0,T0)
+            elif launch is not None and launch['frame'] <= frame and launch['keys'] == keys:
+                self._launch = (launch['y'],launch['t'])
         self._dead_t = T0 + DEAD_END_FRAMES if T0_ok else DEAD_FAR
         v0 = float(self.value(np.array([x0]), np.array([y0]), keys, vy=vy0, at=0, worlds=worlds)[0][0])
         v0_ok = math.isfinite(v0)
         cell0 = self.cell(x0, y0)
         scale = max(self.t_spawn - T0, self.death_min) if T0_ok and math.isfinite(self.t_spawn) else self.death_min
-        stalled, t_best = self.stalled(agent, frame, T0)     # the stall rule: frames to charge, the best T so far
+        # Stall history and prefix credit must use the same continuous field. Main estimates/risk scaling
+        # keep their original cell lookup; short-prefix movement gets a signal even within one tile.
+        stall_t0 = float(self.field.times(np.array([x0]), np.array([y0]), leg, sup0, vy0, subcell=True)[0])
+        # Only real observe() updates stall history. A speculative start/late adoption must not reset or
+        # rewind it. Seeding here supports offline single-decision callers without earlier observations.
+        if int(agent) not in self.stalls:
+            self.stalled(agent, frame, stall_t0)
+        actual_stall = self.stalls.get(int(agent))
+        stalled, t_best = ((max(0.,frame-actual_stall['since']-self.stall_free),actual_stall['best'])
+                           if actual_stall is not None and self.stall_free >= 0 else (0.,math.inf))
+        from plan import passage as Psg
+        carrier_task = self.carrier.context(agent,frame,keys,bars_at(worlds,0))
+        carrier_pending = self.carrier.returns.get(int(agent)) if carrier_task is not None else None
+        carrier_on = False
+        if carrier_task is not None:
+            index = carrier_task['index']
+            b0,b1 = bars_at(worlds,0),bars_at(worlds,H)
+            if len(b0)==len(b1):
+                bx=np.array([b0[index][0],b1[index][0]])
+                by=np.array([b0[index][1]+b0[index][3]+BODY,b1[index][1]+b1[index][3]+BODY])
+                bt=self.time_to_go(bx,by,keys,at=np.array([0,H]),worlds=worlds)[0]
+                carrier_on = bool(carrier_pending is not None or carrier_task.get('crossing') is not None or not carrier_task['attached'] or
+                                  (np.isfinite(bt).all() and bt[1]<bt[0]-1.))
+        crossing = self.passages.get(int(agent))
+        if crossing is not None and Psg.at_exit(x0,y0,bool(sup0[0]),keys,crossing['target']):
+            crossing = None                         # real arrival; another imagined endpoint is not enough
+        age = frame-self.stalls.get(int(agent), {}).get('since', frame)
+        passage_on = bool(T0_ok and (crossing is not None or (self.stall_free >= 0 and bool(sup0[0]) and
+                          age >= 2*min(self.stall_window, Psg.WINDOW) and
+                          self._danger_near(agent, frame, x0, y0, frames))))
         death_of = (lambda nm: self.moves.penalty(cell0, nm, scale)) if self.moves is not None else (lambda nm: 0.0)
         self.death_frames = scale                    # DEATH_FRAMES of this decision (module docstring)
         mem = slice(self.member, self.member + 1)
         timing, counts = {}, {}
         gt = self.guard_terrain(keys)
         ck = self.imagine_options(keys, agent=agent)
+        carrier_cross_result=None
+        carrier_cross_controls=None
+        carrier_cross_note={'ran':False}
+        if carrier_on:
+            tx=time.perf_counter()
+            carrier_cross_result,carrier_cross_controls,carrier_cross_note=self._carrier_crossing(
+                row,frame,carrier_task,carrier_pending,worlds,frames,dt_ms,ck,keys)
+            timing['carrier_crossing']=1000*(time.perf_counter()-tx)
         n_clip = lambda c, upto=None: 0 if c is None else int(
             (c if upto is None else c & (np.arange(c.shape[2])[None, None, :] <= np.asarray(upto)[None, :, None]))
             .any(axis=(0, 2)).sum())
 
         def ends_time(xe, ye, vye, legs, masks, at):
-            return self.time_to_go(xe, ye, masks, legs, vye, at=at, worlds=worlds)[0]
+            t,_,g,_,_ = self.time_to_go(xe, ye, masks, legs, vye, at=at, worlds=worlds)
+            return self.landing_time(t,g)
 
         def success_total(t, pen):
             # earlier touch first; the penalty frames (up to the touch) only break ties (< 1 frame)
@@ -2617,14 +2843,26 @@ class Planner:
         fail1 = np.array([self.memory.penalty(cell0, m.name) for m in self.lib])
         death1 = np.array([death_of(m.name) for m in self.lib])
         pen1 = scale * soft1 + fail1 + death1
-        pen1 = pen1 + np.where(succ1, 0.0, stall_penalty(stalled, t_best, self._tt(tend1))
-                               * (1.0 - self.novelty(out1["x"][0, :, :steps1 + 1], out1["y"][0, :, :steps1 + 1])))
+        stall1, prefix1, credit1 = self.prefix_stall(out1, self.lib_len, keys, worlds, stalled, t_best,
+                                                   sw1.contact_frame)
+        stall1 = np.where(succ1 & (tg1 <= credit1), 0.0, stall1)
+        pen1 = pen1 + stall1
         est1 = end1 + self._tt(tend1) + pen1
         score1 = ranked(veto1, vf1, est1, soft1)
         score1 = np.where(succ1, success_total(tg1, pen1), score1)
         order1 = np.argsort(-score1, kind="stable")
         keep1 = order1[:self.B1]
-        self.last_stage1 = {"names": [m.name for m in self.lib], "frames": up1, "t_end": tend1, "estimate": est1}
+        if passage_on and crossing is None:
+            # Keep the same beam size, but do not let variants of waiting remove every crossing proposal.
+            moving, families = [], set()
+            for i in np.argsort(self.lib_end+self._tt(tend1), kind='stable'):
+                family = move_family(self.lib[i].name)
+                if not veto1[i] and self.lib[i].family != 'wait' and family not in families:
+                    moving.append(int(i)); families.add(family)
+                    if len(moving) >= min(3, self.B1): break
+            keep1 = np.array((moving+[int(i) for i in order1 if i not in moving])[:self.B1], np.int64)
+        self.last_stage1 = {"names": [m.name for m in self.lib], "frames": up1, "t_end": tend1, "estimate": est1,
+                            "stall": stall1, "stall_prefix_t": prefix1, "stall_prefix_frames": credit1}
         t1 = time.perf_counter()
         timing["stage1"] = 1000 * (t1 - t0)
         counts["stage1"] = {"candidates": n1, "steps": int(steps1), "complete": int((self.lib_end <= steps1 * f).sum()),
@@ -2697,13 +2935,30 @@ class Planner:
                                  J2K)[0][0, :, -1]
         tend2 = ends_time(xs2[0, np.arange(n2), up2 // f], ys2[0, np.arange(n2), up2 // f], vye2, legs2, masks2, up2)
         pen2 = scale * soft2 + np.array([fail1[i] + death1[i] for i in firsts])
-        pen2 = pen2 + np.where(succ2, 0.0, stall_penalty(stalled, t_best, self._tt(tend2))
-                               * (1.0 - self.novelty(xs2[0, :, :K + 1], ys2[0, :, :K + 1])))
+        # Every stage-2 candidate executes the same first move/prefix as its stage-1 parent.
+        pen2 = pen2 + np.where(succ2 & (tg2 <= credit1[firsts]), 0.0, stall1[firsts])
         est2 = up2 + self._tt(tend2) + pen2
         score2 = ranked(veto2, vf2, est2, soft2)
         score2 = np.where(succ2, success_total(tg2, pen2), score2)
         pick = np.argsort(-score2, kind="stable")[:self.S]
         final = [cands[c] for c in pick]
+        if self._launch is not None:
+            # A jump can look good at stage 1 and bad only after its full landing is checked. Keep a
+            # grounded wait available at the final comparison instead of pruning every safe fallback.
+            hold = BY_NAME['wait 8f']
+            controls = padded(hold.array,H)
+            if not any(np.array_equal(a,controls) for _,a in final):
+                final.append(([(hold.name,0,len(hold))]+([('pad',len(hold),H)] if len(hold)<H else []),controls))
+            vx = float(row['vx'][0])
+            if vx != 0:
+                for duration in (8,16):
+                    brake = BY_NAME[('walk L ' if vx>0 else 'walk R ')+str(duration)+'f']
+                    controls = np.full(H,act(0),np.int64)
+                    controls[:min(H,len(brake))] = brake.array[:H]
+                    if not any(np.array_equal(a,controls) for _,a in final):
+                        end = min(H,len(brake)+len(hold))
+                        final.append(([(brake.name,0,len(brake)),(hold.name,len(brake),end)]+
+                                      ([('pad',end,H)] if end<H else []),controls))
         self.last_stage2 = {"names": [[nm for nm, *_ in segs if nm != "pad"] for segs, _ in cands], "estimate": est2,
                             "t_end": tend2, "soft": soft2, "veto": veto2, "frames": up2}     # offline checks
         counts["stage2"] = {"candidates": n2, "steps": int(steps2), "of_steps": int(-(-K2 // f)),
@@ -2712,9 +2967,74 @@ class Planner:
                             "clipped": n_clip(out2["clip"])}
         t2 = time.perf_counter()
         timing["stage2"] = 1000 * (t2 - t1)
+        crossing_result, crossing_note = None, {"ran": False}
+        pc = None
+        if passage_on:
+            tx = time.perf_counter()
+            target, templates = None, []
+            if crossing is None:
+                xx, yy = xs2[0,np.arange(n2),up2//f], ys2[0,np.arange(n2),up2//f]
+                supported = self.support(xx,yy,vye2,keys=masks2,at=up2,worlds=worlds)[0]
+                clear = sw2.step_clear[0,np.arange(n2),np.maximum(0,up2//f-1)]
+                eligible = supported & (tend2 <= T0-STALL_STEP) & (clear >= S.margin(Psg.WINDOW)) & \
+                           ((sw2.contact_frame[0] < 0) | (sw2.contact_frame[0] > up2))
+                for c in np.argsort(up2+self._tt(tend2)+scale*soft2,kind='stable'):
+                    if not eligible[c]: continue
+                    target = {'x':float(xx[c]),'y':float(yy[c]),'keys':int(masks2[c]),'t':float(tend2[c])}
+                    break
+                if target is not None:
+                    seen = set()
+                    # A template can cross this exit before its eventual end. Do not reject it for an
+                    # unrelated hazard after that exit; the feedback controller will decide there again.
+                    pm = self._path_keys(xs2[:,:,:K+1],ys2[:,:,:K+1],keys,jumps=J2K)[0][...,::f]
+                    ps = self.support(xs2[:,:,:K+1],ys2[:,:,:K+1],keys=pm,
+                                      at=np.arange(K+1)*f,worlds=worlds)[0]
+                    ar = Psg.arrivals(xs2[:,:,:K+1],ys2[:,:,:K+1],ps,pm,target,f)[0]
+                    safe = (ar > 0) & ((sw2.contact_frame[0] < 0) | (sw2.contact_frame[0] > ar))
+                    for c in np.argsort(np.where(safe,ar,np.inf),kind='stable'):
+                        signature = tuple(cands[c][1])
+                        if safe[c] and signature not in seen:
+                            templates.append(cands[c]); seen.add(signature)
+                            if len(templates) >= Psg.TEMPLATES: break
+            crossing_result, crossing_note = self._passage(row,frame,agent,worlds,frames,dt_ms,ck,
+                                                          target,templates,crossing,stalled,t_best,scale)
+            timing['passage'] = 1000*(time.perf_counter()-tx)
 
         # ---- modes: long-safe (member 0) and reflex (member 2) candidates ------------------------------------
+        carrier_cached = None
+        if carrier_on:
+            options=[]
+            if carrier_pending is not None:
+                remaining=Psg.shifted(carrier_pending['segments'],carrier_pending['actions'],
+                                      frame-carrier_pending['frame'],H,padded)
+                if remaining is not None:options.append((remaining,True))
+            for name in ['wait 8f','walk L 8f','walk R 8f','run L 16f','run R 16f',
+                         'jump up hold 3','jump up hold 6']:
+                move=BY_NAME[name];a=np.full(H,act(0),np.int64);L=min(H,len(move))
+                a[:L]=move.array[:L]
+                segs=[(name,0,L)]+([('pad',L,H)] if L<H else [])
+                options.append(((segs,a),False))
+            for (segs,a),cached in options:
+                idx=next((i for i,(_,b) in enumerate(final) if np.array_equal(a,b)),None)
+                if idx is None:idx=len(final);final.append((segs,a))
+                if cached:carrier_cached=idx
+        carrier_cross_idx=None
+        if carrier_cross_result is not None:
+            carrier_cross_idx=len(final)
+            cross_segs,cross_actions=carrier_cross_controls
+            ca=np.asarray(cross_actions[:H],np.int64)
+            segs=[(nm,a,min(b,H)) for nm,a,b in cross_segs if a<H]
+            final.append((segs,ca))
         modes3 = ["normal"] * len(final)
+        if crossing_result is not None:
+            pc = len(final)
+            segs = [(nm,a,min(b,H)) for nm,a,b in crossing_result['segments'] if a < H]
+            pa = np.full(H,act(0),np.int64)
+            count = min(H,len(crossing_result['actions']))
+            pa[:count] = crossing_result['actions'][:count]
+            if count < H: segs.append(('pad',count,H))
+            final.append((segs,pa))
+            modes3.append('passage')
         li = ri = None                               # final indices of the long-safe / reflex candidates
         ri_new = False
         if self.modes:
@@ -2833,7 +3153,9 @@ class Planner:
         J3 = out3["jumps"]
         fr3 = _near_frames(_cols(frames, Hc + 1, f), out3["x"], out3["y"])
         saf = S.check(out3["x"], out3["y"], fr3, self.bounds, floor0, f, jumps=J3)
-        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], None, saf.sweep.contact_frame, leg, keys,
+        contact_window = np.full(n3,H,np.int64)
+        if pc is not None: contact_window[pc] = min(H,crossing_result['arrival'])
+        tg_e, legs_e, keys_e = self._contacts(out3["x"], out3["y"], contact_window, saf.sweep.contact_frame, leg, keys,
                                               jumps=J3)
         n_goal = (tg_e > 0).sum(0)                                   # members touching the goal safely
         succ3 = 2 * n_goal > E
@@ -2842,6 +3164,7 @@ class Planner:
             ts = np.sort(tg_e[tg_e[:, c] > 0, c])
             tg3[c] = ts[(len(ts) - 1) // 2]                          # median (the lower one of an even count)
         win3 = np.where(succ3, tg3, H)                               # successes: frames 1..t; others: 1..H
+        if pc is not None: win3[pc] = min(win3[pc],crossing_result['arrival'])
         pl3 = np.where(succ3, tg3, planned3)
         vv, vfr, vkd, vid, vsoft, vsf = _verdict(saf.sweep, win3, planned=pl3,
                                                  quorum=self.veto_members, members=self.risk_members,
@@ -2850,7 +3173,8 @@ class Planner:
         saf = replace(saf, veto=vv, veto_frame=vfr, veto_kind=vkd, veto_id=vid, soft_risk=vsoft, soft_frame=vsf)
         xe, ye, vye = out3["x"][:, :, Hc], out3["y"][:, :, Hc], out3["vy"][:, :, Hc]
         masks3 = self._path_keys(out3["x"], out3["y"], keys, death=saf.sweep.contact_frame, jumps=J3)[0][..., -1]
-        tend_e, sup_e, _, _, _ = self.time_to_go(xe, ye, masks3, legs_e, vye, at=H, worlds=worlds)   # private mask
+        tend_e, sup_e, ground_e, _, _ = self.time_to_go(xe, ye, masks3, legs_e, vye, at=H, worlds=worlds)   # private mask
+        tend_e = self.landing_time(tend_e,ground_e)
         vend_e = self.value(xe, ye, masks3, legs_e, vye, at=H, worlds=worlds)[0]    # V: display only
         lands = 2 * sup_e.sum(0) > E                                 # a majority of members supported at H
         tend3 = self._tt(tend_e).mean(0)
@@ -2881,6 +3205,8 @@ class Planner:
         comp_rec, comp_path = [None] * n3, [None] * n3
         tc = time.perf_counter()
         open_ = ~lands & ~succ3 & ~saf.veto
+        if pc is not None: open_[pc] = False        # already proved to its supported exit, not its padded tail
+        if carrier_cross_idx is not None:open_[carrier_cross_idx]=False
         if real is not None:
             open_[gi] = False                        # judged on the real path: nothing to complete
         need = np.nonzero(open_)[0] if self.complete_max > 0 else np.zeros(0, np.int64)
@@ -2889,8 +3215,10 @@ class Planner:
         if len(need):
             mi = min(self.member, E - 1)
             tp3 = None if "tp_ready" not in out3 else (out3["tp_ready"][mi, need, Hc], out3["tp_off"][mi, need, Hc])
+            bth = saf.sweep.beam_theta
             res, rolled = self.complete(out3["last"][mi, need], acts3[need, H - 1], legs_e[mi, need], worlds,
-                                        frames, dt_ms, keys, H, tp=tp3)
+                                        frames, dt_ms, keys, H, tp=tp3,
+                                        beam_theta=None if bth is None else bth[mi, need])
             for c, (est, risk, rec, path) in zip(need, res):
                 base3[c] = H + est
                 comp_risk[c], comp_rec[c], comp_path[c] = risk, rec, path
@@ -2904,13 +3232,40 @@ class Planner:
         soft3 = np.minimum(saf.soft_risk + comp_risk, 1.0)          # one death at most
         risk3 = scale * soft3
         MX, MY, JM = member_mean(out3["x"], out3["y"], J3)              # the members' mean paths (per column)
-        novel3 = self.novelty(MX, MY) if stalled > 0 else np.zeros(n3)
-        stall3 = np.where(succ3, 0.0, stall_penalty(stalled, t_best, t_end3) * (1.0 - novel3))
+        first3 = np.array([next((b for nm, a, b in segs if nm != "pad"), H) for segs, _ in final])
+        stall3, prefix3, credit3 = self.prefix_stall(out3, first3, keys, worlds, stalled, t_best,
+                                                   saf.sweep.contact_frame)
+        if real is not None and gi is not None and stalled > 0:
+            # A route judged on real states gets real prefix credit, not the model's drift.
+            rx, ry = real["x"][None, None], real["y"][None, None]
+            rv = np.concatenate([vy0, np.diff(real["y"])])[None, None]
+            ro = {"x": rx, "y": ry, "vy": rv, "jumps": self.path_jumps(rx, ry)}
+            sc, pt, cf = self.prefix_stall(ro, first3[gi:gi+1], keys, worlds, stalled, t_best, step=1)
+            stall3[gi], prefix3[gi], credit3[gi] = sc[0], pt[0], cf[0]
+        stall3 = np.where(succ3 & (tg3 <= credit3), 0.0, stall3)
         est3 = base3 + risk3 + fail3 + death3 + stall3
+        if pc is not None:
+            # Complete crossing proof includes the same exit and all risk up to it, including any wait.
+            frames_used[pc] = crossing_result['arrival']
+            t_end3[pc] = crossing_result['target']['t']
+            base3[pc] = frames_used[pc]+t_end3[pc]
+            soft3[pc], risk3[pc] = crossing_result['soft'], scale*crossing_result['soft']
+            saf.soft_frame[pc] = crossing_result['soft_frame']
+            stall3[pc] = crossing_result['stall']
+            est3[pc] = crossing_result['cost']+t_end3[pc]
+        if carrier_cross_idx is not None:
+            c=carrier_cross_idx
+            frames_used[c]=carrier_cross_note['proof_frames']
+            t_end3[c]=carrier_cross_note['t_end']
+            base3[c]=frames_used[c]+t_end3[c]
+            soft3[c]=carrier_cross_note['soft']
+            risk3[c]=scale*soft3[c]
+            est3[c]=base3[c]+risk3[c]+fail3[c]+death3[c]+stall3[c]
         total3 = ranked(saf.veto, saf.veto_frame, est3, soft3)
-        total3 = np.where(succ3, success_total(tg3, risk3 + fail3 + death3), total3)
+        total3 = np.where(succ3, success_total(tg3, risk3 + fail3 + death3 + stall3), total3)
         landing3 = lands | succ3 | np.array([r is not None and r["continuation"] is not None and r["on"] != "air"
                                              for r in comp_rec])
+        if carrier_cross_idx is not None:landing3[carrier_cross_idx]=True
         sel = total3
         if ri_new and ri != prev_idx:                # the reflex plan is chosen only by its override
             sel = total3.copy()
@@ -2955,6 +3310,11 @@ class Planner:
                 best = c
                 route["used"] = False
         mode = getattr(prev, "mode", "normal") if best == prev_idx else modes3[best]
+        if pc is not None and not succ3[best] and not saf.veto[pc] and trial is None and mode != 'best-route':
+            best, mode = pc, 'passage'
+            switch = {'kept':False,'gain':None,'margin':None,'unit':'frames',
+                      'reason':'same-exit crossing: incomplete waiting does not bypass the crossing cost'}
+        counts['passage'] = {**crossing_note,'used':best == pc if pc is not None else False}
         if trial is not None:
             mode = "route-trial"
         route_using = None                           # applied with the decision's other effects (apply below)
@@ -2979,10 +3339,34 @@ class Planner:
             counts["modes"]["reflex"]["override"] = mode == "reflex"
         if li is not None and (saf.veto[li] or soft3[li] > LONG_RISK):
             self.long[agent]["valid"] = False        # no longer valid: searched again when supported
+        carrier_return = None
+        carrier_note = {'active':carrier_on,'used':False}
+        if carrier_on and not succ3[best] and not (best==gi and real is not None):
+            if carrier_cross_result is not None:
+                ci,carrier_return=carrier_cross_idx,carrier_cross_result
+                carrier_note={'active':True,'phase':'crossing',**carrier_cross_note}
+            else:
+                ci,carrier_return,carrier_note = self._carrier_choice(
+                    row,frame,carrier_task,carrier_pending,carrier_cached,out3,acts3,final,
+                    saf.sweep.contact_frame,saf.veto,saf.veto_frame,soft3,est3,worlds,keys,masks3,T0,frames,dt_ms,ck)
+                carrier_note['crossing_search']=carrier_cross_note
+                if carrier_cross_note.get('target') is not None:carrier_note['phase']='prepare-crossing'
+            if ci is not None:
+                best,mode,trial = ci,'carrier',None
+                modes3[best]='carrier'
+                route_using='drop'
+                if route is not None:route['used']=False
+                switch={'kept':False,'gain':None,'margin':None,'unit':'frames',
+                        'reason':('moving support: checked obstacle ascent waypoint' if carrier_note.get('phase')=='climb-approach'
+                                  else 'moving support: checked far-side obstacle crossing' if carrier_cross_result is not None
+                                  else 'moving support: preserve riding or a checked return to the same carrier')}
+                carrier_note['used']=True
+        counts['carrier']=carrier_note
         if self.modes:
             counts["modes"]["candidates"] = modes3
         safe_alts = int(sum(1 for c in range(n3) if c != best and not saf.veto[c] and soft3[c] < SAFE_RISK
                             and landing3[c]))            # soft3: the window's risk and the completion's deaths
+        counts['passage']['used'] = pc is not None and best == pc
         self.last_final = {"estimate": est3, "veto": saf.veto, "soft": soft3, "landing": landing3, "completion": comp_rec,
                            "prev": prev_idx, "first": first_name, "best": best, "t_end": t_end3,
                            "frames_used": frames_used, "risk": risk3, "fail": fail3, "death": death3, "lands": lands,
@@ -2999,6 +3383,10 @@ class Planner:
                            "completions": [None if r is None else {k: r[k] for k in ("continuation", "frames", "on", "died")}
                                            for r in comp_rec]}
         counts["key_pickup"] = key_pickup_policy(f) if self.key_pickup else {"enabled": False}
+        counts['platform_launch'] = {'active':self._launch is not None,
+                                     'start_y':y0,'t_start':T0 if T0_ok else None,
+                                     'baseline_y':None if self._launch is None else self._launch[0],
+                                     'baseline_t':None if self._launch is None else self._launch[1]}
 
         # ---- explanation -----------------------------------------------------------------------------------
         segs, acts = final[best]
@@ -3043,7 +3431,8 @@ class Planner:
             goal_touch = None if not (real["success"] and t <= H) else {
                 "frame": int(t), "x": float(real["x"][-1]), "y": float(real["y"][-1]), "members": 0, "real": True}
         parts = {"base": base3, "t_end": t_end3, "comp_death": comp_risk, "risk": risk3, "fail": fail3, "death": death3,
-                 "est": est3, "soft": soft3, "first": first_name, "stall": stall3, "stalled": stalled}
+                 "est": est3, "soft": soft3, "first": first_name, "stall": stall3, "stalled": stalled,
+                 "stall_prefix_t": prefix3, "stall_prefix_frames": credit3}
         alts = self._alternatives(final, best, saf, parts, total3, T0, cell0, scale, veto1, vf1, vk1, vid1, est1,
                                   paths=(MX, MY, out1["x"][0], out1["y"][0], uc1, JM,
                                          None if J1 is None else J1[0]),
@@ -3073,6 +3462,8 @@ class Planner:
                    "risk_frames": float(risk3[best]), "failure_frames": float(fail3[best]),
                    "stall_frames": float(stall3[best]), "stalled": float(stalled),
                    "death_frames": float(death3[best]), "total": float(total3[best]),
+                   "stall_prefix_frames": int(credit3[best]),
+                   "stall_prefix_t": float(prefix3[best]) if np.isfinite(prefix3[best]) else None,
                    "completion": None if completion is None else completion["frames"],
                    "landing": bool(landing3[best]), "spread_end": float(spread_end[best])},
             v_start=v0 if v0_ok else None, v_end=vend_mean, dead_end_members=int((~fin_e).sum()), leg=leg,
@@ -3087,6 +3478,13 @@ class Planner:
             model_clipped=None if out3["clip"] is None else int(out3["clip"][:, best].any(0).sum()),
             completion=completion, mode=mode, best_route=route)
         plan.first_move_frames = int(first_frames)
+        if best == pc:
+            plan.decision_frames = max(f,min(Psg.WINDOW,self.stall_window))
+            plan.passage = {k:crossing_result[k] for k in ('target','arrival','cost','soft','wait','cached')}
+        if mode=='carrier':
+            plan.decision_frames=max(f,min(4 if carrier_note.get('recovery') else 8,self.stall_window))
+            if carrier_cross_result is not None:
+                plan.decision_frames=min(plan.decision_frames,carrier_cross_note['proof_frames'])
         plan.trial_frames = 0
         if trial is not None and mode == "route-trial":          # not overridden by the reflex
             plan.trial_frames = int(sum(b - a for nm, a, b in segs if nm != "pad"))
@@ -3094,6 +3492,10 @@ class Planner:
         # the decision's effects on the planner's memories, as data (Planner.adopt applies them: here at once, at
         # commit_fn for a plan made ahead, or in another planner process that adopts this plan)
         plan._effects = {
+            "carrier":carrier_return if mode=='carrier' else None,
+            "carrier_release":bool(succ3[best] or real_best or (mode=='carrier' and carrier_note.get('transfer'))),
+            "passage": crossing_result if best == pc else None,
+            "stall_seed": _copy_state(self.stalls.get(int(agent))),
             "route_using": route_using,
             "trial": None if not plan.trial_frames else {
                 "key": trial["key"], "spot": trial["spot"],
@@ -3104,7 +3506,7 @@ class Planner:
                 first_name[best], T0, float(t_end3[best]), int(frames_used[best])),
             # this decision's planning caches (written by every plan made, adopted or not): another process that
             # adopts the plan takes them, so the processes' next plans start from the same state
-            "long": _copy_state(self.long.get(agent)), "stall": _copy_state(self.stalls.get(int(agent)))}
+            "long": _copy_state(self.long.get(agent))}
         if defer:
             plan.commit_fn = lambda: self.adopt(plan)
         else:
@@ -3115,11 +3517,21 @@ class Planner:
         """A decision's effects on the planner (plan._effects, made by Planner.plan here or in another planner
         process): the best route's use, the route trial it starts, the previous plan, the surprise check's
         predictions (not for a kept plan: it keeps those of its adoption), the move and failure memories, and the
-        decision's planning caches (the long-safe plan, the stall rule's state). Planner.plan applies them at once
+        decision's planning caches (the long-safe plan and local crossing). Observed stall history is never
+        replaced by an adopted plan. Planner.plan applies effects at once
         (or at plan.commit_fn() when deferred); agent.py --planners N sends every committed plan to the other
         processes, which adopt it, so every process holds the same state. Returns the route trial event (None)."""
         eff = plan._effects
         agent, frame = int(plan.agent), int(plan.frame)
+        self.carrier.adopt(agent,frame,eff.get('carrier'),release=eff.get('carrier_release',False))
+        # Single-decision/offline callers may not have observed a real frame yet. Seed only an empty
+        # history; unlike the old stall-cache adoption this can never replace newer real observations.
+        if agent not in self.stalls and eff.get('stall_seed') is not None:
+            self.stalls[agent] = _copy_state(eff['stall_seed'])
+        if eff.get('passage') is None:
+            self.passages.pop(agent,None)
+        else:
+            self.passages[agent] = _copy_state(eff['passage'])
         ru = eff["route_using"]
         if ru == "drop":
             self.route.using.pop(agent, None)
@@ -3142,10 +3554,6 @@ class Planner:
             self.long.pop(agent, None)
         else:
             self.long[agent] = _copy_state(eff["long"])
-        if eff["stall"] is None:
-            self.stalls.pop(agent, None)
-        else:
-            self.stalls[agent] = _copy_state(eff["stall"])
         return getattr(plan, "route_trial", None)
 
     def predict_start(self, row, actions, worlds: list, dt_ms: float = 16.667, frame: int | None = None,
@@ -3246,9 +3654,291 @@ class Planner:
         ar = np.arange(n)
         xe, ye, vye = x[:, ar, uc], y[:, ar, uc], out["vy"][:, ar, uc]
         masks = self._path_keys(x, y, keys, upto, sw.contact_frame, J)[0][..., -1]
-        tend = self._tt(self.time_to_go(xe, ye, masks, legs_e, vye, at=np.broadcast_to(upto, xe.shape),
-                                        worlds=worlds)[0]).mean(0)
+        t,_,g,_,_ = self.time_to_go(xe, ye, masks, legs_e, vye, at=np.broadcast_to(upto, xe.shape),worlds=worlds)
+        tend = self._tt(self.landing_time(t,g)).mean(0)
         return {"veto": veto, "veto_frame": vf, "soft": soft, "succ": succ, "tg": tg, "tend": tend, "sweep": sw}
+
+    def _carrier_crossing(self,row,frame,task,pending,worlds,frames,dt_ms,ck,keys):
+        """Search the far side of a transport obstruction BEFORE the short station prefix expires."""
+        from plan import carrier_cross as C
+        from plan.passage import shifted
+        f=self.f;length=min(self.future_frames,len(worlds),len(frames)-1)//f*f
+        note={'ran':False}
+        if length<self.H:return None,None,note
+        bars=[bars_at(worlds,k) for k in range(0,length+1,f)]
+        if any(len(b)!=task['count'] for b in bars):return None,None,{**note,'reason':'support identity changed'}
+        own=[b[task['index']] for b in bars]
+        target=task.get('crossing')
+        if target is None:
+            X=np.array([b[0] for b in own]);Y=np.array([b[1]+b[3]+BODY for b in own])
+            target=C.obstruction(own,_cols(frames,len(own),f),X,Y,f)
+            if target is None:return None,None,note
+            target['keys']=int(keys)
+        note.update(ran=True,target=target)
+        cached=None
+        options=[]
+        if pending is not None and pending.get('crossing') is not None:
+            rem=shifted(pending['segments'],pending['actions'],frame-pending['frame'],length,padded)
+            if rem is not None:cached=0;options.append(rem)
+        bx,by,hw,hh,_=target['box']
+        probe_y=max(float(row['y'][0]),by+hh+BODY+S.margin(8))
+        blocked_above=bool(self.support_terrain(keys).point_solid(np.array([bx]),np.array([probe_y]))[0])
+        options+=(C.climb_templates(length,target['direction']) if blocked_above else C.templates(length,target['direction']))
+        note['approach']='wall-climb' if blocked_above else 'jump'
+        controls=np.stack([a for _,a in options])
+        heights=np.full(len(options),float(row['y'][0])+20.)
+        if cached is not None and pending.get('waypoint_y') is not None:heights[cached]=pending['waypoint_y']
+
+        def check(out,which):
+            x,y=out['x'],out['y'];J=out['jumps']
+            fr=_near_frames(_cols(frames,x.shape[-1],f),x,y)
+            sw=S.sweep(x,y,fr,self.bounds,self.floor_for(worlds),f,jumps=J)
+            masks=self._path_keys(x,y,keys,death=sw.contact_frame,jumps=J)[0][...,::f]
+            supported,_,_=self.support(x,y,out['vy'],keys=masks,at=np.arange(x.shape[-1])*f,worlds=worlds)
+            far=C.arrival(x,supported,masks,target,sw.contact_frame,f)
+            up=C.ascent(y,supported,masks,target,sw.contact_frame,f,heights[which]) if blocked_above else np.full(x.shape[1],-1)
+            return far,up,sw
+
+        # Cheap one-member proposal pass, then require every member for the common far-side exit.
+        mi=min(self.member,len(self.model.members)-1)
+        first=imagine(self.model,slice(mi,mi+1),self.geom,np.repeat(row,len(options)),controls,dt_ms,worlds,**ck)
+        ends,up,first_sw=check(first,np.arange(len(options)))
+        self.last_carrier_cross={'x':first['x'],'y':first['y'],'ends':ends,
+                                 'collision':first_sw.contact_frame,'options':options,'target':target}
+        note['far_candidates']=int(C.far_side(first['x'],target).any((0,2)).sum())
+        note['max_y']=float(first['y'].max())
+        pick=[int(i) for i in np.argsort(np.where(ends>0,ends,np.inf),kind='stable') if ends[i]>0][:8]
+        for i in np.argsort(np.where(up>0,up,np.inf),kind='stable'):
+            if up[i]>0 and i not in pick:pick.append(int(i))
+            if len(pick)>=16:break
+        if cached is not None and cached not in pick:pick.insert(0,cached)
+        note.update(candidates=len(options),proposals=int((ends>0).sum()),ascent_proposals=int((up>0).sum()),verified=len(pick))
+        if not pick:return None,None,{**note,'complete':0}
+        out=imagine(self.model,slice(None),self.geom,np.repeat(row,len(pick)),controls[pick],dt_ms,worlds,**ck)
+        far,up,sw=check(out,np.asarray(pick))
+        full=bool((far>0).any())
+        ends=far if full else up;ok=ends>0
+        note['complete']=int(ok.sum())
+        if not ok.any():return None,None,note
+        # A valid adopted crossing consumes its original controls instead of restarting its wait.
+        ci=pick.index(cached) if cached in pick else None
+        if ci is not None and ok[ci]:b=ci
+        else:b=int(np.argmin(np.where(ok,ends,np.inf)))
+        i=pick[b];segs,actions=options[i]
+        depart=int(np.flatnonzero(ACT_JUMP[actions])[0]) if ACT_JUMP[actions].any() else f
+        result=dict(frame=int(frame),index=task['index'],count=task['count'],keys=int(keys),
+                    depart=int(frame+depart),return_by=int(frame+ends[b]),actions=actions.tolist(),
+                    segments=[list(s) for s in segs],crossing=dict(target),
+                    waypoint_y=None if full else float(heights[i]),full_crossing_proved=full)
+        if i==cached and pending is not None:
+            result={**pending}
+            if full and pending.get('waypoint_y') is not None:
+                result.update(waypoint_y=None,full_crossing_proved=True,return_by=int(frame+ends[b]))
+        c=int(ends[b]//f)
+        te=self._tt(self.time_to_go(out['x'][:,b,c],out['y'][:,b,c],keys,
+                                   vy=out['vy'][:,b,c],at=int(ends[b]),worlds=worlds)[0]).mean()
+        safe_end=np.maximum(f,ends)
+        _,_,_,_,soft,_=_verdict(sw,safe_end,planned=safe_end,quorum=self.veto_members,members=self.risk_members,
+                                early_margin=self.early_margin)
+        note.update(cached=i==cached,return_by=result['return_by'],proof_frames=int(ends[b]),
+                    t_end=float(te),soft=float(soft[b]),
+                    predicted_return_by=int(frame+ends[b]),full_crossing_proved=full,
+                    phase='crossing' if full else 'climb-approach',waypoint_y=result.get('waypoint_y'))
+        return result,(segs,actions),note
+
+    def _carrier_trace(self,out,task,worlds,keys):
+        x,y=out['x'],out['y'];index=task['index'];f=self.f;K1=x.shape[-1]
+        contact=np.zeros_like(x,bool);relative=np.zeros_like(x)
+        for k in range(K1):
+            bars=bars_at(worlds,k*f)
+            if len(bars)!=task['count']:continue
+            bar=bars[index]
+            contact[...,k]=carrier_contact(x[...,k],y[...,k],bar)
+            relative[...,k]=(x[...,k]-bar[0])/max(1.,bar[2]-BODY)
+        # Bar contact cannot excuse embedding the body in a neighbouring tile face.
+        contact &= ~self.support_terrain(keys).point_solid(x,y)
+        return contact,relative
+
+    def _carrier_choice(self,row,frame,task,pending,cached,out,actions,final,collision,veto,veto_frame,soft,estimate,
+                        worlds,keys,masks,T0,frames,dt_ms,ck):
+        """Revalidate a carrier/return task against every member's actual moving support and hazards."""
+        x,y=out['x'],out['y'];E,n,K1=x.shape;index=task['index'];f=self.f
+        contact,relative=self._carrier_trace(out,task,worlds,keys)
+        stop=np.full(n,K1-1,int)
+        if cached is not None and pending is not None:
+            stop[cached]=max(1,int(np.ceil((pending['return_by']-frame)/f)))
+        eligible,continuous,arrival=carrier_proof(contact,collision,f,stop)
+        riding_all=continuous.copy()
+        # A walk onto an actual floor is a transfer; jumping into a pocket is not a ride substitute.
+        jumping=ACT_JUMP[np.asarray(actions)].any(1)
+        # Station keeping is a feedback task, not a 48f open-loop primitive. Prove the next
+        # two 8f decisions stay attached for every member, then steer again from real state.
+        station,prefix=carrier_station(contact,collision,jumping,veto,f)
+        static=np.zeros((E,n),bool)
+        for mask in np.unique(masks):
+            g=self.support_terrain(int(mask)).support(x[...,-1],y[...,-1])[0]
+            static |= (masks==mask)&g
+        t=self.time_to_go(x[...,-1],y[...,-1],masks,vy=out['vy'][...,-1],at=(K1-1)*f,worlds=worlds)[0]
+        safe=~((collision>0)&(collision<=(K1-1)*f)).any(0)
+        transfer=static.all(0)&safe&((~jumping)|(masks!=keys).all(0))&(self._tt(t).mean(0)<T0-STALL_STEP)
+        eligible |= transfer | station
+        eligible &= ~np.asarray(veto,bool)
+        # A continuous non-jumping ride is preferred to a redundant hop with comparable risk.
+        continuous = (continuous & ~jumping) | transfer | station
+        position=(relative[...,-2:]**2).mean((0,2))+.2*(relative**2).mean((0,2))
+        position += .1*np.abs(out['last']['vx']).mean(0)/60.
+        position=np.where(station,(relative[...,1:prefix+1]**2).mean((0,2)),position)
+        position=np.where(transfer,0.,position)
+        # Full-horizon soft cost of an unexecuted fixed tail must not cause a needless takeoff.
+        rank_soft=np.where(station,0.,np.asarray(soft))
+        keep_cached=cached if not task['attached'] else None
+        best=carrier_choose(eligible,continuous,rank_soft,position,np.asarray(estimate),keep_cached)
+        note=dict(active=True,index=index,candidates=n,eligible=int(eligible.sum()),
+                  continuous=int(continuous.sum()),cached=False,used=False)
+        if best is None:
+            # A jump back onto a descending carrier can take longer than the ordinary horizon.
+            # Check a bounded set on the already available H+completion future, with ALL members.
+            length=min(self.future_frames,len(worlds),len(frames)-1)//f*f
+            if length>(K1-1)*f:
+                viable=~((collision>0)&(collision<=(K1-1)*f)).any(0)&~np.asarray(veto,bool)
+                candidates=[i for i in np.argsort(position,kind='stable') if viable[i]][:6]
+                if cached is not None and cached not in candidates:candidates.insert(0,cached)
+                if candidates:
+                    from plan.passage import shifted
+                    long=[];segments=[]
+                    for i in candidates:
+                        if i==cached and pending is not None:
+                            rem=shifted(pending['segments'],pending['actions'],frame-pending['frame'],length,padded)
+                        else:rem=None
+                        if rem is not None:ss,aa=rem
+                        else:
+                            aa=np.full(length,act(0),np.int64);aa[:actions.shape[1]]=actions[i]
+                            ss=final[i][0]+[('pad',actions.shape[1],length)]
+                        long.append(aa);segments.append(ss)
+                    long=np.stack(long)
+                    ext=imagine(self.model,slice(None),self.geom,np.repeat(row,len(long)),long,dt_ms,worlds,**ck)
+                    X,Y=ext['x'],ext['y'];J=ext['jumps']
+                    fr=_near_frames(_cols(frames,X.shape[-1],f),X,Y)
+                    sw=S.sweep(X,Y,fr,self.bounds,self.floor_for(worlds),f,jumps=J)
+                    cc,rr=self._carrier_trace(ext,task,worlds,keys)
+                    limits=np.full(len(long),X.shape[-1]-1,int)
+                    ci=candidates.index(cached) if cached in candidates else None
+                    if ci is not None and pending is not None:
+                        limits[ci]=max(1,int(np.ceil((pending['return_by']-frame)/f)))
+                    ok,stay,arr=carrier_proof(cc,sw.contact_frame,f,limits)
+                    b=carrier_choose(ok,stay,np.zeros(len(long)),(rr**2).mean((0,2)),arr,ci)
+                    note.update(extended_candidates=len(long),extended_complete=int(ok.sum()))
+                    if b is not None:
+                        missing=np.flatnonzero(~cc[:,b].all(0))
+                        proposal=dict(frame=int(frame),index=index,count=task['count'],keys=int(keys),
+                            depart=int(frame+(missing[0]*f if len(missing) else f)),return_by=int(frame+arr[b]),
+                            actions=long[b].tolist(),segments=[list(s) for s in segments[b]])
+                        if b==ci and pending is not None:proposal={**pending}
+                        return candidates[b],proposal,{**note,'cached':b==ci,'return_by':proposal['return_by'],
+                                                       'proof_frames':int(arr[b]),'extended':True}
+            # Keep the observed support objective even when a full return cannot be proved. A short
+            # feedback step may stay attached or approach the carrier from ABOVE, with every member
+            # safe until the next two model updates. This is recovery, not a completed-return claim.
+            short=min(K1-1,max(1,8//f))
+            near_veto=np.asarray(veto)&(np.asarray(veto_frame)<=short*f)
+            safe_short=~((collision>0)&(collision<=short*f)).any(0)&~near_veto
+            no_jump=~ACT_JUMP[actions[:,:short*f]].any(1)
+            attached=contact[...,:short+1].all((0,2))&no_jump
+            next_bars=bars_at(worlds,short*f)
+            if len(next_bars)!=task['count']:
+                return None,None,{**note,'reason':'carrier identity changed in the recovery future'}
+            bar=next_bars[index]
+            above=(y[...,short]>=bar[1]+bar[3]+BODY-1.5).all(0)
+            approach=(np.abs(relative[...,short])<=np.abs(relative[...,0])+.1).all(0)
+            recovery=safe_short & (attached | (above&approach&no_jump))
+            if cached is not None and pending is not None and frame<pending['return_by'] and safe_short[cached]:
+                b=cached;proposal={**pending}
+            else:
+                pool=np.flatnonzero(recovery)
+                b=int(min(pool,key=lambda i:float((relative[:,i,short]**2).mean()))) if len(pool) else None
+                proposal=None
+            if b is not None:
+                return b,proposal,{**note,'recovery':True,'full_return_proved':False,'proof_frames':short*f,
+                    'cached':b==cached,'return_by':None if proposal is None else proposal['return_by']}
+            return None,None,{**note,'reason':'no safe same-support recovery; ordinary safety fallback'}
+        returning=not riding_all[best] and not transfer[best] and not station[best]
+        proposal=None
+        if returning:
+            missing=np.flatnonzero(~contact[:,best].all(0))
+            depart=int(missing[0]*f) if len(missing) else f
+            proposal=dict(frame=int(frame),index=index,count=task['count'],keys=int(keys),depart=int(frame+depart),
+                          return_by=int(frame+arrival[best]),actions=actions[best].tolist(),
+                          segments=[list(s) for s in final[best][0]])
+            if best==cached and pending is not None:
+                # Keep the original absolute deadline and original consumed controls.
+                proposal={**pending}
+        note.update(cached=best==cached,return_by=None if proposal is None else proposal['return_by'],
+                    transfer=bool(transfer[best]),station=bool(station[best]),
+                    proof_frames=prefix*f if station[best] else int(stop[best]*f))
+        return best,proposal,note
+
+    def _passage(self,row,frame,agent,worlds,frames,dt_ms,ck,target,templates,cached,stalled,t_best,scale):
+        """Roll complete alternatives to ONE exit, including explicit wait-then-cross alternatives.
+
+        Cached controls are consumed by elapsed real frames and re-predicted from the new decision state.
+        Every member must arrive supported, with required private keys, without a contact before arrival.
+        Failure returns no override; no risk margin or collision veto is relaxed to manufacture a crossing.
+        """
+        from plan import passage as Psg
+        f = self.f
+        length = min(self.H+Psg.WINDOW,len(worlds),len(frames)-1)//f*f
+        note = {'ran':True,'candidates':0,'complete':0,'cached':cached is not None}
+        if length < f:
+            return None,{**note,'reason':'insufficient future'}
+        options, waiting = [], []
+        if cached is not None:
+            target = cached['target']
+            remain = Psg.shifted(cached['segments'],cached['actions'],frame-cached['frame'],length,padded)
+            if remain is not None:
+                options.append(remain); waiting.append(0)
+        else:
+            delay = max(f,Psg.WINDOW//f*f)
+            for segs,actions in templates:
+                options.append((segs,padded(actions,length))); waiting.append(0)
+                shifted = [('wait '+str(delay)+'f',0,delay)]+[(nm,a+delay,min(length,b+delay))
+                            for nm,a,b in segs if a+delay < length]
+                options.append((shifted,padded(np.r_[np.full(delay,act(0),np.int64),actions],length)))
+                waiting.append(delay)
+        if target is None or not options:
+            return None,{**note,'reason':'no supported exit proposal'}
+        n = len(options)
+        acts = np.stack([a for _,a in options])
+        out = imagine(self.model,slice(None),self.geom,np.repeat(row,n),acts,dt_ms,worlds[:length],**ck)
+        x,y = out['x'],out['y']
+        J = out['jumps']
+        fr = _near_frames(_cols(frames,length//f+1,f),x,y)
+        sw = S.sweep(x,y,fr,self.bounds,self.floor_for(worlds),f,jumps=J)
+        keys = int(row['keys'][0])
+        masks = self._path_keys(x,y,keys,death=sw.contact_frame,jumps=J)[0][...,::f]
+        sup = self.support(x,y,out['vy'],keys=masks,at=np.arange(x.shape[-1])*f,worlds=worlds)[0]
+        arrival = Psg.arrivals(x,y,sup,masks,target,f)
+        end = np.maximum(f,arrival.max(0))
+        _,_,_,_,soft,soft_frame = _verdict(sw,end,planned=end,quorum=self.veto_members,members=self.risk_members,
+                                  early_margin=self.early_margin,
+                                  corner=self._corner(x,y,fr,end,keys,J))
+        first = [next((nm for nm,a,b in segs if nm!='pad'),'pad') for segs,_ in options]
+        first_end = [next((b for nm,a,b in segs if nm!='pad'),length) for segs,_ in options]
+        sc,_,_ = self.prefix_stall(out,first_end,keys,worlds,stalled,t_best,sw.contact_frame)
+        cell = self.cell(float(row['x'][0]),float(row['y'][0]))
+        fail = np.array([self.memory.penalty(cell,nm) for nm in first])
+        death = np.array([self.moves.penalty(cell,nm,scale) if self.moves is not None else 0. for nm in first])
+        costs,end,complete = Psg.complete_cost(arrival,sw.contact_frame,soft,scale,sc+fail+death)
+        note.update(candidates=n,complete=int(complete.sum()),target=target,
+                    direct_cost=float(np.min(costs[np.asarray(waiting)==0])) if np.isfinite(costs[np.asarray(waiting)==0]).any() else None,
+                    wait_cost=float(np.min(costs[np.asarray(waiting)>0])) if (np.asarray(waiting)>0).any() and
+                              np.isfinite(costs[np.asarray(waiting)>0]).any() else None)
+        if not complete.any():
+            return None,{**note,'reason':'no complete collision-free crossing'}
+        b = int(np.argmin(costs))
+        segs = [(nm,a,min(int(end[b]),bb)) for nm,a,bb in options[b][0] if a < end[b]]
+        return dict(frame=int(frame),target=target,segments=segs,actions=acts[b,:end[b]].tolist(),
+                    arrival=int(end[b]),soft=float(soft[b]),soft_frame=int(soft_frame[b]),cost=float(costs[b]),stall=float(sc[b]),
+                    wait=int(waiting[b]),cached=cached is not None),note
 
     def _long_safe(self, row, worlds, frames, dt_ms, ck, leg, keys, pen_first, scale):
         """LONG-SAFE (member 0): stage 1 (every library move on its own frames) and stage 2 (from the best
@@ -3317,6 +4007,12 @@ class Planner:
             clear, _ = S.segment_clearance(p[a:a + 1, 0], p[a:a + 1, 1], p[k:k + 1, 0], p[k:k + 1, 1], fb)
             if clear.size and float(clear.min()) < REFLEX_NEAR:
                 return True
+        ref = S.beam_ref(frames)                     # homing eyes: their beams aimed along this path
+        if ref is not None and len(ref[0]):
+            jb = None if jp is None else Jumps(jp.at[None], jp.frame[None], jp.entry[None], jp.exit[None])
+            lc, _ = ref[0].columns(p[None, :, 0], p[None, :, 1], 1, ref[1], None, jb)
+            if lc.size and float(lc.min()) < REFLEX_NEAR:
+                return True
         return False
 
     def _reflex(self, row, worlds, frames, dt_ms, ck, leg, keys, pen_first):
@@ -3339,6 +4035,7 @@ class Planner:
         rolled with members 3 and 4; among the plans without a veto, the one whose two members' end positions
         disagree most (the most informative for the model), ties by estimate (all vetoed: the latest veto).
         Returns a Plan with mode "explore" (no previous plan, memories or surprise tracking)."""
+        self._launch = None                         # no scoring context from another agent's plan
         self._now = int(frame)                       # imagine_options: the crumble stages count from here
         t0 = time.perf_counter()
         f = self.f
@@ -3518,8 +4215,9 @@ class Planner:
                         "stall": parts["stall"][c] - parts["stall"][best]}
                 why = max(gaps, key=gaps.get)
                 if why == "stall" and parts["stall"][c] > 0:
-                    reason = (f"stalled: no progress for {parts['stalled'] + self.stall_free:.0f} frames, and it ends "
-                              f"at T {parts['t_end'][c]:.0f} (+{parts['stall'][c]:.0f} frames; estimate {est[c]:.0f} "
+                    reason = (f"stalled: no progress for {parts['stalled'] + self.stall_free:.0f} frames; prefix "
+                              f"+{parts['stall_prefix_frames'][c]} has T {parts['stall_prefix_t'][c]:.0f} "
+                              f"(+{parts['stall'][c]:.0f} frames; estimate {est[c]:.0f} "
                               f"vs {est[best]:.0f})")
                 elif why == "time" and math.isfinite(T0) and T0 - parts["t_end"][c] <= NO_PROGRESS:
                     reason = (f"no progress (T {T0:.0f} -> {parts['t_end'][c]:.0f} frames; estimate {est[c]:.0f} "

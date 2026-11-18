@@ -83,7 +83,7 @@ def test_a_near_pass_in_the_first_frames_is_soft_risk():
 
 def test_the_stall_rule_charges_plans_that_do_not_get_on():
     """Planner.stalled counts the frames since the agent last got STALL_STEP below its best T (beyond the free
-    ones); stall_penalty charges them to plans that do not end that much below it either."""
+    ones); short executable progress earns proportional credit without resetting observed stall history."""
     from plan.planner import Planner, STALL_STEP, stall_penalty
     pl = Planner.__new__(Planner)
     pl.stall_free, pl.stalls = 60.0, {}
@@ -91,7 +91,7 @@ def test_the_stall_rule_charges_plans_that_do_not_get_on():
     assert pl.stalled(0, 150, 296.0) == (0.0, 300.0)               # 4 lower: not progress, still free frames
     assert pl.stalled(0, 260, 303.0) == (100.0, 300.0)             # 160 frames without it: 100 beyond the free 60
     pen = stall_penalty(100.0, 300.0, np.array([305.0, 300.0, 293.0, 300.0 - STALL_STEP, 200.0, np.inf]))
-    assert pen.tolist() == [100.0, 100.0, 100.0, 0.0, 0.0, 100.0]  # a hop's few frames buy nothing off
+    np.testing.assert_allclose(pen, [100.0, 100.0, 30.0, 0.0, 0.0, 100.0])
     assert pl.stalled(0, 270, 289.0) == (0.0, 289.0)               # real progress: the count starts again
     assert pl.stalled(1, 270, 500.0) == (0.0, 500.0)               # each agent its own
     pl.stall_free = -1.0                                           # off

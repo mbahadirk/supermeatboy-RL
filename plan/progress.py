@@ -24,7 +24,8 @@ How it is built (one backward search per leg):
   are taken: V_leg[j] = cost to key j + V_leg[j+1] at key j (that leg starting there). The last leg ends at
   the goal. Without keys there is one leg.
 - Mode and jump limits: the first (mode, jumps) of Planner.find's order that finds a route from the spawn, so
-  V agrees with the routes. If none does, the loosest one (squeeze, no jump limits) and found_route False.
+  V agrees with the routes. If none does, the loosest one (squeeze, no jump limits) retains every key stage
+  with found_route False; unreachable costs stay infinite.
 
 Outputs per leg (n_legs x H x W, float64, +inf where the goal cannot be reached, and in walls):
 - V_support: from a cell as a fresh start (standing on a floor or against a wall: rise and sideways used 0,
@@ -57,7 +58,7 @@ import time
 
 import numpy as np
 
-from realpath import AIR_COST, JUMP, JUMP_RELAXED, SQRT2, TILE, Planner
+from realpath import AIR_COST, JUMP, JUMP_RELAXED, SQRT2, TILE, Planner, route_legs
 
 try:                                        # Dijkstra in C; the fallback below gives the same result, slower
     from scipy.sparse import csr_matrix
@@ -93,31 +94,6 @@ def prepare(pl: Planner):
     pl._cache = {}
     pl.t0 = time.time()
     return start, goals
-
-
-def route_legs(pl: Planner, start, goals, mode, jumps):
-    """Planner._route (no waypoint, no extra cost) split into its legs: [(target key cell or None for the
-    goal, lock state, cells)], or None when some leg has no way. Same searches, same order, same result."""
-    legs, cur, keys_left, n_keys = [], start, set(pl.key_cells), 0
-    total = len(keys_left)
-    while keys_left:
-        locks = "closed" if n_keys == 0 else "cost"
-        cells = pl._leg(cur, keys_left, mode, None, jumps, locks)
-        if not cells and locks == "closed":
-            locks = "cost"
-            cells = pl._leg(cur, keys_left, mode, None, jumps, locks)
-        if not cells:
-            break                              # keys it cannot reach: go for the goal anyway
-        legs.append((cells[-1], locks, cells))
-        cur = cells[-1]
-        keys_left.discard(cur)
-        n_keys += 1
-    locks = "open" if total and n_keys == total else "cost"
-    cells = pl._leg(cur, goals, mode, None, jumps, locks)
-    if not cells:
-        return None
-    legs.append((None, locks, cells))
-    return legs
 
 
 def path_cost(cells, cost, support) -> float:
@@ -163,13 +139,21 @@ class ProgressField:
                     found = (mode, jumps, legs)
                     break
         self.found_route = found is not None
-        if found is None:                      # no route in any mode: the loosest rules, one leg to the goal
+        if found is None:                      # retain every required key even when no complete route was found
             mode, jumps = Planner.MODES[3], None
-            legs = [(None, "cost", [])]
+            legs, cur, remaining = [], start, set(pl.key_cells)
+            while remaining:
+                target = min(remaining, key=lambda c: ((c[0]-cur[0])**2 + (c[1]-cur[1])**2, c))
+                legs.append((target, "closed" if not legs else "cost", []))
+                remaining.remove(target)
+                cur = target
+            legs.append((None, "open" if pl.key_cells else "cost", []))
         else:
             mode, jumps, legs = found
         self.mode, self.jumps = mode, jumps
         self.label = mode[0] + ("" if jumps == JUMP else ", high jumps" if jumps else ", no jump limits")
+        if not self.found_route:
+            self.label += ", no complete route"          # inf costs remain explicit; never claim the key was taken
         self.t_route = time.time() - t0
         # key order: per key leg, the indices of the keys at that cell (two keys may share a cell)
         self.key_order = [[k for k, kc in enumerate(pl.key_cells) if kc == tgt] for tgt, _, _ in legs[:-1]]
@@ -349,9 +333,9 @@ class ProgressField:
         out = np.zeros(m.shape, np.int64)
         alive = np.ones(m.shape, bool)
         for ks in self.key_order:
-            got = np.zeros(m.shape, bool)
+            got = np.ones(m.shape, bool)
             for k in ks:
-                got |= ((m >> k) & 1).astype(bool)
+                got &= ((m >> k) & 1).astype(bool)
             alive &= got
             out += alive
         return out
@@ -362,19 +346,21 @@ class ProgressField:
         _lookup. +inf outside the map and where the goal cannot be reached."""
         return self._lookup(self._V, np.where(np.asarray(supported, bool), 0, 1), xs, ys, leg, 1.0)
 
-    def times(self, xs, ys, leg=0, supported=True, vy=None) -> np.ndarray:
+    def times(self, xs, ys, leg=0, supported=True, vy=None, subcell=False) -> np.ndarray:
         """T at points (frames to the goal): T_support where `supported`, else T_rise for a rising body (vy > 0,
         any unit: only the sign is used, y up) and T_fall otherwise; vy None: the smaller of the two (as V_air).
         Leg, points inside walls and in the open half of half blocks: as values() (the same _lookup; the
-        distance to the neighbour taken costs FX_GROUND frames per tile)."""
+        distance to the neighbour taken costs FX_GROUND frames per tile). subcell: interpolate toward the
+        adjacent open axial cells from this cell's centre. Used for short-prefix stall credit, where a whole
+        cell's constant T hides genuine movement. Walls, unknown/dead-end cells and wall fallbacks stay exact."""
         sup = np.asarray(supported, bool)
         if vy is None:
-            return np.minimum(self._lookup(self._T, np.where(sup, 0, 1), xs, ys, leg, FX_GROUND),
-                              self._lookup(self._T, np.where(sup, 0, 2), xs, ys, leg, FX_GROUND))
+            return np.minimum(self._lookup(self._T, np.where(sup, 0, 1), xs, ys, leg, FX_GROUND, subcell),
+                              self._lookup(self._T, np.where(sup, 0, 2), xs, ys, leg, FX_GROUND, subcell))
         which = np.where(sup, 0, np.where(np.asarray(vy, np.float64) > 0, 1, 2))
-        return self._lookup(self._T, which, xs, ys, leg, FX_GROUND)
+        return self._lookup(self._T, which, xs, ys, leg, FX_GROUND, subcell)
 
-    def _lookup(self, stack, which, xs, ys, leg, per_tile) -> np.ndarray:
+    def _lookup(self, stack, which, xs, ys, leg, per_tile, subcell=False) -> np.ndarray:
         """stack[which] (stack: tables x n_legs x H x W) at points (game units), on leg `leg` (an int or one per point;
         clamped to the last leg). A point inside a wall takes its best open neighbour of the 3 x 3 around it (not
         diagonally through a wall corner) plus the distance to that cell's centre (tiles x per_tile). A point in
@@ -408,6 +394,17 @@ class ProgressField:
         inside = (c0 >= 0) & (c0 < W) & (r0 >= 0) & (r0 < H)
         own = free(c0, r0)
         out = field(c0, r0, own)
+        if subcell:
+            # Axial neighbours only: no interpolation through a solid neighbour, map edge, diagonal corner
+            # or an infinite graph state. Use the same leg/support/rise/fall table as the point itself.
+            base = out.copy()
+            for off, horizontal in (((xs-self.ox)/TILE-c0-0.5, True),
+                                    ((ys-self.oy)/TILE-r0-0.5, False)):
+                direction = np.where(off >= 0, 1, -1)
+                c, r = (c0+direction, r0) if horizontal else (c0, r0+direction)
+                neighbour = field(c, r, free(c, r))
+                ok = own & np.isfinite(base) & np.isfinite(neighbour)
+                out[ok] += np.abs(off[ok]) * (neighbour[ok]-base[ok])
         solid = inside & ~own
         if solid.any():
             k = np.nonzero(solid)[0]
@@ -562,7 +559,7 @@ def leg_of_keys(key_order, keys_mask: int) -> int:
     """ProgressField.leg_of for one agent, from the key order alone (the viewer has no field object)."""
     leg = 0
     for ks in key_order:
-        if not any((int(keys_mask) >> int(k)) & 1 for k in ks):
+        if not all((int(keys_mask) >> int(k)) & 1 for k in ks):
             break
         leg += 1
     return leg

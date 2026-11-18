@@ -61,23 +61,29 @@ def planner_inputs(lv: Level, world: list) -> dict:
     fans, platforms (fixed ones are walls, moving ones doors), the sealed pockets and the cells off screen
     (outside the camera-bounds kill box, when the recorded level has one)."""
     keep, ids, level_ids = list(lv.hz_keep), None, None
+    from plan.lasers import EyeTracker
+    eyes = EyeTracker.for_level(lv)
     start, moving, sweep = {}, set(), set()
     for rec in world:
         if "keep" in rec:
             keep = rec["keep"]
         if "ids" in rec:
             ids = rec["ids"]
+            lv.hz_ids = list(ids)
         if rec.get("fx"):
             lv.set_fields(rec["fx"])
         if rec.get("pf"):
             lv.set_platforms(rec["pf"])
         hz = rec.get("hz", [])
+        if eyes is not None:
+            eyes.observe(rec["f"], hz, rec.get("lz"))
+        reactive = eyes.progress_ids() if eyes is not None else ()
         boxes, kept = hazard_boxes(hz, keep)
         bid = box_ids(kept, ids, prefix="")
         if level_ids is None:
             level_ids = {str(ids[k]) if ids is not None and k < len(ids) else str(k) for k in range(len(hz))}
         for b, hid in zip(boxes, bid):
-            if box_base(hid) not in level_ids:
+            if box_base(hid) not in level_ids or box_base(hid) in reactive:
                 continue
             if hid not in start:
                 start[hid] = b

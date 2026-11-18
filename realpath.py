@@ -225,6 +225,40 @@ def box_distance(px, py, box) -> np.ndarray:
     return np.hypot(np.maximum(np.abs(u) - hw, 0.0), np.maximum(np.abs(v) - hh, 0.0))
 
 
+def route_legs(pl, start, goals, mode, jumps, extra=None, via=None):
+    """Shared required-key route search, as (target, lock state, cells) legs.
+
+    Failure to reach any key rejects this mode so callers can try timed/looser
+    routing. A short goal-only path is never a substitute for a required key.
+    """
+    legs, cur, left = [], start, set(pl.key_cells)
+    total = len(left)
+    if via:
+        locks = "closed" if total else "cost"
+        cells = pl._leg(cur, via, mode, extra, jumps, locks)
+        if not cells:
+            return None
+        legs.append((cells[-1], locks, cells))
+        cur = cells[-1]
+        left.discard(cur)
+    while left:
+        locks = "closed" if len(left) == total else "cost"
+        cells = pl._leg(cur, left, mode, extra, jumps, locks)
+        if not cells and locks == "closed":
+            locks = "cost"
+            cells = pl._leg(cur, left, mode, extra, jumps, locks)
+        if not cells:
+            return None
+        legs.append((cells[-1], locks, cells))
+        cur = cells[-1]
+        left.discard(cur)
+    locks = "open" if total else "cost"
+    cells = pl._leg(cur, goals, mode, extra, jumps, locks)
+    if not cells:
+        return None
+    return legs + [(None, locks, cells)]
+
+
 class Planner:
     def __init__(self, words: np.ndarray, ox: float, oy: float, spawn, goals, hazards, sweeps=(), keys=(),
                  bandages=(), portals=(), lift=None, blocks=None, doors=None, outside=None):
@@ -414,34 +448,12 @@ class Planner:
     def _route(self, start, goals, mode, extra, jumps, via=None):
         """Cells from the start through an optional waypoint (nearest of `via`), every key (each time the
         nearest one still reachable), to the goal. [] if some leg has no way."""
-        legs, cur, keys_left, n_keys = [], start, set(self.key_cells), 0
-        total = len(keys_left)
-        if via:
-            cells = self._leg(cur, via, mode, extra, jumps, "closed" if total else "cost")
-            if not cells:
-                return []
-            legs.append(cells)
-            cur = cells[-1]
-            keys_left.discard(cur)
-        while keys_left:
-            locks = "closed" if n_keys == 0 else "cost"
-            cells = self._leg(cur, keys_left, mode, extra, jumps, locks)
-            if not cells and locks == "closed":
-                cells = self._leg(cur, keys_left, mode, extra, jumps, "cost")
-            if not cells:
-                break                      # keys it cannot reach: go for the goal anyway
-            legs.append(cells)
-            cur = cells[-1]
-            keys_left.discard(cur)
-            n_keys += 1
-        locks = "open" if total and n_keys == total else "cost"
-        cells = self._leg(cur, goals, mode, extra, jumps, locks)
-        if not cells:
+        legs = route_legs(self, start, goals, mode, jumps, extra, via)
+        if not legs:
             return []
-        legs.append(cells)
-        out = list(legs[0])
-        for leg in legs[1:]:
-            out += leg[1:]
+        out = list(legs[0][2])
+        for _, _, cells in legs[1:]:
+            out += cells[1:]
         return out
 
     def _leg(self, start, goals, mode, extra, jumps, locks):

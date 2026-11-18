@@ -472,6 +472,52 @@ def frame_path(xs, ys, step: int, jumps: Jumps | None = None):
     return ox, oy
 
 
+# ---- lasers and shots (realgame.js laserParams / laserState / shots) ----------------------------------------
+LASER_TYPE = 2000         # realgame.js lethal type id of a laser beam row
+HOMING = 1                # laser entry +0xc: 1 homing, 0 plain
+SHRAPNEL_KIND = 16        # realgame.js "shx" kind of a missile2 shrapnel piece (not a game launcher kind: 0-5)
+SHRAPNEL_ID = 9000        # realgame.js shot ids of shrapnel pieces: SHRAPNEL_ID + element (launcher shots: entity x 10 + slot)
+
+
+def parse_lzp(raw) -> dict | None:
+    """realgame.js laserParams ("lzp": level info / a frame after the lasers were rebuilt) as {"wait_len": float or
+    None, "lasers": [{"id", "piece", "kind", "x", "y", "flip", "angle", "params": [6]}]} with the types fixed (params
+    0-3 float or None, 4 int (raw u32), 5 int (s32)); None for no data."""
+    if not raw:
+        return None
+    out = []
+    for L in raw.get("lasers", []) or []:
+        p = list(L.get("params") or [])
+        p = (p + [None] * 6)[:6]
+        fl = lambda v: None if v is None else float(v)
+        it = lambda v: None if v is None else int(v)
+        out.append({"id": str(L.get("id")), "piece": None if L.get("piece") is None else str(L.get("piece")),
+                    "kind": it(L.get("kind")), "x": fl(L.get("x")), "y": fl(L.get("y")), "flip": it(L.get("flip")),
+                    "angle": fl(L.get("angle")), "params": [fl(p[0]), fl(p[1]), fl(p[2]), fl(p[3]), it(p[4]), it(p[5])]})
+    wl = raw.get("wait_len")
+    return {"wait_len": None if wl is None else float(wl), "lasers": out}
+
+
+def parse_lz(raw) -> list[tuple]:
+    """realgame.js laserState ("lz", per frame, in the lasers' order) as [(state int, timer s, angle rad, animation
+    time)], None for a field that was unreadable."""
+    out = []
+    for r in raw or []:
+        r = (list(r) + [None] * 4)[:4]
+        out.append((None if r[0] is None else int(r[0]), None if r[1] is None else float(r[1]),
+                     None if r[2] is None else float(r[2]), None if r[3] is None else float(r[3])))
+    return out
+
+
+def parse_shx(sh, shx) -> list[tuple]:
+    """realgame.js "shx" ([kind, vx, vy] per "sh" row, same order) as [(kind, vx, vy)] aligned with sh; (None, None,
+    None) per row when missing or of another length (an older script)."""
+    sh = sh or []
+    if not shx or len(shx) != len(sh):
+        return [(None, None, None)] * len(sh)
+    return [(int(k), float(vx), float(vy)) for k, vx, vy in shx]
+
+
 class Level:
     """Facts the game reported for the current level: the collision tile layer (kept live from the game's
     changes), goals, spawn, keys, bandages."""
@@ -494,6 +540,8 @@ class Level:
         self.bandages = [(x, y) for t, x, y, fl in objs if (fl >= 0 and fl & 0x08) or nm(t) == "bandaid"]
         # which lethal pieces (by the game's rule) are really decoration; ids = piece addresses (stable)
         self.set_lethal(info.get("lethalTypes", []), info.get("lethalIds"))
+        self.lzp = None                             # the lasers' parameters (realgame.js "lzp"; plan.lasers)
+        self.set_lasers(info.get("lzp"))
         self.hz_level_ids = set(self.hz_ids)       # pieces there from the start (shots come later)
         self.lock_groups = self._lock_groups()
         # portals: the level build pairs portal pieces in their order (FUN_004c8c10)
@@ -746,8 +794,20 @@ class Level:
 
     def set_lethal(self, types: list, ids=None):
         nm = lambda t: (self.names[t].lower() if self.names and 0 <= t < len(self.names) else None)
+        self.hz_types = [int(t) for t in types]      # per hz row: its piece type (2000 a laser beam, realgame.js)
         self.hz_keep = [not (nm(t) and nm(t).startswith(DECOR)) for t in types]   # see DECOR
         self.hz_ids = list(ids) if ids is not None else [str(k) for k in range(len(types))]
+
+    def set_lasers(self, raw) -> bool:
+        """The lasers' parameters from realgame.js ("lzp": level info, or a frame after the lasers were rebuilt;
+        plan.lasers.parse_lzp). True when they changed."""
+        if not raw:
+            return False
+        v = parse_lzp(raw)
+        if v == self.lzp:
+            return False
+        self.lzp = v
+        return True
 
     def _lock_groups(self) -> list[list[int]]:
         """Per key: the lock tiles it opens (cell indices row * W + col). Lock tiles in touch form a group;

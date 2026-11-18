@@ -49,7 +49,7 @@ def synthetic(step=1, key_x=90):
     pl.crumble, pl._stages, pl._now, pl._crumble = {}, {}, 0, None
     field = ProgressField.__new__(ProgressField)
     field.key_order = [[0]]
-    field.times = lambda x, y, leg, supported=True, vy=None: np.full(np.shape(x), 100.) - 50 * np.asarray(leg)
+    field.times = lambda x, y, leg, supported=True, vy=None, subcell=False: np.full(np.shape(x), 100.) - 50 * np.asarray(leg)
     pl.field, pl._dead_t = field, 1000
     pl.goal_boxes = np.empty((0, 5))
     pl.bounds, pl.floor = (-100, 1000, -100, 1000), None
@@ -219,6 +219,9 @@ def test_best_route_producer_records_known_and_unknown_keys_without_changing_act
 
 def test_planner_observation_forwards_native_keys_to_route():
     _, _, pl = synthetic()
+    pl.stall_free,pl.stalls = 60.,{}
+    pl.launches = {}
+    pl.carrier = P.Carrier()
     pl.route = P.RouteBook()
     pl.surprise = types.SimpleNamespace(observe=lambda *a: [])
     pl.memory = types.SimpleNamespace(update=lambda *a, **kw: [])

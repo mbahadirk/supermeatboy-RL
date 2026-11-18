@@ -127,13 +127,15 @@ def path_check(xs, ys, frames, bounds=None, portals: bool = False):
     plan.safety.SUB_STEP apart against frames[k]'s boxes (and the level's edge), in one vectorized pass.
     portals (the level has game portals): a one-frame move longer than game.level.TELEPORT_JUMP is a teleport,
     only its end is tested (never the line across). Returns (contact frame or -1, id of what was hit or None,
-    soft risk in [0, 1] over frames after VETO_FRAMES)."""
+    soft risk in [0, 1] over frames after VETO_FRAMES). Homing laser eyes the frames carry (plan.safety.beam_ref):
+    their beams aimed along this path (plan.lasers), a contact reported after a box's, before the level's edge."""
     xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
     K = min(len(xs), len(frames)) - 1
     if K < 1:
         return -1, None, 0.0
     xs, ys = xs[:K + 1], ys[:K + 1]
     x0, y0 = xs[:-1], ys[:-1]
+    jp = None
     if portals:
         jp = S.teleport_jumps(xs, ys)
         if jp is not None:
@@ -168,6 +170,15 @@ def path_check(xs, ys, frames, bounds=None, portals: bool = False):
                 k = int(fk[j]) - 1
                 if clear[j] <= step[k] and hit_id[k] is None:
                     hit_id[k] = ids[near[j]]
+    ref = S.beam_ref(frames, 1)
+    if ref is not None and len(ref[0]):                  # homing eyes aim along this path
+        bm, k0 = ref
+        J = None if jp is None else S.Jumps(jp.at[None], jp.frame[None], jp.entry[None], jp.exit[None])
+        lc, _ = bm.columns(xs[None], ys[None], 1, k0, None, J)
+        lmin, le = lc[0].min(1), lc[0].argmin(1)
+        for k in np.nonzero((lmin < 0) & ~(step < 0))[0]:
+            hit_id[k] = bm.ids[int(le[k])]
+        step = np.minimum(step, lmin)
     if bounds is not None:
         oc = S.out_clearance(bounds, px, py).min(1)
         for k in np.nonzero((oc < 0) & ~(step < 0))[0]:      # a box contact is reported before the edge
@@ -252,10 +263,11 @@ class Committer:
             return None
         p = c.plan
         n = len(p.actions)
+        interval = min(self.replan,int(getattr(p,'decision_frames',0) or self.replan))
         if not self.on:
-            k = min(self.replan, n)
+            k = min(interval, n)
         else:
-            k = min(self.replan, max(n - SHORT_FRAMES + 1, 0), n)
+            k = min(interval, max(n - SHORT_FRAMES + 1, 0), n)
             if c.move_end > 0:
                 k = min(k, c.move_end)
             k = max(k, int(getattr(p, "trial_frames", 0) or 0), 1)
@@ -271,14 +283,15 @@ class Committer:
         p = c.plan
         k = frame - p.frame
         n = len(p.actions)
+        interval = min(self.replan,int(getattr(p,'decision_frames',0) or self.replan))
         if not self.on:                                           # the old fixed interval
-            return ["interval"] if (k < 0 or k >= self.replan or k >= n) else []
+            return ["interval"] if (k < 0 or k >= interval or k >= n) else []
         if k < 0 or k >= n:
             return ["start"]
         if k < int(getattr(p, "trial_frames", 0) or 0):          # a route trial: its exact actions, no decision
             return []
         out = ["start: tiles"] if tiles else []
-        if k >= self.replan:
+        if k >= interval:
             out.append("interval")
         if 0 < c.move_end <= k:
             out.append("move end")

@@ -1,5 +1,402 @@
 # Super Meat Boy RL: the state of the project (2026-11-03; planner step 4 added 2026-11-08; 7.9 added 2026-11-10; 7.10 wave search 2026-11-11)
 
+## First reported 4-18 finish and performance follow-up (2026-11-19)
+
+User reports the first successful 4-18 completion after anticipatory crossing, but observed speed around
+0.1x is unacceptable. Latest run is online_check20. Preserve this implementation in git before performance
+work. Earlier model-only failures below remain historical evidence; they are not the latest native outcome.
+No new native finish/A+ rate has yet been measured by this follow-up. Next: bound completed run evidence,
+profile decision timing, reduce repeated work without dropping crossing or weakening safety.
+
+## Anticipatory carrier crossing (2026-11-19; implemented, full obstacle/section still unproved)
+
+User-approved follow-up to online_check19: search a geometry-derived far-side obstacle goal BEFORE safe
+16f station ranking can suppress launch preparation. Static transport-corridor lethal shapes trigger it;
+projectiles remain in safety checks but do not create stationary crossing goals. Existing future horizon,
+144 jump/forward/countersteer proposals OR48 wall-climb/exit proposals, one-member screen then <=16 plus
+incumbent all-member checks. Solid terrain above the obstacle selects climbing; no level/obstacle hardcode,
+new argument/checkpoint format or collision-threshold relaxation. Goal/proven route priority remains.
+
+Full crossing needs common settled far-side support with every member alive to arrival. A checked20-unit
+supported ascent is separately labelled climb-approach/full_crossing_proved:false, never a completed crossing.
+Only checked crossing/ascent can override station. Cached controls consume elapsed time; feedback <=8f AND
+proved endpoint. Observed far-side intent survives near-side reattachment/control discard; actual ascent
+support clears controls but retains the goal. Two consecutive actual far-side support observations end it.
+Async adopted effects retain the existing synchronization/reset semantics. Implementation: plan/carrier_cross.py,
+plan/carrier.py and plan/planner.py; regressions: tests/test_carrier_cross.py.
+
+Important correction to prior geometry interpretation: solid pillar x60..140/y-240..-120 blocks the apparent
+gap above the lower circle. Simple high/forward hop is insufficient. Eight matched actual-past decisions
+choose early checked ascent in three cases, but prove NO complete crossing. Coarse model feedback launches
+atf943 and reaches y~-207 atf959, then next supported ascent fails all-member validation (some fail support,
+another hits upper h24 before slower arrival); ordinary safety takes over. It STILL does not clear the
+obstacle/finish4-18. Never mark this section solved or claim A+/native survival. Development median decision
+769.0->1065.6ms in the eight cases; uncontrolled timings, no live FPS/speed improvement claim. This additional
+bounded search adds work. Full regression679 passed/one existing pygame warning in518.71s; final-source
+focused carrier/crossing suite17 passed in10.37s. The broader focused suite113 passed in41.77s.
+Compilation, git diff --check and clean ONLYPPO status checks passed. The full suite preceded only the
+final diagnostic reason wording; final focused checks imported that wording too.
+
+No native game/agent/run/save/published-model/memory/ONLYPPO writes. Local checkpoint copy/evidence only.
+Restart required, same command/checkpoint format. Details and remaining failure:
+analysis/carrier_crossing_20261119/report.md, comparison.json, sequence.json, ascent_audit.json, manifest.json.
+
+## online_check19 / obstacle crossing blocked by carrier priority (2026-11-19; analysis only)
+
+Bound first43 completed lives/shards0..42:43 deaths/no finish, maxx70.813 vs goal564.73. New carrier active
+in2122/3189 decisions. Three deaths hit the same stationary lower circle h23 near(98.94,-233.76), radius27.73,
+while body rides at y~-254.3. Lives2/22/43 die f990/994/987 nearx68..71. Carrier passes through its kill region;
+a rising/forward crossing and time-aligned far-side support is required. Upper circle h24 constrains height.
+56 station decisions across six lives log negative future h23 clearance, often+40..48f, yet approve16f
+attached prefixes. Later8f recovery/reflex begins after launch preparation time is exhausted. Causes are
+short station prefix/rank_soft0 priority, extended search only when eligibility is gone, narrow short-upward
+carrier templates and position-ranked survivors, no explicit far-side crossing task. User observation is
+supported: new control over-prioritizes attachment before an obstacle. Next: early transport-corridor hazard
+trigger, geometry-derived longer/directional/countersteer proposals, common far-side exit on future carrier
+or validated next support, persistent crossing until actual arrival. Do NOT just drop carrier tracking or
+force a jump. No production/live/run/save/model/memory/ONLYPPO changes. Source/phase/death evidence:
+`analysis/carrier_check19_20261119/report.md`.
+
+## online_check18 / observed carrier task (2026-11-18; implemented, live finish unverified)
+
+New plan/carrier.py retains carrier identity and returning intent across replans/pocket contacts;
+discarding unsafe controls does not erase the return objective. Actual settled arrival/death/keys/count/
+wave/level/field resets govern lifetime; adopted controls use an unchanged absolute return deadline and
+consume their remaining actions. Old async adoptions cannot revive completed returns/cancel newer ones.
+Station keeping uses all-member attached/collision-free 16f prefix, <=8f feedback, relative-centre steering.
+Evasions need all-member same-moving-support arrival; bounded extension uses existing H+completion future.
+Unproved short recovery is explicitly logged, safe for8f/feedback4f, approaching from above; no safe proof
+means ordinary safety fallback. Real goal/proven route/checked walking transfer keep priority. Non-jumping
+confirmed rider rest noise cannot invent a takeoff; walk-off/jump semantics remain. New mode/color carrier
+(blue) and counts.carrier diagnostics. No checkpoint/feature/CLI format changes; ONLYPPO untouched.
+
+Matched recorded decisions improve unnecessary late jumps. Model-feedback probes STILL contain difficult
+projectile/fallback cases and do not prove native survival or completion. Do not mark 4-18 solved. Full
+regression672 passed/one existing warning (323.52s); after late intent/count handling, final focused suite
+148 passed/one existing warning (60.91s).
+No live agent/game/run/save/model/memory writes. Report/limits: analysis/carrier_20261118/report.md.
+Proposed next command: learned runs/online_check18/online/wm_model.pt, new run online_check19, same replay/
+async settings, --wave-seconds30 (A+ par24.5 unchanged). Restart required; command.ps1 is reviewable.
+
+## online_check18 / long-run outcome (2026-11-18; analysis only)
+
+Bound first 268 completed lives, shards 0..267: 268 death events/no finish (267 wave-end done, one time at
+1200f also has h14 death). Stable contacts: 153 board, 76 descend, 10 reach bottom segment. Max actual x65.26
+vs goal564.73. Contact +4f median errors horizontal0.144/descent0.463/bottom0.413 (3136/1607/96 overlapping
+followed windows). Old false-ground diagnostic 0/2301 ground completions. Prior physics/surface errors are
+not the dominant remaining issue: many jumps release support, enter pockets near x30..60, and future
+replans replace the predicted return while the carrier departs. Lower segment has 34 departure events,
+27 with positive takeoff; life155 is a detailed example. Deaths: upper shelf151, lower hazards66, shots48,
+unknown3. Need per-agent moving-support identity/relative-position task, maintained through bends and
+evasive-jump return/verified transfer; ground endpoint alone does not prove useful route continuity.
+Online learner trains world dynamics, not that control policy. Separately wave cap is20s, imported4-18
+A+ par24.5s; natural carrier route may exceed the cap. Diagnostic suggestion --wave-seconds30 does not
+change A+ target. Logged median game_speed0.261, median decision255.325ms: still not real-time.
+No production/live/run/save/model/memory/ONLYPPO change. `analysis/platform_check18_20261118/report.md`.
+
+## online_check17 / standable surfaces and descending carry (2026-11-18; implemented)
+
+Terrain.support now requires a supporting foot to have solid below and free space at body-centre height,
+for both tiles and platform boxes. Tolerated vertical-wall penetration no longer counts as ground; wall
+side/jump ability remains unchanged. This shared owner fixes completion/modes/passage/real support without
+a separate downstream scoring patch. All 286 audited wall-like endpoints lose false ground; all 6578
+observed stable bar contacts retain ground. Of those old endpoints, 285 remain wall, one deeply embedded
+point becomes unsupported. Real floor/wall corners and half-block/slope tests remain valid.
+
+New measured issue at the right-to-down bend: descending top riders move with the bar while native vy=0.
+carry_bars now replaces learned vertical carry once for continuing descending non-upright riders, keeping
+the observed contact offset; takeoff/new landing/rising/upright behavior remains. Same frozen model and
+42 recorded descending +4f windows: median endpoint error 5.4633 -> 0.6965. Eight matched planner decisions
+exercise the bend. Model-feedback sequence from actual f248 approach through f408: sampled ground 4/21 ->
+17/21; corrected sequence follows descent. This is NOT live survival/exit/goal/A+ proof or section completion.
+Restart required; same command/checkpoint format. No live/run/save/model/memory/ONLYPPO changes.
+Focused checks 75 passed, final descending/surface/planner checks 57 passed. Two old golden completion
+labels updated ground->wall; all other old recorded fields unchanged. Final full suite: **662 passed,
+1 existing warning in 382.97s**. Exact full checks/limits/evidence:
+`analysis/platform_surface_20261118/report.md`.
+
+## online_check17 / 4-18 actual-play audit (2026-11-18; analysis only)
+
+Folder has two starts. Bound second session's 89 completed lives to shards 19..107 (runner wave from shard
+metadata, NOT global row wave+1): 89 deaths/no finish. New baseline logs present in all 3681 decisions;
+departure guard active in 3592, absent only at initial spawn. 52 lives board, max continuous stable contact
+178f vs prior recording's 25f. Native followed-platform +4f error: median 0.2392/p90 1.3853 units (1177
+overlapping matched-control windows). Horizontal carry is improved; completion remains unsuccessful.
+Deaths: upper shelf h9/10/11 41; lower h13/14 25; shots 17; other/unknown 6. Most boarding lives run/jump
+ahead of the bar, reach x~-46 wall, then fall or get shot. Bar turns DOWN near f301 at x=-267.8; only four
+lives have stable contact at/after f300. Vertical riding is still model/guard driven, not explicit carry.
+Found a remaining landing loophole: tolerated wall penetration puts a foot's below AND centre-height probe
+inside the wall, but support calls it ground. 286 chosen ground-completion records across 59 lives match
+this condition. Example life4 f272 predicts ground (-45.33,142.12), risk0, although it is the vertical face.
+Next correction should validate actual standable top surfaces at the shared support/landing boundary,
+then verify the descending platform/transfer; don't just increase risk or extend guard lifetime again.
+Snapshots, native death examples, plot and limits: `analysis/platform_418_check17_20261118/report.md`.
+No production/live/run/save/model/memory/ONLYPPO change in this audit; later growing-run lives excluded.
+
+## online_check16 / 4-18 carry and transfer correction (2026-11-18; implemented)
+
+User-approved follow-up replaces learned horizontal displacement for confirmed continuing riders with
+integrated relative native vx + platform displacement, BEFORE tile collision. It does not add carry
+twice or alter native vx. Carry stops when walking off within a coarse step; takeoffs/new landings,
+non-riders, upright/vertical-moving bars retain learned motion. Small supported vertical drift is reset.
+Per-agent departure history is owned by real observe(), retained during airborne replanning/hops, refreshed
+at supported landings, cleared on death/wave/level/field/private-key objective changes. Speculative plans
+and async adoption cannot replace it. Logs include platform_launch.baseline_y/baseline_t; no new flag/model.
+
+Same frozen final online_check16 model, 42 overlapping actual-control platform +4f windows: median endpoint
+error 6.1501 -> 0.6578, p90 7.0036 -> 1.2992 units. Six matched recorded decisions retain previously lost
+airborne context. Model-feedback riding probe from an already-boarded native state has 10/12 grounded
+samples vs 8/12 before; this is NOT native play or successful boarding/exit/finish proof. New live run
+required; restart with the same command. Linear within-step velocity integration is an approximation.
+Focused platform/passage tests 37 passed; async/commit tests 47 passed. Final full suite: **658 passed,
+1 existing warning in 243.30s**. Exact limits/hashes: `analysis/platform_418_fix_20261118/`.
+No game/agent/run/save/model/memory/ONLYPPO writes.
+
+## online_check16 / 4-18 follow-up (2026-11-18; live failure confirmed, analysis only)
+
+Previous platform-launch heuristic did NOT solve real play: latest recording has 92 completed deaths,
+zero finishes; launch context is present in 612/1599 decisions. It is decision-local and switches off
+after an upward hop, allowing immediate forward launches on the next airborne replan.
+Ten lives contact the bar; longest stable contact is only 25 frames. Native carry is now measured:
+68 stable transitions have median dx - next_vx*dt = 1.8161 units/frame, matching bar displacement.
+Eight matched/followed +4f platform predictions underpredict horizontal movement by median 6.9249 units.
+Native vx can be zero while the platform carries the player. collide_bars has no explicit carry; the
+learned predictions here do not cover it adequately. Do not call the previous isolated-state tests a
+platform fix. Next scoped work: support-relative carry without double counting learned motion, maintain
+landing/boarding context through airborne replans, then validate wait/board/ride/transfer sequences.
+No new production change or live action this follow-up. Evidence: `analysis/platform_418_recheck_20261118/`.
+
+## online_check15 / 4-18 moving-platform launch (2026-11-18; implemented, offline verified)
+
+Latest completed 4-18 visit, shards 247..288: 42 deaths/no finish. Agent leaves the spawn ledge before
+the moving bar arrives. Terminal scoring credits distant predicted wall touches as supported progress,
+even without a demonstrated landing. Grounded decisions in moving-bar worlds now cap airborne/wall
+terminal progress at starting T; predicted ground/platform landing restores ordinary credit. All terminal
+scoring consumers share this rule. Neutral wait and opposite walking 8/16f remain in the final candidates
+so early pruning cannot discard all grounded alternatives. Collision geometry, wall-jump ability, risk
+coefficients and actual-goal/verified-route priority are unchanged. Logs: counts.platform_launch.
+
+Seven matched recorded decisions (six duplicated grounded poses plus one airborne control), with both
+the saved online model and the command's starting model: early forward launches become waiting/braking
+choices; airborne control unchanged. Synthetic stationary-ledge probes with elapsed stall time wait while
+the bar is distant and choose movement at later bar phases; these are not a real boarding demonstration.
+This heuristic can defer a legitimate wall route whose landing exceeds the horizon. Real platform riding,
+finish/A+ and FPS remain unverified. No training or game/agent/run/save/memory/ONLYPPO writes.
+Full suite: **653 passed, 1 existing warning in 275.77s**; focused checks: **70 passed in 29.95s**.
+Report/reproduction/hashes: `analysis/platform_418_20261118/`. Restart the agent to load the change.
+
+## online_check15 / same-exit crossing controller (2026-11-18; implemented)
+
+Six completed 4-17 lives in shards 58..63: 4 timeouts, 2 deaths, no finish. Historical improvement was still
+discounting each new wait (540 stalled frames charged as only 26.7), while incomplete waits avoided pricing
+the crossing they would eventually need. Approved correction is implemented: prefix credit now uses its own
+current state; real observe() owns stall history and an older async adoption cannot rewind it.
+
+New local `passage` mode compares direct and explicitly delayed candidates to ONE supported exit, derived
+from the ordinary progress/move tree. Every member must reach it with required private keys and without
+predicted contact until the slowest arrival; incomplete waits cannot win that comparison. Existing risk
+coefficients, margins and collision geometry are unchanged. No proved exit means ordinary-planner fallback,
+not a forced hazardous move. Actual goal/proven-route/trial priority is retained.
+Adopted controls, including any selected wait, are consumed and revalidated from each new state. Real/model
+arrival uses one shared supported/keyed exit predicate. Crossing feedback is capped at 8f (current model
+step 4); objective/level/wave resets clear the cache. It is cyan in game/viewer and logged in Plan.passage
+and counts.passage. No new argument/checkpoint format; restart the agent.
+
+Matched offline sampling of 87 upper-bottleneck states across all six lives, same saved online_check15
+checkpoint: waits 37 -> 11, 61 selected complete crossings, no selected veto. Separately checked the exact
+human_v4p_gpu starting model from the user's command: 5 matched cases, 2 baseline waits -> no initial waits,
+all 5 corrected decisions use proved crossings. These are recorded-state decisions, not new real finishes,
+death-rate/A+ measurements or a real-time claim. Initial crossing search adds cost; cached revalidation is
+smaller, and existing normal search still runs. Full measurements/limits: `analysis/passage_20261118/report.md`.
+
+Full regression: **650 passed, 1 warning in 199.64s** outside the network-restricted sandbox. Final focused
+crossing/prefix/worker/key checks after the shared arrival predicate: **63 passed in 8.24s**. Compilation and
+whitespace checks passed; warning is the existing pygame/pkg_resources deprecation. No game/agent was
+started/stopped/attached, no run/save/model/memory file was written, no commit/push, and ONLYPPO is untouched.
+
+## online_check14 / remaining stalls and paths after 4-9 (2026-11-18)
+
+Seven bounded completed 4-17 lives (shards 0..6) all time out at 1200f. The prior prefix fix is loaded,
+but binary 10-T-frame credit charges short movement and waiting identically; the 20-unit cell lookup
+also hides small movement. Fixed with proportional executable-prefix stall credit and a subcell time
+lookup shared by observed stall history/prefix scoring. Main estimates, collision/risk rules and the
+3f hysteresis remain unchanged. With the command's human_v4p_gpu starting checkpoint, recorded f604/895
+now choose run R 8f instead of wait 8f; f331 is an unchanged control. No live/A+ claim.
+
+In-game paths working before 4-9 but disappearing later were traced with a bounded read-only render probe:
+the old 0x4ac6a9 scene hook was skipped while Present/shader constants ran. Camera capture now observes
+the common D3D SetVertexShaderConstantF boundary; first world camera wins until Present, with lazy hook
+installation/replacement. Overlay milestones and draw errors are persisted in events.jsonl.
+
+Full suite: 639 passed and one obsolete binary-credit expectation failed; after updating that expectation
+and final render-boundary change, all 30 targeted regressions pass. Native overlay/laser fixtures pass;
+compilation/whitespace checks pass. Report, exact validation and limitations:
+`analysis/saw_recheck_20261118/report.md`. Running processes need a restart. No agent/run/save/memory was
+modified; the render probe only observed and detached its own instrumentation. ONLYPPO remains untouched.
+
+## online_check13 / 4-17 saw hesitation (2026-11-17; prefix-credit fix implemented)
+
+Bounded to completed shards through 115: two visits, 59 lives = 33 finishes / 15 deaths / 11 timeouts,
+zero A+. Best real finish is 752 frames / 12.534 s against par 12 s (32 frames to save).
+The upper bottlenecks around (-446,186) and (-385,186) show repeated waiting. Their h18/h19 saw kill
+circles are static in the best life. Generic 13.9-unit soft margins and large death-scaled near-pass costs
+outweigh movement until accumulated stall penalties win. Best-life frames 242/250/258 repeatedly choose
+`wait 16f, walk R 8f` eight frames apart at the same position; predicted endpoint progress exempts each
+from stall cost although movement is continually postponed. This scoring loophole is now fixed.
+
+Local followed moving-prefix p90 position errors at +4/+8/+16 are 1.55/2.89/3.41 units (610/544/212 samples),
+versus the generic +16 margin 13.9. These selected/survived samples are not a global or untried-candidate
+safety bound. Recommended order: fix executed-progress credit/keep a movement-start deadline, then calibrate
+local near-pass margins/correction horizon, then A+ budget among safe candidates and checked route joins.
+The existing collision/risk/veto/daring rules are unchanged; the separate margin calibration, A+ budgeting
+and route-join proposals remain deferred. The implemented fix is `Planner.prefix_stall`: T improvement
+and novelty credit stop at the earlier of configured `--replan` and first move end, rounded down to a
+direct model-step boundary. Stage 2 reuses its parent's identical prefix; final scoring checks all members.
+Private key masks, platform timing and teleports are retained. Verified real-route candidates use real
+frame prefixes. No lookups are added when no stall is chargeable. `stall_prefix_frames` / `stall_prefix_t`
+are logged with scores, and alternative reasons name the credited prefix instead of the distant endpoint.
+The live runner passes the same horizon to local and spawned planners; no new CLI flag is needed.
+
+Offline comparison on the recorded frame-242/250/258 states (same saved online checkpoint, controlled
+visits/stall history): baseline chooses `wait 16f, walk R 8f` in all three; fixed scoring chooses
+`walk R 8f, wait 8f` in all three, without an early-contact veto. This is isolated decision evidence,
+not a new real-game finish or A+ result. Eleven focused prefix cases cover postponement, boundary rounding,
+future novelty, immediate exploration, private keys, predicted deaths, inactive stalls and real-frame paths.
+Reproducible measurements and plan examples:
+`analysis/saw_stall_20261117/audit.py`, `report.json`, `report.md`.
+Fix comparison: `verify_fix.py` and `fix_comparison.json` beside them. Restart the agent to load this change.
+Final full suite: **635 passed, 1 warning in 360.07s (0:06:00)**; the warning is the existing
+pygame/pkg_resources deprecation. Focused prefix/key tests: 30 passed. Compilation and diff whitespace
+checks passed. No live game was run and no run/save/memory data or ONLYPPO code was changed.
+
+## online_check12 / 4-12 key objective loss (2026-11-17; fixed offline)
+
+Read-only latest-run inspection, bounded to the first 22 completed 4-12 shards while logging continued:
+one correctly detected key, no pickups; waves 1/2 die, 3..22 stall at the locked wall until timeout.
+After wave 2 the field changes from 2 legs / spawn T 532 to **1 leg / T 20**, with saved `key_order=[]`.
+Cause: homing-beam sweep history still enters `Runner.build_field` even though candidate safety now models
+those beams separately. In clear mode it blocks the key route. `plan.progress.route_legs` then drops an
+unreachable key and returns a goal-only route; `_build` accepts it before trying timed mode. The same
+fallback exists in `realpath.Planner._route`.
+
+Offline replay of the hazard tracking reproduces the loss. With the same wave-2 inputs, timed/risky/squeeze
+all retain the key; excluding the two reactive beam histories also restores two legs and spawn T ~439.
+Implemented after the diagnosis:
+- `realpath.route_legs` is now the shared owner of route-leg search used by both `Planner._route` and
+  `ProgressField`. Failure to reach a required key rejects that mode and tries timed/looser routing.
+  Incomplete goal-only routes are not accepted. If all modes fail, the progress field keeps every key
+  stage, reports `no complete route` and leaves unreachable costs infinite. All keys grouped in a route
+  cell must be present in the mask before advancing that leg (viewer and planner agree).
+- `EyeTracker.progress_ids` identifies reactive homing beams for progress-map exclusion. The agent and
+  offline `planner_inputs` skip those identities before accumulating static/sweep obstacles; ordinary
+  hazards, plain lasers and the eye bodies remain. Candidate-dependent beam safety is still active.
+- `analysis/key_target_20261117/verify_fix.py` replayed completed waves 1/2 without running a game or writing
+  into runs/: **clear, 2 legs, key_order=[[0]], spawn T=439.3, route includes key cell (32,7), zero accumulated
+  homing sweep boxes**. Exact result and route: `fix_result.json` in that folder.
+- Five regressions in `tests/test_required_keys.py`: timed key routing, unreachable-key invariants,
+  grouped key masks, progress exclusion with an actual laser-contact veto, and recorded 4-12 rebuilding.
+  They passed. Full final suite: **624 passed, 1 warning in 354.67s (0:05:54)**; warning is the existing
+  pygame/pkg_resources deprecation. Python compilation and diff whitespace checks passed. A new live
+  run is needed to verify executing the complete route.
+
+Historical evidence and exact log references: `analysis/key_target_20261117/report.md`. Restart the agent
+to use the new source; an already-running Python/planner worker keeps its loaded code. No process was
+stopped or attached, no save/memory/run data was changed, and ONLYPPO remains untouched.
+
+## Reactive hazards: continuation of Claude's unfinished port (2026-11-17)
+
+**Main only; no commit/push and no game/Frida execution.** Existing A+/realtest work and ONLYPPO were preserved.
+Detailed contract, per-file summary, measured evidence and limitations:
+`analysis/reactive_hazards_20261117/completion_report.md` (audit script and JSON results beside it).
+
+- Native observation additions: launcher kind 5 (radius 1 x piece scale), aligned `shx` kind/velocity,
+  shrapnel kind 16/radius 10, per-frame `lz` (state/timer/angle/animation clock), level `lzp` parameters.
+  Existing `sh` is `[id,x,y,radius]`; no incompatible wire-format change. `game.level` owns parsing and
+  `wm.buffer` records the extra fields. **Shrapnel capture requires live calibration of unknown offsets;
+  fragments are omitted before it succeeds. This part remains unverified against a running game.**
+- `plan/lasers.py` rolls each candidate's homing eyes with the decoded float32 aim, live-tile sampled rays,
+  state schedule and swept-cross contact rule. `FutureWorld` removes only modelled homing beams from stale
+  futures; nonhoming beams remain recorded. Angles must be known before a recorded beam is removed.
+  Safety sweeps, all planning stages/continuations, reflex, commit checks and real-route judging share the
+  same beam context and laser ids. Single leading planned agent is the accurate targeting configuration;
+  independently planned nonleaders remain an approximation.
+- Completion fixes: recorded wait animation length/clock and multiplier now drive wait-to-on; missing turn
+  divisor differs from explicit zero; portal sweeps split entry/exit instead of crossing the teleport gap;
+  beam-table occlusion discontinuities get live casts; casts accumulate float32 steps. Legacy size-only
+  homing beam rows are also removed once replaced by a usable model.
+- `online_check11`, 4-16 replay: **142 waves / 14,999 steps / 141 of 141 deaths predicted on the exact step /
+  zero false survived-step contacts**. Replay is reanchored to observed current angles, not a claim of
+  long-horizon accuracy. Vectorised/scalar aim mismatches: zero. Beam-length p99 error <0.01 units, with one
+  retained 99.68-unit geometry outlier (cause not established; no contact-verdict effect).
+- Recorded planner comparison: 4-16 frame 70 changes from **18/18 vetoed** to **0/19 vetoed**; selected path
+  has positive beam clearance, but `safe_alternatives` remains zero. Frame 90 still has all candidates vetoed.
+  No claim that the level is solved. Six sampled decisions on 4-6/3-2/4-10 match the HEAD decision hashes.
+- Isolated sweep timing, 95 paths x 48 frames: no-eye added median **0.0049 ms**; two eyes add **12.351 ms**.
+  End-to-end 4-16 decision medians add ~9.5 / 76.9 / 10.8 ms at frames 30/70/90; changed search work is included.
+  No realtime/FPS claim. Full resource/timing and reproducibility details are in the report.
+- Unit/native mock coverage: parsing/recording, angle/cast/contact, walls, state timing, candidate dependence,
+  portals, legacy rows, sweep/planner/commit integration. `node --check realgame.js` passes; live executable
+  offsets, draw-driven wait timing and shrapnel calibration still need live/static verification.
+- Final full suite: **619 passed, 1 warning in 297.47s (0:04:57)** with `python -m pytest -q -p no:cacheprovider
+  tests --tb=short`; warning is the existing pygame/pkg_resources deprecation. Focused laser/shot/route/async
+  tests: **86 passed in 15.86s**. Native fake-memory test (including shrapnel calibration), JS syntax, Python
+  compilation and diff whitespace checks pass. Source/report provenance: `completion_manifest.json`.
+
+## ONLYPPO perception parity, separate branch/worktree (2026-11-17)
+
+User request: update ONLYPPO to see what main's **PPO** sees, without adding world models or action planners.
+Implemented on branch `ONLYPPO` in `.worktrees/onlyppo`, preserving main's existing work. The native adapter
+and PPO geometry now include animated kill regions, enemies, laser beams, projectiles, camera death bounds,
+live tiles/keys/platforms and optional half-block/slope inputs. `--shape-inputs` gives main's 524-input layout;
+the default 282-input layout and old checkpoint loading remain. No `wm/`, `mpc/`, `plan/`, `agent.py`, online
+learner, future rollout, A+ reward changes or realtest were brought over. The branch's existing reward-route
+generator (already named `realpath.Planner`) remains a reward/direction helper, not an action controller.
+
+Validation: 8 focused tests pass in that worktree, including main-PPO observation hashes, actual PPO gradient
+updates, checkpoint migration, import isolation and native-message producers executed with fake memory.
+AST comparison against the pre-port branch confirms `Policy`, `PPO`, `finish_reward`, `on_wave_end`,
+`agent_fitness`, all `R_*` constants and `ACTIONS` are unchanged. Native live-game behaviour remains untested.
+Details/provenance: `.worktrees/onlyppo/PROJECT_STATE.md`, `PROJECT_HISTORY.md`, and `perception_port.json`.
+Local branch commit: `edb6781` (`feat: align PPO-only game perception with current PPO`). Nothing was pushed.
+
+## A+ online rewards and native `--realtest` progression (2026-11-17)
+
+- User-selected semantics: **only A+ finishes are saved to the game and advance the level**. Ordinary
+  finishes retry. Add `--realtest` to an existing `agent.py` command; combine with `--online` for training.
+  The flag alone does not start a learner, change the checkpoint/replay pair, or turn on recording.
+- `wm/rewards.py` owns `finish-aplus-v1`: normal finish **5**, A+ finish **15** (5 + 10 bonus).
+  A+ uses the chapter par and the existing rounded `frames * dt / 1000` time, with a confirmed time-step
+  lock and a positive finish time. Unknown par/unconfirmed lock: no A+ bonus or automatic native finish.
+- `agent.py` records the reward on the **post-action terminal row**, including exact `wave_end.s` targets.
+  First/death/nonterminal rewards keep their previous undefined semantics; there is no fabricated terminal
+  state. Multi-step feature targets sum the terminal reward once, then scale /5 (ordinary 1, A+ 3).
+  `times.jsonl` includes grade, par, reward and protocol; finish events include the reward.
+- `wm/online.py` identifies A+ lives from terminal reward rows only in versioned new shards, and samples
+  their transitions with **2x weight** within the own-data portion (pending and absorbed waves).
+  Existing feature demo masks keep agent/frame selection aligned through filtering. Replay remains 90%;
+  validation and publication gates are unchanged. No legacy/PPO rewards are retrospectively relabelled.
+  The newest wave remains validation until a later cycle. Training is supervised world-model fitting,
+  **not policy-gradient RL**; planning still minimizes estimated time/risk. A higher A+ success rate needs
+  a live comparison, and is not established by these tests.
+- `--realtest`: select a current planned A+ finish (explore agents and historical bests cannot trigger it),
+  finish the wave, flush its training shard, back up `UserData/savegame.dat` once per run, and send the existing
+  native `finish` request with **that run's time**. `realgame.js` already performs the game's own completion,
+  record update (only if faster) and result-screen continuation. No direct save-format editing was added.
+  The request is latched until the next level info. Backup failure logs `realtest save skipped` and keeps
+  retrying; it does not request a 999.99 native finish. Manual S retains its existing behaviour.
+- Incompatible modes are refused before attachment: `--eval-first`, human/search/demo, unlocked time step,
+  or zero planned agents. `--online` and `--learn` retain their own existing requirements.
+- Tests: `tests/test_aplus.py` covers reward boundaries, both terminal capture paths, step-1/step-4 targets,
+  online sampling and actual gradient updates, flush-before-native-request, exact current time, one backup,
+  duplicate suppression, non-A+ / explore / unknown / unlocked / disabled / stopping / backup failure,
+  and incompatible CLI combinations. Native map saving/next-level UI has **not been live-tested** in this
+  change; the existing S mechanism is reused. Chapter transitions follow the game's own continuation UI.
+- Executed validation: `python -m pytest tests/test_aplus.py tests/test_buffer.py tests/test_online.py
+  tests/test_learner.py tests/test_first_eval.py tests/test_agent.py -q --tb=short`: **104 passed** (one existing
+  pygame deprecation warning). After adding zero-frame and weighted-gradient coverage, the final
+  `tests/test_aplus.py` run passed **26 tests** (overlaps the earlier suite). Python compilation and scoped
+  `git diff --check` passed. Concurrent reactive-hazard edits elsewhere in the workspace were preserved.
+
 ## Moving platforms (4-4), human_v4 measured, tile-plat-v1 (2026-11-15)
 
 **4-4** (online_check01: 15 waves, 0 finishes):

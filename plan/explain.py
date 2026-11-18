@@ -128,6 +128,8 @@ class Plan:
     trial_frames: int = 0                             # mode "route-trial": frames played exactly, no new decision
     #                                                   (plan.planner.RouteTrials, plan.commit.Committer.triggers)
     path_step: int = 1                                # direct samples at 0, path_step, 2 * path_step, ...
+    decision_frames: int = 0                          # optional tighter feedback interval for a local crossing
+    passage: dict | None = None                       # common exit / complete arrival / cost proof
 
     @property
     def name(self) -> str:

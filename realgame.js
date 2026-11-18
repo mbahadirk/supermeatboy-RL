@@ -271,7 +271,8 @@ function sendLevelInfo() {
          agents: agents.length, lethal: lethal.length, hz: hazards(), objs,
          lethalTypes: lethalInfo().types, lethalIds: lethalInfo().ids, enemies: enemies.length,
          fx: rd(() => forceFields(w)), portalTypes: rd(() => portalTypes(w)) || [], pf: rd(() => platforms(w)) || [],
-         kb: kb, cam_bounds: k ? k.cam_bounds : null, view_half: k ? k.view_half : null }, tiles);
+         kb: kb, cam_bounds: k ? k.cam_bounds : null, view_half: k ? k.view_half : null,
+         lzp: lasers.length ? rd(() => laserParams(w)) : undefined }, tiles);
   waitGo();                                          // Python builds the reward paths now
   return true;
 }
@@ -467,6 +468,31 @@ function laserRows() {
             on === 1 && len > 0 ? [[3, r2(x0), r2(y0), r2(x1), r2(y1), 0]] : []];
   });
 }
+// per laser, now (exchange's "lz", in the lasers' order = their "laser<entry>" ids in lethalInfo): [state (+8: 0 off,
+// 2 wait, 1 on = kills), timer (+4, float s, counts up), piece angle (+0x2c, radians, whole turns kept), piece
+// animation time (+0x30)] (rules.md 1.3). null fields: unreadable.
+function laserState() {
+  return lasers.map(l => {
+    const pc = l.piece, ok = pc && !pc.isNull();
+    return [rd(() => l.a.add(8).readS32()), rd(() => l.a.add(4).readFloat()),
+            ok ? rd(() => pc.add(0x2c).readFloat()) : null, ok ? rd(() => pc.add(0x30).readFloat()) : null];
+  });
+}
+// once per level (info "lzp", and a frame's "lzp" when the lasers were rebuilt): the wait animation's length
+// (world +0x2fd0) and per laser {id, piece (address: the eye's lethal id), kind (+0xc: 1 homing, 0 plain), x, y
+// (piece +0x14/+0x18: the eye centre, the beam's start), flip ((+0x10 >> 10) & 3: 1 / 3 turn the beam round),
+// angle (+0x2c), params: piece +0x34, +0x38, +0x3c (off time s), +0x40 (on time s) as floats, +0x44 raw u32,
+// +0x48 s32 (the homing turn divisor)} (rules.md 1)
+function laserParams(w) {
+  return { wait_len: rd(() => w.add(0x2fd0).readFloat()), lasers: lasers.map(l => {
+    const pc = l.piece, ok = pc && !pc.isNull();
+    const f = o => ok ? rd(() => pc.add(o).readFloat()) : null;
+    return { id: 'laser' + l.a, piece: ok ? pc.toString() : null, kind: rd(() => l.a.add(0xc).readS32()),
+             x: f(0x14), y: f(0x18), flip: ok ? rd(() => (pc.add(0x10).readU16() >> 10) & 3) : null, angle: f(0x2c),
+             params: [f(0x34), f(0x38), f(0x3c), f(0x40), ok ? rd(() => pc.add(0x44).readU32()) : null,
+                      ok ? rd(() => pc.add(0x48).readS32()) : null] };
+  }) };
+}
 let laserProbe = 0, laserLast = '';
 function probeLasers() {                             // the raw entries on the first frames and whenever they change
   if (!lasers.length) return;
@@ -492,29 +518,85 @@ function probeEnemies() {
 }
 // Shots (thrown saws, missiles): not pieces. Each shooter / launcher is an entity in the world's array
 // (u16 count +0x2c30, pointer +0x2c40, 0x9d4 bytes each; +0 its piece, +0x14 kind) with 10 shot slots of
-// 0xf8 bytes: position +0xa8/+0xac, state +0xfc (0 = flying, the only state that kills). Radius per kind
-// (world +0x2f20 kinds 0/3, +0x2f40 kind 1, +0x2f60 kind 2, +0x2fb8 kind 4) x the piece's scale
-// (FUN_004cd350 tests exactly these). [[id, x, y, radius], ...] of the flying ones.
-const SHOT_R = { 0: 0x2f20, 3: 0x2f20, 1: 0x2f40, 2: 0x2f60, 4: 0x2fb8 };
+// 0xf8 bytes: position +0xa8/+0xac, velocity +0xc0/+0xc4, state +0xfc (0 = flying, the only state that kills).
+// Radius per kind (world +0x2f20 kinds 0/3, +0x2f40 kind 1, +0x2f60 kind 2, +0x2fb8 kind 4) x the piece's scale
+// (FUN_004cd350 tests exactly these); kind 5 (launcher2's missile2, analysis/reactive_hazards_20261117/rules.md
+// 2.4) has no case in that switch: the default radius 1.0 x the piece's scale (null below: no world offset).
+// shots(w): [[[id, x, y, radius], ...] of the flying ones (id = entity x 10 + slot), then the missile shrapnel
+// (shrapnel(): ids SHRAP_ID + element), and [[kind, vx, vy], ...] in the same order (null when there is none)].
+const SHOT_R = { 0: 0x2f20, 3: 0x2f20, 1: 0x2f40, 2: 0x2f60, 4: 0x2fb8, 5: null };
 function shots(w) {
   const out = [];
+  let ext = null;
   const n = w.add(0x2c30).readU16();
-  if (!n || n > 64) return out;
-  const arr = w.add(0x2c40).readPointer();
-  if (arr.isNull()) return out;
-  for (let i = 0; i < n; i++) {
-    const e = arr.add(i * 0x9d4), kind = e.add(0x14).readS32();
-    const ro = SHOT_R[kind];
-    if (ro === undefined) continue;
-    const pc = e.readPointer();
-    const r = w.add(ro).readFloat() * (pc.isNull() ? 1 : Math.abs(pc.add(0x24).readFloat() || 1));
-    for (let j = 0; j < 10; j++) {
-      const o = e.add(j * 0xf8);
-      if (o.add(0xfc).readU32() !== 0) continue;
-      out.push([i * 10 + j, o.add(0xa8).readFloat(), o.add(0xac).readFloat(), r]);
+  const arr = n && n <= 64 ? w.add(0x2c40).readPointer() : null;
+  if (arr && !arr.isNull()) {
+    for (let i = 0; i < n; i++) {
+      const e = arr.add(i * 0x9d4), kind = e.add(0x14).readS32();
+      if (!Object.prototype.hasOwnProperty.call(SHOT_R, kind)) continue;
+      const ro = SHOT_R[kind];
+      const pc = e.readPointer();
+      const r = (ro === null ? 1.0 : w.add(ro).readFloat()) * (pc.isNull() ? 1 : Math.abs(pc.add(0x24).readFloat() || 1));
+      for (let j = 0; j < 10; j++) {
+        const o = e.add(j * 0xf8);
+        if (o.add(0xfc).readU32() !== 0) continue;
+        const x = o.add(0xa8).readFloat(), y = o.add(0xac).readFloat();
+        const vx = o.add(0xc0).readFloat(), vy = o.add(0xc4).readFloat();
+        out.push([i * 10 + j, x, y, r]);
+        (ext || (ext = [])).push([kind, vx, vy]);
+      }
     }
   }
+  const sp = rd(() => shrapnel(w));                  // a failure there never loses the shots
+  if (sp) for (const [row, x] of sp) { out.push(row); (ext || (ext = [])).push(x); }
+  return [out, ext];
+}
+// Missile shrapnel (rules.md 2.4: FUN_004d30a0 adds 6 per missile2 wall hit to the world's array at +0x2c80: u16
+// count +0x2c98, data pointer +0x2ca8, 0xe0 bytes each; straight at 300 units/s, removed on the first tile; a
+// circle of radius 10 kills, FUN_004c7e50). Sent as shots of kind SHRAP_KIND (not a game launcher kind) with ids
+// SHRAP_ID + element index and radius SHRAP_R. The element's position / velocity offsets are not decoded
+// (rules.md does not give them): they are found live (shrapCalibrate: the float pair that moves 300 x dt between two
+// frames and the pair that is that velocity), reported once as a debug message, and nothing is sent before that.
+const SHRAP_KIND = 16, SHRAP_ID = 9000, SHRAP_R = 10, SHRAP_SIZE = 0xe0, SHRAP_SPEED = 300;
+let shrapPos = -1, shrapVel = -1, shrapPrev = null, shrapProbe = 0, shrapFail = 0;
+function shrapnel(w) {
+  const n = w.add(0x2c98).readU16();
+  if (!n || n > 64) { shrapPrev = null; return null; }
+  const a = w.add(0x2ca8).readPointer();
+  if (a.isNull()) { shrapPrev = null; return null; }
+  if (shrapPos < 0) { shrapCalibrate(a, n); if (shrapPos < 0) return null; }
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const e = a.add(i * SHRAP_SIZE);
+    const x = e.add(shrapPos).readFloat(), y = e.add(shrapPos + 4).readFloat();
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const vx = shrapVel >= 0 ? e.add(shrapVel).readFloat() : 0, vy = shrapVel >= 0 ? e.add(shrapVel + 4).readFloat() : 0;
+    out.push([[SHRAP_ID + i, x, y, SHRAP_R], [SHRAP_KIND, vx, vy]]);
+  }
   return out;
+}
+function shrapCalibrate(a, n) {                      // only while not calibrated and shrapnel is alive (rare)
+  const cur = [];
+  for (let i = 0; i < n; i++) cur.push(new Float32Array(a.add(i * SHRAP_SIZE).readByteArray(SHRAP_SIZE)));
+  if (shrapProbe < 3) { shrapProbe++; send({ ev: 'debug', msg: `shrapnel frame ${frame}: ${n} live, element 0 floats ` + JSON.stringify(Array.from(cur[0]).map(r2)) }); }
+  const prev = shrapPrev;
+  shrapPrev = cur;
+  if (!prev || prev.length !== n) return;
+  const dt = (stepMs() || 16.667) / 1000, d = SHRAP_SPEED * dt, F = SHRAP_SIZE / 4;
+  const vel = [];                                    // float pairs of speed SHRAP_SPEED in every element
+  for (let q = 0; q + 1 < F; q++) if (cur.every(c => Math.abs(Math.hypot(c[q], c[q + 1]) - SHRAP_SPEED) < 3)) vel.push(q);
+  const pos = [];                                    // pairs that moved by that velocity x dt since the last frame
+  for (let o = 0; o + 1 < F; o++) {
+    const q = vel.find(q => q !== o && cur.every((c, i) => Math.abs(c[o] - prev[i][o] - c[q] * dt) < 0.05 * d &&
+                                                       Math.abs(c[o + 1] - prev[i][o + 1] - c[q + 1] * dt) < 0.05 * d));
+    if (q !== undefined) pos.push([o, q]);
+  }
+  // the previous-position copy moves the same way one frame behind: keep the pair no other one lags behind
+  const lead = pos.filter(([o]) => !pos.some(([p]) => p !== o && cur.every((c, i) => c[o] === prev[i][p] && c[o + 1] === prev[i][p + 1])));
+  if (!lead.length) { if (pos.length === 0 && shrapFail++ < 3) send({ ev: 'debug', msg: `shrapnel: no moving position pair found yet (${n} live, ${vel.length} velocity pairs)` }); return; }
+  shrapPos = lead[0][0] * 4;
+  shrapVel = lead[0][1] * 4;
+  send({ ev: 'debug', msg: `shrapnel layout found: position +0x${shrapPos.toString(16)}, velocity +0x${shrapVel.toString(16)} (candidates ${JSON.stringify(lead.map(([o, q]) => [o * 4, q * 4]))})` });
 }
 // Fans and orbs (FUN_004c40e0, run in each character's update):
 //   fans: array at world+0x2cb4 (u16 count +0x2ccc, data pointer +0x2cdc, 0x24 bytes each): +0 the fan
@@ -699,7 +781,10 @@ function exchange(w, gap) {                         // lockstep: send states, wa
   const t0 = Date.now();
   const changed = sig(pieces(w)) !== pieceSig;
   if (changed) buildLethal(w);                       // pieces came or went: the hazard list changes
-  const msg = { ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards(), sh: rd(() => shots(w)) || [] };
+  const shx = rd(() => shots(w));                   // [shots, their [kind, vx, vy] or null]
+  const msg = { ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards(), sh: shx ? shx[0] : [] };
+  if (shx && shx[1] && shx[1].length === shx[0].length) msg.shx = shx[1];
+  if (lasers.length) msg.lz = laserState();          // every frame on a level with lasers (rules.md 1.3)
   const st = stepMs();                               // the game's time step for this update (from its timer)
   msg.dt = st !== null ? +st.toFixed(3) : gap;
   if (gap !== undefined) msg.gap = gap;              // real ms since the last step
@@ -707,6 +792,7 @@ function exchange(w, gap) {                         // lockstep: send states, wa
   const pf = rd(() => platforms(w));
   if (pf && pf.length) msg.pf = pf;                  // moving platforms: every frame
   if (changed) msg.lt = lethalInfo();
+  if (changed && lasers.length) msg.lzp = rd(() => laserParams(w));   // the lasers were rebuilt with the pieces
   probeEnemies();
   probeLasers();
   if (kbPending) { msg.kb = kbPending; kbPending = null; }   // the kill box moved (rare)
@@ -798,7 +884,7 @@ function endWave(why) {
   // on the wave's last update (no frame message shows it) has its exact position. Read failures never stop
   // the wave from ending.
   send({ ev: 'wave_end', wave, frame, why, status: status.slice(), finish: finishFrame.slice(),
-         s: rd(() => agents.map(agentState)) || [], hz: rd(hazards) || [], sh: rd(() => shots(world())) || [] });
+         s: rd(() => agents.map(agentState)) || [], hz: rd(hazards) || [], sh: (rd(() => shots(world())) || [[]])[0] });
   waitGo();                                          // Python learns (PPO) now
   frame = 0;
   pendingWave = true;                                // the next wave starts on a following frame
@@ -888,13 +974,27 @@ Interceptor.replace(DRAW, new NativeCallback(function (drawer, ch, sprite, flag)
 
 // ---- reward paths (from Python), drawn into the game as thick lines through Direct3D 9 ---------------------
 // The device is the first field of the graphics object [0x709068] (FUN_00627850 creates it). The game draws
-// with vertex shaders whose constants c0..c3 hold world -> clip. FUN_004ac4c0 renders the scene layer by
-// layer (into separate render targets, composited later); right after each layer's geometry is drawn
-// (0x4ac6a9) c0..c3 hold the plain camera matrix, which is kept. At Present the paths are drawn onto the
+// with vertex shaders whose constants c0..c3 hold world -> clip. Capture their first camera matrix from
+// SetVertexShaderConstantF each frame: the old scene-layer point 0x4ac6a9 is skipped by later levels' render
+// path (observed after 4-9). At Present the paths are drawn onto the
 // back buffer: each world point through that matrix to the screen, then pre-transformed coloured triangles
 // (no shaders, no texture), with every device state used saved before and restored after.
 let paths = [];                                      // [{pts: [[x, y], ...], col: 0xAARRGGBB, w: px, dash: bool}]
-function onPaths(m) { paths = m.payload || []; recv('path', onPaths); }
+const overlaySeen = new Set();
+function overlayReport(stage, extra) {
+  if (overlaySeen.has(stage)) return;
+  overlaySeen.add(stage);
+  send(Object.assign({ ev: 'overlay', stage }, extra || {}));
+}
+function onPaths(m) {
+  paths = m.payload || [];
+  if (paths.length) {
+    overlayReport('paths received', { paths: paths.length });
+    try { installPathHooks(d3d()); }
+    catch (e) { send({ ev: 'error', msg: 'paths: ' + e.message }); }
+  }
+  recv('path', onPaths);
+}
 recv('path', onPaths);
 const GFX = img(0x709068);
 let dev = null, D = null;
@@ -911,7 +1011,7 @@ function d3d() {
           getTSS: V(66, ['uint', 'uint', 'pointer']), setTSS: V(67, ['uint', 'uint', 'uint']),
           dpup: V(83, ['uint', 'uint', 'pointer', 'uint']),
           setDecl: V(87, ['pointer']), getDecl: V(88, ['pointer']), setFVF: V(89, ['uint']), getFVF: V(90, ['pointer']),
-          setVS: V(92, ['pointer']), getVS: V(93, ['pointer']), getC: V(95, ['uint', 'pointer', 'uint']),
+          setVS: V(92, ['pointer']), getVS: V(93, ['pointer']), constants: vt.add(4 * 94).readPointer(),
           setSS: V(100, ['uint', 'pointer', 'uint', 'uint']), getSS: V(101, ['uint', 'pointer', 'pointer', 'pointer']),
           setPS: V(107, ['pointer']), getPS: V(108, ['pointer']), present: vt.add(4 * 17).readPointer(),
           getBB: V(18, ['uint', 'uint', 'uint', 'pointer']), setRT: V(37, ['uint', 'pointer']), getRT: V(38, ['uint', 'pointer']),
@@ -925,7 +1025,7 @@ function release(p) { if (p && !p.isNull()) new NativeFunction(p.readPointer().a
 const RS = [[7, 0], [14, 0], [15, 0], [19, 5], [20, 6], [22, 1], [27, 1], [28, 0], [52, 0], [137, 0], [168, 7],
             [171, 1], [174, 0], [194, 0], [206, 0]];
 const TSS = [[0, 1, 2], [0, 2, 0], [0, 4, 2], [0, 5, 0], [1, 1, 1], [1, 4, 1]];   // stage 0: diffuse only; stage 1 off
-const MAXV = 12000, vbuf = Memory.alloc(MAXV * 20), tmp = Memory.alloc(64), mat = Memory.alloc(64), vpb = Memory.alloc(24);
+const MAXV = 12000, vbuf = Memory.alloc(MAXV * 20), tmp = Memory.alloc(64), vpb = Memory.alloc(24);
 const save = { rs: Memory.alloc(4 * RS.length), tss: Memory.alloc(4 * TSS.length), p: Memory.alloc(32) };
 let nv = 0;
 function quad(ax, ay, bx, by, hw, col) {             // a segment as two triangles, hw pixels each side
@@ -977,7 +1077,9 @@ function drawPaths(d, M) {
     d.setVS(dev, ptr(0)); d.setPS(dev, ptr(0)); d.setTex(dev, 0, ptr(0)); d.setFVF(dev, 0x44);   // XYZRHW | DIFFUSE
     RS.forEach(([k, v]) => d.setRS(dev, k, v));
     TSS.forEach(([st, k, v]) => d.setTSS(dev, st, k, v));
-    d.dpup(dev, 4, nv / 3, vbuf, 20);                // triangle list
+    const result = d.dpup(dev, 4, nv / 3, vbuf, 20); // triangle list
+    if (result < 0) throw new Error('DrawPrimitiveUP HRESULT 0x' + (result >>> 0).toString(16));
+    overlayReport('drawn', { vertices: nv });
   } finally {
     RS.forEach(([k], i) => d.setRS(dev, k, save.rs.add(4 * i).readU32()));
     TSS.forEach(([st, k], i) => d.setTSS(dev, st, k, save.tss.add(4 * i).readU32()));
@@ -989,15 +1091,25 @@ function drawPaths(d, M) {
     [vs, ps, decl, tex, vb].forEach(release);         // the Get* calls added references
   }
 }
-Interceptor.attach(img(0x4ac6a9), function () {    // a scene layer was just drawn: c0..c3 = camera
-  if (camFrame || !ready || !paths.length) return;
-  const d = d3d();
-  if (!d) return;
-  d.getC(dev, 0, mat, 4);
-  const M = Array.from({ length: 16 }, (_, i) => mat.add(4 * i).readFloat());
-  if (Math.abs(M[12]) < 1e-3 && Math.abs(M[13]) < 1e-3 && Math.abs(M[14] - 1) < 0.01 && M[15] > 10) { camM = M; camFrame = true; }
-});
-{ const d0 = d3d(); if (d0) Interceptor.attach(d0.present, { onEnter() {
+let pathPresentHook = null, pathPresentAt = null, pathCameraHook = null, pathConstantsAt = null;
+function installPathHooks(d) {
+  if (!d || (pathPresentAt && pathPresentAt.equals(d.present) && pathConstantsAt.equals(d.constants))) return;
+  if (pathPresentHook) pathPresentHook.detach();
+  if (pathCameraHook) pathCameraHook.detach();
+  pathPresentAt = d.present;
+  pathConstantsAt = d.constants;
+  pathCameraHook = Interceptor.attach(d.constants, { onEnter(a) {
+    if (camFrame || !active || !ready || !paths.length || !a[0].equals(dev) ||
+        a[1].toInt32() !== 0 || a[3].toInt32() < 4) return;
+    const M = Array.from({ length: 16 }, (_, i) => a[2].add(4 * i).readFloat());
+    // Before per-object transforms: the first perspective world camera, not a later sprite or UI matrix.
+    if (M.every(Number.isFinite) && Math.abs(M[12]) < 1e-3 && Math.abs(M[13]) < 1e-3 &&
+        Math.abs(M[14] - 1) < 0.01 && M[15] > 10) {
+      camM = M; camFrame = true; overlayReport('camera ready');
+    }
+  } });
+  pathPresentHook = Interceptor.attach(d.present, { onEnter(a) {
+  if (!a[0].equals(dev)) return;
   const fresh = camFrame;
   camFrame = false;
   if (!active || !ready || !paths.length || !camM || !fresh) return;
@@ -1019,7 +1131,10 @@ Interceptor.attach(img(0x4ac6a9), function () {    // a scene layer was just dra
     d.setVP(dev, vpSave);
     release(old); release(bb);
   }
-} }); }
+  } });
+  overlayReport('device hook ready');
+}
+installPathHooks(d3d());
 
 // ---- HUD: best time on the timer sign; continue past the level-complete screen after S -------------
 const TIMER_TEXT = img(0x702d0c);

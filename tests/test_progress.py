@@ -237,3 +237,36 @@ def test_time_key_legs_add_up_like_v():
     assert pf.T_support[1, 12, 28] == pytest.approx(pf.T_support[2, 12, 28])
     # leg 0 is the way to the left key (8 tiles of floor) plus leg 1 from there
     assert t0 == pytest.approx(8 * FX_GROUND + pf.T_support[1, 9, 12])
+
+
+def test_subcell_time_detects_movement_inside_one_ground_tile():
+    pf = field()
+    x,y = at(17,9)
+    xs = np.array([x-4.,x,x+4.])
+    plain = pf.times(xs,y)
+    smooth = pf.times(xs,y,subcell=True)
+    assert plain[0] == plain[1] == plain[2]
+    assert smooth[0] > smooth[1] > smooth[2]
+    assert smooth[0]-smooth[2] == pytest.approx(8.*FX_GROUND/T)
+    # Both sides of a cell edge agree; ordinary scoring's lookup is unchanged.
+    edge = x+T/2
+    near = pf.times([edge-1e-5,edge+1e-5],y,subcell=True)
+    assert near[0] == pytest.approx(near[1],abs=1e-4)
+
+
+def test_subcell_time_preserves_dead_ends_map_edges_and_wall_fallback():
+    pf = field(hazards=[FACE])
+    assert np.isinf(pf.times([at(4,2)[0]],[at(4,2)[1]],subcell=True)[0])
+    assert np.isinf(pf.times([-1.],[100.],subcell=True)[0])
+    x,y = at(30,8)  # solid floor: preserve the owning lookup's open-neighbour fallback
+    assert pf.times([x],[y+5],subcell=True)[0] == pf.times([x],[y+5])[0]
+
+
+def test_subcell_time_keeps_private_key_legs_and_airborne_phase():
+    pf = field(keys=[at(12,9),at(28,12)],spawn=(20,9),goal=(35,9))
+    x,y = at(6,6)
+    legs=np.array([0,1,2])
+    for vy in (2.,-2.):
+        actual=pf.times(np.full(3,x+3),np.full(3,y+2),legs,False,vy,subcell=True)
+        expected=[pf.times(x+3,y+2,int(leg),False,vy,subcell=True) for leg in legs]
+        assert actual == pytest.approx(expected)

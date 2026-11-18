@@ -124,7 +124,7 @@ DANGER_ALPHA = 120                # K: the outline of where a centre dies round 
 PROGRESS_TICK = 60                # frames to go between the line's ticks
 # the chosen path in its planning mode's colour (plan/planner.py MODES; agent.py MODE_COL in the game)
 MODE_COLORS = {"long-safe": (64, 128, 255), "normal": PLAN, "reflex": (255, 48, 48), "explore": (176, 64, 240),
-               "best-route": (255, 192, 32)}
+               "best-route": (255, 192, 32), "passage": (32, 216, 208), "carrier": (48, 144, 255)}
 
 
 def mode_color(plan: dict) -> tuple:
