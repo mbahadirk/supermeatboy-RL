@@ -601,7 +601,8 @@ def box_base(box_id: str) -> str:
 def identify_level(info: dict, tiles: bytes) -> str | None:
     """Name of the level the game shows when attached mid-level: the extracted level file (tools/smbl_extract.py)
     with the same size, origin and collision tiles."""
-    d = os.path.join(HERE, "imported", "smb_static")
+    from levels_smb import IMPORT_DIR
+    d = IMPORT_DIR
     if not os.path.isdir(d):
         return None
     t = np.frombuffer(tiles, dtype="<u4").reshape(info["H"], info["W"]) & 0xff

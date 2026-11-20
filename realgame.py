@@ -7,6 +7,9 @@ Start the game, enter a level, then from the project root:
     python smbrl/realgame.py --agents 40 --load smbrl/runs/real_4-1   # continue a saved agent
     python smbrl/realgame.py --agents 8 --test               # no learning: scripted inputs (checks the mod)
 
+--realtest: after the first native A+, train five more waves, then save the best A+ and advance.
+Requires the extracted chapters.json A+ pars; cannot be combined with scripted --test.
+
 Waves: all agents spawn together after the level (saws, platforms, crumble blocks) is reset; each has one
 life and waits where it died; the next wave starts when every agent is dead or finished, when --end-after
 agents (default 5) have finished, or after --wave-seconds. The camera follows the agent furthest along its
@@ -56,7 +59,7 @@ there (the last two inputs).
 
 The monitor window (monitor.py; --no-monitor to skip) shows the level, routes and agents, the leader's
 policy output, learning curves (finishes, progress, fitness, time, hops, losses, entropy, KL, explained
-variance) and the network (the previous wave's best agent). Its sliders set the number of agents and how
+variance). Its sliders set the number of agents and how
 they are split over the routes (from the next wave).
 
 Saved in runs/<name>/: model.pt (latest), levels/<level>/best.pt + best.json (fastest finish).
@@ -70,7 +73,10 @@ import json
 import time
 import argparse
 import threading
+import subprocess
 from collections import deque
+from realtest import APlusProgress,backup_save,locate_save
+from levels_smb import a_plus_time
 
 import numpy as np
 import torch
@@ -359,6 +365,8 @@ class PPO:
 # ---- session --------------------------------------------------------------------------------------
 class Trainer:
     def __init__(self, args):
+        if getattr(args,'realtest',False) and args.test:
+            raise ValueError('--realtest requires PPO actions; it cannot be combined with --test')
         self.args = args
         self.run_dir = os.path.join(HERE, "runs", args.name)
         os.makedirs(self.run_dir, exist_ok=True)
@@ -384,12 +392,15 @@ class Trainer:
         self.phase, self.best_route, self.leader, self.wave_no, self.frame_no = "finish", None, 0, 0, 0
         self.leader_probs, self.leader_value = None, None
         self.history, self.updates = deque(maxlen=400), deque(maxlen=400)
-        self.best_net = None             # the network and the previous wave's best agent's last input (monitor)
         self.game_paths_on = True
         # set from the monitor: agents per wave (applied from the next wave) and route shares (None = automatic)
         self.pool = max(GAME_POOL, min(args.agents, MAX_AGENTS))   # characters per level (game's 40 + extra)
         self.want_agents = max(1, min(args.agents, self.pool))
         self.path_share = None
+        self.realtest_finishing=False
+        self.realtest_progress=APlusProgress()
+        self.save_backup=None
+        self.backup_root=os.path.join(HERE,'backups')
 
     # level / waves
     def on_info(self, info: dict, tiles: bytes):
@@ -399,6 +410,11 @@ class Trainer:
         if info["name"] in (None, "unknown"):
             info["name"] = identify_level(info, tiles) or "unknown"
         self.level = Level(info, tiles)
+        self.realtest_finishing=False
+        self.realtest_progress=APlusProgress()
+        if getattr(self.args,'realtest',False) and a_plus_time(self.level.name) is None:
+            print(f'[realtest] {self.level.name}: A+ par unavailable; automatic save/advance disabled '
+                  '(configure SMBRL_IMPORTED with extracted chapters.json)',flush=True)
         self.best_time = None
         self.phase, self.best_route = "finish", None
         self.paths, self.hz_start, self.moving, self.sweep, self.path_dirty = [], None, set(), set(), True
@@ -756,7 +772,6 @@ class Trainer:
                 self.ppo.add(tr, lv_)
         rets = [sum(tr["r"]) for tr in self.traj if tr["r"]]
         hops = 60.0 * sum(self.hops) / max(1, sum(self.frames))         # hops per agent-second
-        self.snapshot_best(m["wave"])
         fin = [(f, i) for i, (st, f) in enumerate(zip(m["status"], m["finish"])) if st == 2 and f >= 0]
         dead = sum(1 for st in m["status"] if st == 1)
         line = f"[wave {m['wave']}] {lv.name if lv else '?'}: {len(fin)}/{n} finished, {dead} dead"
@@ -909,20 +924,6 @@ class Trainer:
     def agent_fitness(self, i: int, won: bool, dead: bool) -> float:
         return fitness(won, dead, self.frac[i] or 0.0, 1.0, self.frames[i])
 
-    def snapshot_best(self, wave: int):
-        """The policy network as it played this wave (before learning from it) and the last input of the agent
-        with the best fitness, for the monitor's network view."""
-        cand = [i for i in range(len(self.fit)) if self.fit[i] is not None and self.traj[i]["o"]]
-        if not cand:
-            return
-        k = max(cand, key=lambda i: self.fit[i])
-        with torch.no_grad():
-            layers = [self.policy.pi[0], self.policy.pi[2], self.policy.pi[4]]
-            self.best_net = {"wave": wave, "agent": k, "fit": self.fit[k], "path": self.path_of[k] if self.paths else None,
-                             "obs": np.array(self.traj[k]["o"][-1], np.float32),
-                             "W": [l.weight.detach().numpy().copy() for l in layers],
-                             "b": [l.bias.detach().numpy().copy() for l in layers]}
-
     def set_agents(self, n: int):
         self.want_agents = max(1, min(int(n), self.pool))
         print(f"[monitor] {self.want_agents} agents from the next wave", flush=True)
@@ -948,6 +949,27 @@ class Trainer:
                        "fitness": self.fit[agent], "actions": self.acts[agent]}, f)
         print(f"[best] {level}: {t:.2f}s -> {d}", flush=True)
 
+    def prepare_realtest(self,m):
+        """Called after PPO wave processing, before replying to the native between-wave wait."""
+        if (not getattr(self.args,'realtest',False) or self.realtest_finishing or self.stopping or self.level is None):
+            return None
+        candidate=self.realtest_progress.observe(self.level.name,m)
+        if self.realtest_progress.first_wave is not None:
+            done=min(5,m['wave']-self.realtest_progress.first_wave)
+            print(f'[realtest] A+ earned; extra waves {done}/5',flush=True)
+        if candidate is None:return None
+        try:
+            if self.save_backup is None:self.save_backup=backup_save(locate_save(),self.backup_root)
+            self.save()
+            with open(os.path.join(self.run_dir,'realtest.jsonl'),'a',encoding='utf-8') as out:
+                out.write(json.dumps(candidate)+'\n')
+        except (OSError,subprocess.SubprocessError) as exc:
+            print(f'[realtest] A+ save/advance skipped: {exc}',flush=True)
+            return None
+        self.realtest_finishing=True
+        print(f"[realtest] {candidate['level']}: A+ {candidate['seconds']:.3f}s; saving and advancing",flush=True)
+        return candidate
+
     # frida
     def on_message(self, msg, data):
         if msg["type"] == "error":
@@ -956,6 +978,7 @@ class Trainer:
         p = msg["payload"]
         ev = p.get("ev")
         reply = None
+        finish = None
         try:
             if ev == "frame":
                 reply = self.on_frame(p)
@@ -963,6 +986,7 @@ class Trainer:
                 self.on_info(p, data)
             elif ev == "wave_end":
                 self.on_wave_end(p)
+                finish=self.prepare_realtest(p)
             elif ev == "level":
                 print(f"[game] level {p['name']}", flush=True)
                 self.level = None
@@ -985,6 +1009,10 @@ class Trainer:
             reply = None
         if ev in ("info", "wave_end"):         # the game waits for this between waves / at the level start
             go = {"agents": self.want_agents}
+            if getattr(self.args,'realtest',False) and self.level is not None:
+                go['realtest_par']=a_plus_time(self.level.name)
+                if ev == 'info':go['level_name']=self.level.name
+            if finish is not None:go['finish']=finish
             if ev == "info" and self.level is not None and self.level.keys:
                 go["keys"] = [list(k) for k in self.level.keys]
                 go["locks"] = self.level.lock_groups
@@ -1010,6 +1038,7 @@ class Trainer:
         cfg = {"agents": self.want_agents, "pool": self.pool, "wave_frames": int(self.args.wave_seconds * HZ),
                "finish_frames": 60, "debug": bool(self.args.debug_spawn),
                "finish_quota": max(0, self.args.end_after)}
+        cfg['realtest']=bool(getattr(self.args,'realtest',False))
         with open(JS, encoding="utf-8") as f:
             src = f.read().replace("__CONFIG__", json.dumps(cfg))
         try:
@@ -1072,7 +1101,7 @@ class Trainer:
             print(f"saved in {self.run_dir}", flush=True)
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--agents", type=int, default=40, help=f"agents per wave (1-{MAX_AGENTS}; above {GAME_POOL}, extra Meat Boys are built "
                                                           "at each level load)")
@@ -1084,11 +1113,18 @@ def main():
     ap.add_argument("--load", default=None, help="run folder or .pt to continue from")
     ap.add_argument("--name", default=None, help="run folder name under runs/ (default real_<time>)")
     ap.add_argument("--test", action="store_true", help="scripted inputs, no learning (checks the mod)")
+    ap.add_argument('--realtest',action='store_true',help='after the first native A+, train five more waves, save the best A+ and advance')
     ap.add_argument("--no-monitor", action="store_true", help="no monitor window")
     ap.add_argument("--shape-inputs", action="store_true",
                     help="append half-block/slope open-direction maps; widens older PPO policies")
     ap.add_argument("--debug-spawn", action="store_true", help=argparse.SUPPRESS)
+    return ap
+
+
+def main():
+    ap=build_parser()
     args = ap.parse_args()
+    if args.realtest and args.test:ap.error('--realtest cannot be combined with --test')
     args.paths = max(1, min(args.paths, 3))
     args.name = args.name or ("real_test" if args.test else time.strftime("real_%Y%m%d-%H%M%S"))
     Trainer(args).run()

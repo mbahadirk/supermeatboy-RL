@@ -112,7 +112,7 @@ def test_no_model_planner_or_online_dependency_even_when_importing():
     forbidden = {'wm', 'mpc', 'plan', 'agent'}
     for name in forbidden:
         assert not (ROOT / name).exists() and not (ROOT / (name + '.py')).exists()
-    for path in [ROOT / 'realgame.py', ROOT / 'realpath.py', ROOT / 'monitor.py', *ROOT.glob('game/*.py')]:
+    for path in [ROOT / 'realgame.py', ROOT / 'realtest.py', ROOT / 'levels_smb.py', ROOT / 'realpath.py', ROOT / 'monitor.py', *ROOT.glob('game/*.py')]:
         for n in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
             if isinstance(n, ast.Import):
                 assert not any(a.name.split('.')[0] in forbidden for a in n.names)

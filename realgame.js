@@ -62,6 +62,8 @@ rpc.exports = { shutdown() { if (active) { active = false; releaseMain(); } retu
 let curName = null, main = null, settle = 0, agents = [], agentSet = new Set(), ready = false;
 let crowd = [], wantAgents = CFG.agents;           // all usable pool characters; the first wantAgents are agents
 let wave = 0, frame = 0, status = [], held = [], prevJump = [], finishFrame = [];
+let finishSeconds = [], realtestPar = null, finishTime = 999.99;
+let realtestBest = null, realtestFirstWave = null;
 let curAgent = -1, leader = -1, best = null, finishing = 0, finishRequested = false, hud = null;
 let goalPieces = [];
 
@@ -74,6 +76,9 @@ Interceptor.attach(img(0x4e9020), { onEnter(a) {
   curName = n; main = null; settle = 0; ready = false; agents = []; crowd = []; agentSet = new Set(); pendingWave = false; holdFrames = 0;
   keyPos = []; keyLocks = []; lockWord = new Map(); lockOpen = new Map(); keysOf = [];
   finishing = 0; finishRequested = false; best = null; leader = -1; wave = 0; frame = 0;
+  realtestPar = null; finishTime = 999.99;
+  realtestBest = null; realtestFirstWave = null;
+  completeFrames = 0; pressA = 0;
   tilemap = null; levelOY = null; levelBox = null; paths = []; prevTiles = null; kb = null; kbShown = false; kbPending = null;   // the new level has its own tile map, pool and paths
   send({ ev: 'level', name: n });
 } });
@@ -671,6 +676,7 @@ function releaseMain() {
 function resetArrays() {
   status = agents.map(() => 1); held = agents.map(() => [0, 0, 0, 0]); prevJump = agents.map(() => false);
   finishFrame = agents.map(() => -1);
+  finishSeconds = agents.map(() => null);
 }
 function startWave() {
   const want = Math.max(1, Math.min(wantAgents, crowd.length));
@@ -693,7 +699,9 @@ function startWave() {
     c.add(0x7b4).writeU32(0x50081 | (fl & 0x10000000));
     setState(c, 0);
     status[i] = 0; held[i] = [0, 0, 0, 0]; finishFrame[i] = -1; keysOf[i] = 0;
+    finishSeconds[i] = null;
   });
+  if (CFG.realtest && hud) hud.add(0x384).writeFloat(0); // native level clock starts with this attempt
   send({ ev: 'wave', wave });
 }
 
@@ -739,6 +747,16 @@ function waitGo() {                                // Python's answer may carry 
   recv('go', m => {
     if (m.payload && m.payload.agents) wantAgents = m.payload.agents;
     if (m.payload && m.payload.keys) onKeys(m.payload);
+    if (CFG.realtest && m.payload) {
+      // Mid-level attachment has no native load event; Python identifies the observed tile map.
+      if (wave === 0 && (curName === null || curName === 'unknown') &&
+          typeof m.payload.level_name === 'string' && m.payload.level_name !== 'unknown') {
+        curName = m.payload.level_name;
+      }
+      const p = m.payload.realtest_par;
+      realtestPar = typeof p === 'number' && Number.isFinite(p) && p > 0 ? p : null;
+      if (m.payload.finish) finishFromWave(m.payload.finish);
+    }
   }).wait();
   afterWait(t0);
 }
@@ -838,8 +856,10 @@ function outOfLevel(x, y) {
   return levelBox !== null && (x < levelBox[0] - OUT_SIDE || x > levelBox[1] + OUT_SIDE || y > levelBox[2] + OUT_SIDE);
 }
 function endWave(why) {
-  send({ ev: 'wave_end', wave, frame, why, status: status.slice(), finish: finishFrame.slice() });
+  send({ ev: 'wave_end', wave, frame, why, status: status.slice(), finish: finishFrame.slice(),
+         finish_seconds: finishSeconds.slice() });
   waitGo();                                          // Python learns (PPO) now
+  if (finishRequested) return;                       // native finish owns the transition, no extra wave reset
   frame = 0;
   pendingWave = true;                                // the next wave starts on a following frame
 }
@@ -861,7 +881,11 @@ function goalHook(orig) {
       // a finish counts only next to a goal piece (a stale contact elsewhere must not set a record)
       const c = agents[curAgent], x = c.add(0x84).readFloat(), y = c.add(0x88).readFloat();
       const near = goalPieces.some(([gx, gy]) => Math.hypot(gx - x, gy - y) < 60);
-      if (status[curAgent] === 0 && near) { status[curAgent] = 2; finishFrame[curAgent] = frame; }
+      if (status[curAgent] === 0 && near) {
+        status[curAgent] = 2; finishFrame[curAgent] = frame;
+        finishSeconds[curAgent] = CFG.realtest ? nativeFinishSeconds() : null;
+        rememberFinish(curAgent);
+      }
       else if (!near && (badFinish++ % 50) === 0) send({ ev: 'debug', msg: `ignored a level end for agent ${curAgent} at (${x.toFixed(0)}, ${y.toFixed(0)}), frame ${frame}: no goal near` });
       return;
     }
@@ -885,12 +909,15 @@ Interceptor.replace(UPD, new NativeCallback(function (self) {
   if (!main || !self.equals(main)) { updateChar(self); return; }
   const st = rd(() => self.add(0x7b0).readU32());
   if (finishing > 0) {                              // S: walk into the goal through the game's own update
+    if (finishing === CFG.finish_frames) send({ ev: 'debug', msg: `finish start: main state ${st}, mode ${self.add(0x9e0).readU32()}, HUD ${hud ? hud.add(0x38c).readS32() : '?'}` });
     finishing--;
-    if (hud) hud.add(0x384).writeFloat(999.99);     // keep this forced finish out of the player's records
+    if (hud) hud.add(0x384).writeFloat(finishTime); // actual A+ time only after a backed-up realtest directive
     if (goalPieces.length) { self.add(0x84).writeFloat(goalPieces[0][0]); self.add(0x88).writeFloat(goalPieces[0][1]); }
     updateChar(self);
+    if (finishing === 0) send({ ev: 'debug', msg: `finish frames done: main state ${self.add(0x7b0).readU32()}, HUD ${hud ? hud.add(0x38c).readS32() : '?'}` });
     return;
   }
+  if (finishRequested) { updateChar(self); return; } // native result/replay/continue owns control until level load
   if (st === 16 || settle < 30) { if (st !== 16) settle++; updateChar(self); return; }
   if (!ready) {
     try { ready = setupAgents(); } catch (e) { send({ ev: 'error', msg: 'setup: ' + e.message }); ready = false; }
@@ -898,6 +925,7 @@ Interceptor.replace(UPD, new NativeCallback(function (self) {
     return;                                         // the level info wait: the first wave starts on a later frame
   }
   stepAgents();
+  if (finishRequested) return;                    // a between-wave reply may have just handed control over
   const L = agents[leader] || agents[0];
   if (L) { camX = L.add(0x84).readFloat(); camY = L.add(0x88).readFloat(); }
   for (const o of [0x84, 0x81c, 0x824]) { self.add(o).writeFloat(camX); self.add(o + 4).writeFloat(camY); }
@@ -1054,11 +1082,16 @@ Interceptor.attach(img(0x4ac6a9), function () {    // a scene layer was just dra
 
 // ---- HUD: best time on the timer sign; continue past the level-complete screen after S -------------
 const TIMER_TEXT = img(0x702d0c);
-const fmtBest = Memory.allocUtf16String('BEST %.02f'), fmtNone = Memory.allocUtf16String('BEST --.--');
+let fmtWave = -1, fmtBest = null, fmtNone = null;
 function onBest(m) { best = m.payload; recv('best', onBest); }
 recv('best', onBest);
 Interceptor.attach(img(0x45c220), { onEnter(a) {
   if (!ready || !a[0].equals(TIMER_TEXT.readPointer())) return;
+  if (fmtWave !== wave) {
+    fmtBest = Memory.allocUtf16String(`BEST %.02f | WAVE ${wave}`);
+    fmtNone = Memory.allocUtf16String(`BEST --.-- | WAVE ${wave}`);
+    fmtWave = wave;
+  }
   if (best === null) { a[1] = fmtNone; return; }
   a[1] = fmtBest;
   this.context.esp.add(12).writeDouble(best);
@@ -1068,7 +1101,10 @@ Interceptor.attach(img(0x4a1810), { onEnter() {
   hud = this.context.ecx;
   const st = rd(() => hud.add(0x38c).readS32());
   if (st === 13 && finishRequested) {
-    if (++completeFrames === 60) { pressA = 8; send({ ev: 'continue', level: curName }); }
+    completeFrames++;
+    if (completeFrames >= 60 && (completeFrames - 60) % 120 === 0) {
+      pressA = 8; send({ ev: 'continue', level: curName });
+    }
   } else completeFrames = 0;
 } });
 const xinput = ['XINPUT9_1_0.dll', 'xinput1_3.dll', 'XInput1_4.dll'].map(m => rd(() => Process.getModuleByName(m))).find(m => m);
@@ -1084,7 +1120,32 @@ if (xinput) Interceptor.attach(xinput.findExportByName('XInputGetState'), {
     r.replace(ptr(0));
   },
 });
-function onFinish() { if (ready && main) { finishRequested = true; finishing = CFG.finish_frames; } recv('finish', onFinish); }
+function nativeFinishSeconds() {
+  const t = hud ? rd(() => hud.add(0x384).readFloat()) : null;
+  return typeof t === 'number' && Number.isFinite(t) && t > 0 && t < 999.99 ? t : null;
+}
+function rememberFinish(agent) {
+  const seconds = finishSeconds[agent];
+  if (!CFG.realtest || realtestPar === null || !(seconds > 0 && seconds <= realtestPar)) return;
+  if (realtestFirstWave === null) realtestFirstWave = wave;
+  if (realtestBest === null || seconds < realtestBest.seconds) {
+    realtestBest = {level: curName, wave, agent, seconds};
+  }
+}
+function requestFinish(t) {
+  if (!ready || !main || finishRequested) return false;
+  finishTime = typeof t === 'number' && Number.isFinite(t) && t > 0 && t < 999.99 ? t : 999.99;
+  finishRequested = true; finishing = CFG.finish_frames;
+  return true;
+}
+function finishFromWave(d) {
+  if (!CFG.realtest || realtestPar === null || realtestBest === null || d.level !== curName ||
+      d.wave !== realtestBest.wave || d.agent !== realtestBest.agent || d.seconds !== realtestBest.seconds ||
+      d.first_wave !== realtestFirstWave || d.after_wave !== wave || wave < realtestFirstWave + 5 ||
+      !(d.seconds > 0 && d.seconds <= realtestPar)) return false;
+  return requestFinish(d.seconds);
+}
+function onFinish() { requestFinish(null); recv('finish', onFinish); }
 recv('finish', onFinish);
 
 const user32 = Process.getModuleByName('user32.dll');

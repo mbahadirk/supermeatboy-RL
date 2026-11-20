@@ -1,5 +1,38 @@
 # Super Meat Boy RL: project history
 
+2026-11-20 — IN PROGRESS: realtest native transition and five extra waves.
+The first A+ now starts a non-resetting five-completed-wave countdown, retaining the best native A+.
+23 tests passed, including historical winner validation, duplicate waves, native finish ownership and
+continue retries. Live run live_aplus_fix_a completed A+ wave1 + waves2..6 then loaded 1-2, but emitted
+repeated terminal wave6 events during transition. Current code prevents that re-entry and retries continue.
+Final live run live_aplus_fix_b reached A+ + five extra waves and native HUD13/main state22, but repeated
+continue pulses have NOT loaded the next level. The final native fix is therefore NOT VERIFIED/COMPLETE.
+Computer Use was stopped by the user's physical Escape key. Test B was asked to save/detach via STOP.
+Original ppo_aplus_v1 checkpoint and native save were backed up under analysis/realtest_progress_20261120;
+separate live test runs preserve the original checkpoint. Resume investigation at the native result-screen
+input path; do not claim the current final version reliably advances. Logs: live_a.log and live_b.log.
+
+2026-11-20: Fixed PPO realtest mid-level identity handoff. Latest local run real_20261120-165825
+saved under levels/unknown; no requested native realtest result was present. Five finished agents is the
+default wave quota, not proof of A+. identify_level previously ignored SMBRL_IMPORTED, and even a Python
+resolved name was never sent back to native curName, so strict finish identity checks could reject it.
+Identification now uses levels_smb.IMPORT_DIR; the initial realtest go reply conveys the observed-map
+identity, adopted only while native name is unknown and wave is zero. Known level names stay protected.
+22 tests passed, including configured-asset identification and native identity/finish handoff; Node syntax,
+Python compilation and diff checks passed. Live save/advance remains unverified. No existing save,
+checkpoint, run or running process was changed. Fresh command must include SMBRL_IMPORTED and --realtest;
+resume with explicit --load runs/<name>/model.pt (a repeated --name alone does not restore weights).
+
+2026-11-20: Training Monitor fonts increased from 14/12/18 to 16/14/20 (normal/small/heading).
+Policy rows, chart labels and panel spacing increased accordingly; route summaries wrap within the panel.
+
+2026-11-20: Training Monitor network diagram and its unused per-wave policy snapshots were removed.
+The window is resizable using pygame RESIZABLE and a scaled canvas: map, charts and mouse controls scale together
+with aspect ratio preserved. PPO actions/rewards/updates are unchanged.
+Validation: main tile/monitor checks 18 passed; ONLYPPO suite 21 passed. Headless small/large-window
+drawing and scaled slider clicks passed; Python compilation/diff checks passed. Desktop visual review
+was not performed.
+
 What was built, which problems came up and how each was solved, from the first look at the game files to
 PPO agents playing as real Meat Boys inside the game. Newest work is at the end. Addresses are for the
 Epic Games Store build of `SuperMeatBoy.exe` (32-bit, image base 0x400000).
@@ -208,3 +241,19 @@ added. See PROJECT_STATE.md for usage, feature boundaries and source provenance.
 Validation: 8 focused tests passed, including main/PPO observation parity, real PPO updates from synthetic
 game messages, checkpoint compatibility, blocked forbidden imports and native adapter execution in fake
 memory. Syntax/compilation checks passed. Native live-game behaviour is not yet verified.
+
+## 2026-11-20 — PPO-only --realtest
+
+Added automatic native A+ saving/next-level progression to realgame.py. Grade uses captured native HUD
+time and extracted chapter par, never frame/60. A+ bypasses the finish quota; PPO terminal-wave processing
+precedes a checked finish directive in the go reply. Other finishes retry. Back up the native save once
+per run before automatic recording; missing metadata/time/backup skips advancement. Existing PPO rewards,
+updates, observations, action selection and manual S remain unchanged; no world model/action planner added.
+See PROJECT_STATE.md for command, asset path and caveats. Validation: 21 tests, Node syntax/Python
+compilation and AST parity passed; live native save/progression remains unverified.
+
+## 2026-11-20 — wave beside BEST
+
+ONLYPPO native HUD now displays `BEST <time> | WAVE <number>`, including before any finish.
+Uses the existing native wave counter; buffers refresh once per wave rather than each draw.
+Node syntax and existing fake-memory adapter checks pass; live visual placement unverified.

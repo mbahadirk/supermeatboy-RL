@@ -74,6 +74,21 @@ def chapters() -> list[dict]:
         return json.load(f)
 
 
+_PAR=None
+
+
+def a_plus_time(name: str | None) -> float | None:
+    """A+ par from the user's extracted chapter metadata; None when unavailable."""
+    global _PAR
+    if _PAR is None:
+        _PAR={}
+        for c in chapters():
+            if c.get('par') is not None and c['file'] not in _PAR:
+                value=float(c['par'])
+                if math.isfinite(value) and value>0:_PAR[c['file']]=value
+    return _PAR.get(name)
+
+
 _GROUPS = {"light": ("normlevel",), "dark": ("altlevel",), "both": ("normlevel", "altlevel"),
            "warp": tuple(f"warp{i}level" for i in range(1, 6)),
            "all": ("normlevel", "altlevel") + tuple(f"warp{i}level" for i in range(1, 6))}

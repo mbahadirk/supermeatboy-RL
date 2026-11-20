@@ -4,10 +4,8 @@ Left: the level as the trainer sees it - tiles, lethal pieces, the reward paths 
 agent coloured by the path it follows (x = dead, ring = finished, white box = leader). Below it the
 controls: the number of agents per wave and how they are split over the routes (both from the next wave;
 "auto" = even split, and half on the fastest route once someone finished).
-Right: the wave and phase, the leader's policy output (action probabilities, value), learning curves per
-wave and per PPO update, and the network as it played the previous wave, run on the last input of that
-wave's best agent: input -> hidden 1 -> hidden 2 -> actions, the most active units of each layer, line
-width = weight size (red positive, blue negative), node colour = activation.
+Right: the wave and phase, the leader's policy output (action probabilities, value), and learning
+curves per wave and PPO update. The resizable window scales the display and mouse controls together.
 
 Keys (monitor window focused): P routes on/off in the game, Esc closes the monitor only.
 """
@@ -53,46 +51,7 @@ SEALED = (150, 50, 45)          # inside a lava pit (no space there in the game)
 OFFSCREEN = (70, 32, 38)        # outside the camera-bounds kill box (death off screen)
 KILLBOX = (220, 90, 90)         # the kill box's edges
 N_ROUTES = 4                 # 3 main routes + the bandage route
-POS, NEG = (235, 80, 70), (70, 140, 255)
 ACTION_NAMES = ["idle", "left", "right", "jump", "L+jump", "R+jump", "R+run", "R+run+J", "L+run", "L+run+J"]
-STATE_NAMES = ["x", "y", "speed x", "speed y", "on ground", "on wall", "facing", "goal dx", "goal dy", "goal dist"]
-PATH_NAMES = ["route+2 dx", "route+2 dy", "route+6 dx", "route+6 dy", "progress", "off route"]
-HAZ_NAMES = [f"mover{k} {q}" for k in (1, 2) for q in ("dx", "dy", "vx", "vy")] + ["wall left", "wall right", "wall slide", "wind x", "wind y", "in wind", "orb dx", "orb dy", "in orb"]
-K = 5                                    # local map radius in realgame.observe
-EDGES_PER_NODE = 4
-
-
-def input_name(j: int) -> str:
-    if j < len(STATE_NAMES):
-        return STATE_NAMES[j]
-    j -= len(STATE_NAMES)
-    n = (2 * K + 1) ** 2
-    if j < n:                            # patch rows top-down
-        return f"map {j % (2 * K + 1) - K:+d},{K - j // (2 * K + 1):+d}"
-    j -= n
-    if j < len(PATH_NAMES):
-        return PATH_NAMES[j]
-    j -= len(PATH_NAMES)
-    if j < len(HAZ_NAMES):
-        return HAZ_NAMES[j]
-    j -= len(HAZ_NAMES)
-    if j < n:                            # surface map, rows top-down
-        return f"surf {j % (2 * K + 1) - K:+d},{K - j // (2 * K + 1):+d}"
-    j -= n
-    if j < 2:
-        return ("stuck time", "jumps stuck")[j]
-    j -= 2
-    if j < 4:
-        return ("plat dx", "plat dy", "plat vx", "plat vy")[j]
-    if j == 4:
-        return "jump held"
-    j -= 5
-    if j < 2 * n:                        # realgame --shape-inputs: open direction x, then y, rows top-down
-        q = j % n
-        return f"open {'xy'[j // n]} {q % (2 * K + 1) - K:+d},{K - q // (2 * K + 1):+d}"
-    return f"in {j + 5}"
-
-
 def cell_polygon(x0: float, y0: float, ts: float, kind: int, ox: int, oy: int) -> list:
     """Screen points of a cell's solid part (realpath.solid_polygon) for a cell whose top-left screen corner is
     (x0, y0) and side ts (screen y down)."""
@@ -141,11 +100,12 @@ class Monitor:
     def __init__(self, trainer):
         self.t = trainer
         pygame.init()
-        self.screen = pygame.display.set_mode((WIN_W, WIN_H))
+        pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
+        self.screen = pygame.Surface((WIN_W, WIN_H))
         pygame.display.set_caption("Super Meat Boy RL - training monitor")
-        self.font = pygame.font.SysFont("consolas", 14)
-        self.small = pygame.font.SysFont("consolas", 12)
-        self.big = pygame.font.SysFont("consolas", 18, bold=True)
+        self.font = pygame.font.SysFont("consolas", 16)
+        self.small = pygame.font.SysFont("consolas", 14)
+        self.big = pygame.font.SysFont("consolas", 20, bold=True)
         self.level_id = None
         self.bg = None
         self.closed = False
@@ -154,8 +114,6 @@ class Monitor:
                                (230, 230, 240))
         self.s_share = [Slider(170, y0 + 42 + 22 * k, 360, 0, 100, 25, PATH_RGB[k]) for k in range(N_ROUTES)]
         self.auto_rect = pygame.Rect(650, y0 + 36, 130, 26)
-        self.net_key = None
-        self.net_cache = None
 
     # ---- main loop (main thread) ------------------------------------------------------------------
     def tick(self):
@@ -167,13 +125,28 @@ class Monitor:
                 return
             if e.type == pygame.KEYDOWN and e.key == pygame.K_p:
                 self.t.toggle_game_paths()
+            if hasattr(e, "pos"):
+                view = self.viewport()
+                e = pygame.event.Event(e.type, dict(e.dict, pos=(
+                    (e.pos[0] - view.x) * WIN_W / view.width,
+                    (e.pos[1] - view.y) * WIN_H / view.height)))
             self.handle_controls(e)
         try:
             self.draw()
         except Exception as ex:          # a monitor problem must never stop training
             self.screen.fill(BG)
             self.text(f"monitor error: {ex}", 20, 20, HAZ)
+        window = pygame.display.get_surface()
+        view = self.viewport()
+        window.fill(BG)
+        if view.size == self.screen.get_size():
+            window.blit(self.screen, view)
+        else:
+            pygame.transform.scale(self.screen, view.size, window.subsurface(view))
         pygame.display.flip()
+
+    def viewport(self):
+        return pygame.Rect(0, 0, WIN_W, WIN_H).fit(pygame.display.get_surface().get_rect())
 
     def close(self):
         if not self.closed:
@@ -244,7 +217,7 @@ class Monitor:
         scr.blit(lab, lab.get_rect(center=self.auto_rect.center))
         self.text("route slider: split by hand", 650, y0 + 70, DIM, self.small)
         self.text("button: back to auto", 650, y0 + 84, DIM, self.small)
-        self.text("changes apply from the next wave", 650, y0 + 100, DIM, self.small)
+        self.text("applies from next wave", 650, y0 + 100, DIM, self.small)
         self.text("P: routes on/off in the game", 650, y0 + 114, DIM, self.small)
 
     def route_col(self, k, p):
@@ -307,7 +280,7 @@ class Monitor:
         lo, hi = min(vals), max(vals)
         if hi - lo < 1e-9:
             hi, lo = hi + 1, lo - 1
-        top, bot = y + 30, y + h - 4
+        top, bot = y + 38, y + h - 4
         lx = x + 4
         for label, s, col in series:
             s = [v for v in s if v is not None and math.isfinite(v)]
@@ -320,7 +293,7 @@ class Monitor:
             else:
                 pygame.draw.circle(self.screen, col, (int(pts[0][0]), int(pts[0][1])), 3)
             lab = self.small.render(f"{label} {fmt.format(s[-1])}", True, col)
-            self.screen.blit(lab, (lx, y + 15))
+            self.screen.blit(lab, (lx, y + 20))
             lx += lab.get_width() + 10
 
     # ---- frame ----------------------------------------------------------------------------------------
@@ -396,31 +369,34 @@ class Monitor:
         x, y, w = PANEL_X, 10, PANEL_W
         lv = t.level
         self.text(f"{lv.name if lv else '-'}   wave {t.wave_no}  frame {t.frame_no}", x, y, TEXT, self.big)
-        y += 24
+        y += 28
         phase = "SPEED (beat the best time)" if t.phase == "speed" else "FINISH (reach the goal)"
         self.text(f"phase: {phase}", x, y, GOLD if t.phase == "speed" else (120, 220, 140))
-        y += 18
+        y += 22
         st = list(t.last_states)
         live = sum(1 for s in st if s[6] == 0)
         dead = sum(1 for s in st if s[6] == 1)
         won = sum(1 for s in st if s[6] == 2)
         best = f"{t.best_time:.2f}s" if t.best_time is not None else "--"
         self.text(f"agents {len(st)}: {live} alive, {dead} dead, {won} finished    best time {best}", x, y)
-        y += 18
+        y += 22
         px = x
         for k, p in enumerate(list(t.paths)):
             n = sum(1 for j in t.path_of if j == k)
             name = "bandage" if p.kind == "bandage" else f"route {k + 1}"
             lab = self.small.render(f"{name}: {p.length / TILE:.0f} tiles, {n} agents", True, self.route_col(k, p))
+            if px > x and px + lab.get_width() > x + w:
+                px = x
+                y += self.small.get_linesize() + 2
             scr.blit(lab, (px, y))
             px += lab.get_width() + 18
         if not t.paths:
             self.text("no reward path for this level", x, y, DIM, self.small)
-        y += 20
+        y += 24
 
         probs, val = t.leader_probs, t.leader_value
         self.text("leader's policy  P(action | state)" + (f"    value {val:+.2f}" if val is not None else ""), x, y, (110, 190, 255))
-        y += 17
+        y += 21
         bw = w - 150
         for a in range(len(ACTION_NAMES)):
             p = float(probs[a]) if probs is not None and a < len(probs) else 0.0
@@ -429,11 +405,11 @@ class Monitor:
             pygame.draw.rect(scr, (40, 43, 58), (x + 70, y + 2, bw, 8))
             pygame.draw.rect(scr, (80, 230, 130) if top else (100, 120, 165), (x + 70, y + 2, int(bw * p), 8))
             self.text(f"{100 * p:5.1f}%", x + 76 + bw, y - 1, DIM, self.small)
-            y += 12
+            y += 17
         y += 6
 
         hist, ups = list(t.history), list(t.updates)
-        H, gap = 60, 6
+        H, gap = 80, 8
         cw = (w - 2 * gap) // 3
         charts = [
             ("finished / dead per wave", [("fin", [h["finished"] for h in hist], GOLD), ("dead", [h["dead"] for h in hist], (210, 90, 90))], "{:.0f}"),
@@ -452,79 +428,3 @@ class Monitor:
         for n, (title, series, fmt) in enumerate(charts):
             cx, cy = x + (n % 3) * (cw + gap), y + (n // 3) * (H + gap)
             self.chart(cx, cy, cw, H, title, series, fmt)
-        y += 4 * (H + gap) + 4
-        self.draw_network(x, y, w, WIN_H - y - 8)
-
-    # ---- network view -----------------------------------------------------------------------------------
-    def network(self, net):
-        """Forward pass of the snapshot on its agent's input and the units to show (cached per snapshot)."""
-        key = (net["wave"], net["agent"])
-        if self.net_key == key:
-            return self.net_cache
-        x = net["obs"]
-        (W1, W2, W3), (b1, b2, b3) = net["W"], net["b"]
-        h1 = np.tanh(W1 @ x + b1)
-        h2 = np.tanh(W2 @ h1 + b2)
-        z = W3 @ h2 + b3
-        p = np.exp(z - z.max())
-        p /= p.sum()
-        n_in, n_h = 12, 12
-        contrib = np.abs(x) * np.abs(W1).sum(0)                      # how much each input drives layer 1
-        ins = [int(j) for j in np.argsort(-contrib)[:n_in] if contrib[j] > 0] or list(range(n_in))
-        h1s = [int(j) for j in np.argsort(-np.abs(W1[:, ins] @ x[ins]))[:n_h]]
-        h2s = [int(j) for j in np.argsort(-np.abs(W2[:, h1s] @ h1[h1s]))[:n_h]]
-        self.net_key = key
-        self.net_cache = {"x": x, "h1": h1, "h2": h2, "p": p, "ins": ins, "h1s": h1s, "h2s": h2s,
-                          "E": [W1[np.ix_(h1s, ins)], W2[np.ix_(h2s, h1s)], W3[:, h2s]]}
-        return self.net_cache
-
-    def draw_network(self, x, y, w, h):
-        t, scr = self.t, self.screen
-        net = t.best_net
-        pygame.draw.rect(scr, (20, 21, 29), (x, y, w, h))
-        if net is None:
-            self.text("network: shown after the first wave", x + 8, y + 8, DIM, self.small)
-            return
-        c = self.network(net)
-        route = f", route {net['path'] + 1}" if net.get("path") is not None else ""
-        self.text(f"network of wave {net['wave']}'s best agent (agent {net['agent']}, fitness {net['fit']:.0f}{route})",
-                  x + 6, y + 4, TEXT, self.small)
-        self.text(f"most active units, each with its {EDGES_PER_NODE} strongest inputs; width = |weight|, red +, blue -; "
-                  "fill = activation", x + 6, y + 18, DIM, self.small)
-        top, bot = y + 40, y + h - 10
-        cols = [x + 120, x + 120 + (w - 250) / 3, x + 120 + 2 * (w - 250) / 3, x + w - 130]
-        layers = [c["ins"], c["h1s"], c["h2s"], list(range(len(c["p"])))]
-        vals = [c["x"], c["h1"], c["h2"], c["p"]]
-        heads = ["inputs", "hidden 1", "hidden 2", "actions"]
-
-        def ypos(n, k):
-            return top + 12 + (bot - top - 24) * (k + 0.5) / n
-
-        pos = [[(cols[L], ypos(len(layers[L]), k)) for k in range(len(layers[L]))] for L in range(4)]
-        for L in range(3):                              # edges, weakest first so the strong ones stay on top
-            E = c["E"][L]
-            m = float(np.abs(E).max()) or 1.0
-            keep = [(abs(E[a, b]), a, b) for a in range(E.shape[0])            # each node's 4 strongest inputs
-                    for b in np.argsort(-np.abs(E[a]))[:EDGES_PER_NODE]]
-            for mag, a, b in sorted(keep):
-                f = mag / m
-                col = mix((20, 21, 29), POS if E[a, b] > 0 else NEG, 0.25 + 0.75 * f)
-                pygame.draw.line(scr, col, pos[L][b], pos[L + 1][a], max(1, int(round(1 + 6 * f * f))))
-        best_a = int(np.argmax(c["p"]))
-        for L in range(4):
-            self.text(heads[L], cols[L] - 30, top - 4, DIM, self.small)
-            for k, j in enumerate(layers[L]):
-                v = float(vals[L][j])
-                px, py = int(pos[L][k][0]), int(pos[L][k][1])
-                if L == 3:
-                    fill = mix((40, 42, 56), (80, 230, 130), v)
-                else:
-                    fill = mix((40, 42, 56), POS if v > 0 else NEG, min(1.0, abs(v)))
-                pygame.draw.circle(scr, fill, (px, py), 7)
-                pygame.draw.circle(scr, (200, 200, 210), (px, py), 7, 1)
-                if L == 0:
-                    lab = self.small.render(f"{input_name(j)} {v:+.2f}", True, DIM)
-                    scr.blit(lab, (px - 12 - lab.get_width(), py - 7))
-                elif L == 3:
-                    self.text(f"{ACTION_NAMES[j]} {100 * v:.0f}%", px + 12, py - 7,
-                              (90, 240, 150) if j == best_a else DIM, self.small)
