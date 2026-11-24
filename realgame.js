@@ -50,13 +50,30 @@ function vcall(obj, off, ...args) {               // thiscall virtual with int-s
 }
 const V_RESPAWN = 0x30, V_RUN = 0x38, V_JUMP = 0x3c, V_LEFT = 0x40, V_RIGHT = 0x44;
 
-// Read the actual update duration for observed shrapnel calibration. No time-step patch.
-let timer = null;
+// Fixed native physics step, as used by the archived successful PPO runs.
+const LOCK_AT = img(0x450ef6), LOCK_ORIG = [0x7c, 0x53], LOCK_ON = [0xeb, 0x53];
+let timer = null, lockOn = false;
+function setLock(on) {
+  const cur = new Uint8Array(LOCK_AT.readByteArray(2));
+  const expected = lockOn ? LOCK_ON : LOCK_ORIG;
+  if (cur[0] !== expected[0] || cur[1] !== expected[1]) {
+    send({ ev: 'error', msg: 'time-step bytes differ or another session owns the lock; left unchanged' });
+    return false;
+  }
+  if (on === lockOn) return true;
+  Memory.patchCode(LOCK_AT, 2, p => p.writeByteArray(on ? LOCK_ON : LOCK_ORIG));
+  lockOn = on;
+  return true;
+}
 Interceptor.attach(img(0x450e70), { onEnter() { timer = this.context.ecx; } });
 function stepMs() { return timer ? rd(() => 1000 * timer.add(0x68).readFloat()) : null; }
 
 let active = true;
-rpc.exports = { shutdown() { if (active) { active = false; releaseMain(); } return true; } };   // only when no frame waits
+rpc.exports = { shutdown() {
+  const restored = !lockOn || setLock(false);
+  if (active) { active = false; releaseMain(); }
+  return restored;
+} };
 
 // ---- level / main character -------------------------------------------------------------------
 let curName = null, main = null, settle = 0, agents = [], agentSet = new Set(), ready = false;
@@ -78,7 +95,7 @@ Interceptor.attach(img(0x4e9020), { onEnter(a) {
   finishing = 0; finishRequested = false; best = null; leader = -1; wave = 0; frame = 0;
   realtestPar = null; finishTime = 999.99;
   realtestBest = null; realtestFirstWave = null;
-  completeFrames = 0; pressA = 0;
+  completeFrames = 0; continueRequested = false;
   tilemap = null; levelOY = null; levelBox = null; paths = []; prevTiles = null; kb = null; kbShown = false; kbPending = null;   // the new level has its own tile map, pool and paths
   send({ ev: 'level', name: n });
 } });
@@ -701,7 +718,7 @@ function startWave() {
     status[i] = 0; held[i] = [0, 0, 0, 0]; finishFrame[i] = -1; keysOf[i] = 0;
     finishSeconds[i] = null;
   });
-  if (CFG.realtest && hud) hud.add(0x384).writeFloat(0); // native level clock starts with this attempt
+  if ((CFG.realtest || CFG.eval || CFG.record_states) && hud) hud.add(0x384).writeFloat(0); // native level clock starts with this attempt
   send({ ev: 'wave', wave });
 }
 
@@ -768,7 +785,7 @@ function exchange(w) {                              // lockstep: send states, wa
   const changed = sig(pieces(w)) !== pieceSig;
   if (changed) buildLethal(w);                       // pieces came or went: the hazard list changes
   const shx = rd(() => shots(w));
-  const msg = { ev: 'frame', wave, frame, s: agents.map(agentState), hz: hazards(), sh: shx ? shx[0] : [] };
+  const msg = { ev: 'frame', wave, frame, dt: stepMs(), s: agents.map(agentState), hz: hazards(), sh: shx ? shx[0] : [] };
   if (shx && shx[1] && shx[1].length === shx[0].length) msg.shx = shx[1];
   if (lasers.length) msg.lz = laserState();
   if (changed && lasers.length) msg.lzp = rd(() => laserParams(w));
@@ -803,6 +820,7 @@ function stepAgents() {
   if (!act) return;
   leader = act.leader;
   if (act.stop) {                                   // hand the characters back to the game
+    if (lockOn) setLock(false);
     active = false;
     crowd.forEach(c => c.add(0x9e0).writeU32(1));
     releaseMain();
@@ -883,7 +901,7 @@ function goalHook(orig) {
       const near = goalPieces.some(([gx, gy]) => Math.hypot(gx - x, gy - y) < 60);
       if (status[curAgent] === 0 && near) {
         status[curAgent] = 2; finishFrame[curAgent] = frame;
-        finishSeconds[curAgent] = CFG.realtest ? nativeFinishSeconds() : null;
+        finishSeconds[curAgent] = (CFG.realtest || CFG.eval || CFG.record_states) ? nativeFinishSeconds() : null;
         rememberFinish(curAgent);
       }
       else if (!near && (badFinish++ % 50) === 0) send({ ev: 'debug', msg: `ignored a level end for agent ${curAgent} at (${x.toFixed(0)}, ${y.toFixed(0)}), frame ${frame}: no goal near` });
@@ -1096,28 +1114,29 @@ Interceptor.attach(img(0x45c220), { onEnter(a) {
   a[1] = fmtBest;
   this.context.esp.add(12).writeDouble(best);
 } });
-let completeFrames = 0, pressA = 0;
+// The result-screen's own Next Level callback (also registered for keyboard input).
+// A fabricated XInput A press is not reliable when the game is using keyboard input.
+// Preserve Windows' normal handling of OutputDebugString's continuable debug exception.
+// Frida's default "steal" aborts the callback at that diagnostic before the fade/load is queued.
+const nextLevel = new NativeFunction(img(0x4aa050), 'void', ['pointer'], { abi: 'mscdecl', exceptions: 'propagate' });
+let completeFrames = 0, continueRequested = false;
 Interceptor.attach(img(0x4a1810), { onEnter() {
   hud = this.context.ecx;
   const st = rd(() => hud.add(0x38c).readS32());
   if (st === 13 && finishRequested) {
     completeFrames++;
-    if (completeFrames >= 60 && (completeFrames - 60) % 120 === 0) {
-      pressA = 8; send({ ev: 'continue', level: curName });
-    }
   } else completeFrames = 0;
-} });
-const xinput = ['XINPUT9_1_0.dll', 'xinput1_3.dll', 'XInput1_4.dll'].map(m => rd(() => Process.getModuleByName(m))).find(m => m);
-let packet = 1;
-if (xinput) Interceptor.attach(xinput.findExportByName('XInputGetState'), {
-  onEnter(a) { this.idx = a[0].toInt32(); this.out = a[1]; },
-  onLeave(r) {
-    if (this.idx !== 0 || pressA <= 0) return;
-    pressA--;
-    const o = this.out;
-    o.writeU32(packet++); o.add(4).writeU16(0x1000);
-    for (let q = 6; q < 16; q++) o.add(q).writeU8(0);
-    r.replace(ptr(0));
+}, onLeave() {
+    if (!finishRequested || continueRequested || completeFrames < 60 ||
+        !hud || hud.add(0x38c).readS32() !== 13) return;
+    continueRequested = true;
+    try {
+      nextLevel(ptr(0)); // null is explicitly accepted by the native callback; schedules its normal transition
+      send({ ev: 'continue', level: curName, method: 'native-next-level' });
+    } catch (e) {
+      continueRequested = false; completeFrames = 0;
+      send({ ev: 'error', msg: 'next level: ' + e.message });
+    }
   },
 });
 function nativeFinishSeconds() {
@@ -1165,4 +1184,5 @@ setInterval(() => {
   if (down && !sDown && gameFocused() && ready && !finishRequested) send({ ev: 'save', level: curName });
   sDown = down;
 }, 40);
-send({ ev: 'ready' });
+if (CFG.lock_step && !setLock(true)) throw new Error('Cannot establish fixed physics step');
+send({ ev: 'ready', lock_step: lockOn });

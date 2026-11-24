@@ -20,7 +20,7 @@ way when a level loads (up to 200; the level already on screen when the trainer 
 
 Reward paths (realpath.py): when a level loads, up to --paths different short routes from the spawn to the
 goal (picking up the level's keys on the way) that stay clear of solid tiles and lethal objects (rotated
-boxes with the game's own sizes; moving hazards everywhere they were seen), plus one through the bandage,
+native kill shapes; moving hazards everywhere they were seen), plus one through the bandage,
 are found and drawn into the game (green, blue, orange; bandage pink). Agents are split over the routes;
 each is rewarded for new progress (share of the route's length) along whichever route it is furthest
 along (only points it can see count), so it can leave a hard route for an easier one; it sees the direction
@@ -74,7 +74,11 @@ import time
 import argparse
 import threading
 import subprocess
+import hashlib
 from collections import deque
+from ppo_rewards import RepeatHops, physical_jump
+from game.projectiles import ShotClock, parse_shx, N_PROJECTILE, PROJECTILE_SCHEMA
+from ppo_session import SessionLog
 from realtest import APlusProgress,backup_save,locate_save
 from levels_smb import a_plus_time
 
@@ -83,6 +87,7 @@ import torch
 import torch.nn as nn
 
 from realpath import Planner, fitness, PATH_RGB
+from game.hazards import hazard_shapes, SHAPE_CIRCLE
 from game.level import (Level, box_base, box_ids, hazard_boxes, piece_names, DECOR, _names_cache, tile_solid,   # noqa: F401
                         identify_level, HZ, TILE, C_EMPTY, C_SOLID, C_HAZARD, C_GOAL, C_WIND, C_ORB, C_ACCEL,
                         C_PLATFORM, S_FLOOR, S_WALL, S_LEDGE, S_CEIL, S_CEIL_WALL, S_INSIDE, PLAT_HALF,
@@ -113,9 +118,9 @@ OBS = N_STATE + (2 * K + 1) ** 2 + N_PATH + N_HAZ + N_WALL + N_FX + N_SURF + N_S
 N_SHAPE = 2 * (2 * K + 1) ** 2
 
 
-def obs_size(shape_inputs: bool = False) -> int:
+def obs_size(shape_inputs: bool = False, projectile_inputs: bool = False) -> int:
     """The observation length: OBS, plus N_SHAPE at the end with --shape-inputs."""
-    return OBS + (N_SHAPE if shape_inputs else 0)
+    return OBS + (N_SHAPE if shape_inputs else 0) + (N_PROJECTILE if projectile_inputs else 0)
 
 WALL_SLIDE = 9
 
@@ -178,7 +183,7 @@ def other_trainers() -> list[str]:
 
 
 def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float, haz=None, opened=(),
-            stuck=(0.0, 0.0), held: int = 0, shape_inputs: bool = False) -> np.ndarray:
+            stuck=(0.0, 0.0), held: int = 0, shape_inputs: bool = False, projectile=None) -> np.ndarray:
     """One agent's PPO observation (obs_size(shape_inputs) floats). shape_inputs: also, at the end, the open
     direction x and y of the local map's tiles (Level.open_dirs; the grid's window, rows top-down, 0 outside
     the map)."""
@@ -244,6 +249,7 @@ def observe(lv: Level, grid: np.ndarray, s: list, path, prog: float, off: float,
         if od.shape[1:] != (2 * K + 1, 2 * K + 1):
             od = np.zeros((2, 2 * K + 1, 2 * K + 1), np.float32)
         parts += [od[0, ::-1].ravel(), od[1, ::-1].ravel()]
+    if projectile is not None:parts.append(np.asarray(projectile,np.float32))
     return np.concatenate(parts)
 
 
@@ -284,7 +290,7 @@ class Policy(nn.Module):
 
 def load_policy(policy: Policy, path: str):
     """Load a saved model; one from before the route inputs (or the --shape-inputs maps) existed keeps its
-    weights for the old inputs and starts the new input columns small. A model with more inputs than this
+    weights for the old inputs and starts the new input columns at zero to preserve its decisions. A model with more inputs than this
     policy (trained with --shape-inputs, loaded without it) is an error."""
     sd = torch.load(path, map_location="cpu")["policy"]
     own = policy.state_dict()
@@ -294,9 +300,16 @@ def load_policy(policy: Policy, path: str):
             continue
         if own[k].shape == v.shape:
             own[k] = v
+        elif v.dim() == 2 and v.shape[1] == OBS + N_PROJECTILE and own[k].shape[1] == OBS + N_SHAPE:
+            raise ValueError('checkpoint has projectile inputs; keep projectile inputs enabled when adding --shape-inputs')
+        elif v.dim() == 2 and v.shape[1] == OBS + N_PROJECTILE and own[k].shape[1] == OBS + N_SHAPE + N_PROJECTILE:
+            own[k].zero_()
+            own[k][:, :OBS] = v[:, :OBS]
+            own[k][:, OBS + N_SHAPE:] = v[:, OBS:]
+            widened = True
         elif v.dim() == 2 and own[k].shape[0] == v.shape[0] and v.shape[1] < own[k].shape[1]:
             own[k][:, :v.shape[1]] = v
-            own[k][:, v.shape[1]:] *= 0.1
+            own[k][:, v.shape[1]:] = 0.0
             widened = True
         elif v.dim() == 2 and own[k].shape[0] == v.shape[0] and v.shape[1] > own[k].shape[1]:
             raise ValueError(f"{path}: {k} takes {v.shape[1]} inputs, this policy {own[k].shape[1]} "
@@ -367,16 +380,43 @@ class Trainer:
     def __init__(self, args):
         if getattr(args,'realtest',False) and args.test:
             raise ValueError('--realtest requires PPO actions; it cannot be combined with --test')
+        self.eval_mode=bool(getattr(args,'eval',False))
+        if self.eval_mode and (args.test or not args.load):
+            raise ValueError('--eval requires --load and cannot use scripted --test')
+        if getattr(args,'eval_waves',20)<0:raise ValueError('--eval-waves must be nonnegative')
+        self.learning=not (self.eval_mode or args.test)
+        self.seed=getattr(args,'seed',None)
+        if self.seed is None and self.eval_mode:self.seed=0
+        if self.seed is not None:torch.manual_seed(self.seed);np.random.seed(self.seed % (2**32))
+        self.eval_completed=0
+        self.native_error=None
         self.args = args
         self.run_dir = os.path.join(HERE, "runs", args.name)
         os.makedirs(self.run_dir, exist_ok=True)
         self.shape_inputs = bool(getattr(args, "shape_inputs", False))
-        self.policy = Policy(obs_size(self.shape_inputs))
+        self.projectile_inputs = bool(getattr(args, 'projectile_inputs', False))
+        self.shot_clock = ShotClock()
+        self.policy = Policy(obs_size(self.shape_inputs, self.projectile_inputs))
         if args.load:
             p = args.load if args.load.endswith(".pt") else os.path.join(args.load, "model.pt")
             widened = load_policy(self.policy, p)
-            print(f"loaded {p}" + (" (older model: added observation inputs start untrained)" if widened else ""))
+            print(f"loaded {p}" + (" (older model: extra observation inputs start at zero; existing decisions preserved)" if widened else ""))
+        if self.seed is not None:torch.manual_seed(self.seed);np.random.seed(self.seed % (2**32))
+        if self.eval_mode:self.policy.eval()
         self.ppo = PPO(self.policy)
+        checkpoint=None
+        if args.load:
+            file=os.path.abspath(args.load if args.load.endswith('.pt') else os.path.join(args.load,'model.pt'))
+            with open(file,'rb') as src:digest=hashlib.sha256(src.read()).hexdigest()
+            checkpoint=dict(path=file,sha256=digest)
+        source={}
+        for name in ('realgame.py','realgame.js','realpath.py','game/level.py','game/hazards.py','game/projectiles.py','ppo_rewards.py','ppo_session.py','realtest.py'):
+            with open(os.path.join(HERE,name),'rb') as src:source[name]=hashlib.sha256(src.read()).hexdigest()
+        self.log=SessionLog(self.run_dir,dict(arguments=vars(args),evaluation=self.eval_mode,
+            learning=self.learning,seed=self.seed,seed_scope='policy/numpy; native game RNG is not seeded',
+            checkpoint=checkpoint,lock_step=not getattr(args,'no_lock_step',False),
+            obs_size=obs_size(self.shape_inputs,self.projectile_inputs),projectile_schema=PROJECTILE_SCHEMA if self.projectile_inputs else None,
+            sources=source),getattr(args,'record_states',False))
         self.level: Level | None = None
         self.traj, self.best_d, self.acts, self.alive = [], [], [], []
         self.visits = {}
@@ -388,6 +428,7 @@ class Trainer:
         self.stopped = threading.Event()
         # shown by the monitor
         self.paths, self.path_of, self.boxes, self.last_states = [], [], [], []
+        self.hazard_types = []
         self.links, self.route_stats = [], []
         self.phase, self.best_route, self.leader, self.wave_no, self.frame_no = "finish", None, 0, 0, 0
         self.leader_probs, self.leader_value = None, None
@@ -410,6 +451,11 @@ class Trainer:
         if info["name"] in (None, "unknown"):
             info["name"] = identify_level(info, tiles) or "unknown"
         self.level = Level(info, tiles)
+        self.shot_clock.new_level()
+        expected=getattr(self.args,'eval_level',None)
+        if self.eval_mode and expected and self.level.name!=expected:
+            print(f'[eval] expected {expected}, found {self.level.name}; stopping before actions',flush=True)
+            self.stopping=True
         self.realtest_finishing=False
         self.realtest_progress=APlusProgress()
         if getattr(self.args,'realtest',False) and a_plus_time(self.level.name) is None:
@@ -449,8 +495,8 @@ class Trainer:
             print(f"[keys] {lv.name}: " + ", ".join(f"key {k + 1} opens {len(g)} lock tile(s)"
                                                    for k, g in enumerate(lv.lock_groups)), flush=True)
         if "hz" in info:                     # the game waits for this (no agent moves meanwhile)
-            self.boxes, kept = hazard_boxes(info["hz"], lv.hz_keep)
-            self.track_hazards(self.boxes, box_ids(kept, lv.hz_ids))
+            self.boxes, kept, self.hazard_types = hazard_shapes(info["hz"], lv.hz_keep)
+            self.track_hazards(self.boxes, box_ids(kept, lv.hz_ids), self.hazard_types)
             self.build_paths(reset=False)
 
     def assign_paths(self, n: int) -> list[int]:
@@ -494,6 +540,7 @@ class Trainer:
         return self.waves - st["improved"] >= 12 and st["best"] < top - 0.15
 
     def new_wave(self, n: int):
+        self.shot_clock.new_wave()
         self.traj = [{"o": [], "a": [], "lp": [], "v": [], "r": [], "done": False} for _ in range(n)]
         self.best_d = [None] * n
         self.best_s = [None] * n       # best progress along the agent's route this life (game units)
@@ -506,6 +553,8 @@ class Trainer:
         self.ground_at_act = [False] * n   # on the ground when the last action was chosen
         self.jump_held = [0] * n           # frames the jump key is held (as realgame.js applies the actions)
         self.hops = [0] * n
+        self.repeat_hops = [RepeatHops() for _ in range(n)]
+        self.launch_at_act = [None] * n
         self.prev_xy = [None] * n          # last frame's position (teleport = portal)
         self.best_k = [[None] * len(self.paths) for _ in range(n)]   # best progress on each route
         self.frac = [None] * n             # best share of any route's length so far (what progress pays for)
@@ -517,6 +566,8 @@ class Trainer:
         self.seen = [set() for _ in range(n)]   # blocks visited this life
         self.reached = [set() for _ in range(n)]   # key / bandage positions touched this life (route legs)
         self.stuck_frames, self.new_blocks = 0, 0
+        self.native_steps=[]
+        self.wave_started=time.perf_counter()
         self.path_of = self.assign_paths(n)
 
     def route(self, i: int):
@@ -529,6 +580,8 @@ class Trainer:
         n = len(states)
         if len(self.traj) != n:
             self.new_wave(n)
+        dt=m.get('dt')
+        if isinstance(dt,(int,float)) and math.isfinite(dt) and dt>0:self.native_steps.append(float(dt))
         if m.get("tc"):
             lv.apply_tiles(m["tc"])
         if m.get("fx"):
@@ -547,16 +600,20 @@ class Trainer:
             if lv.hz_changes <= 5:
                 print(f"[hazards] {lv.name}: pieces came or went, {before} -> {len(lv.hz_ids)} lethal "
                       f"(frame {m['frame']})", flush=True)
-        boxes, kept = hazard_boxes(m["hz"], lv.hz_keep)
+        boxes, kept, shapes = hazard_shapes(m["hz"], lv.hz_keep)
+        shots = m.get('sh', [])
+        self.shot_clock.observe(m['frame'], shots, m.get('shx'))
+        native_velocities = {f'shot{s[0]}': ext[1:] for s,ext in zip(shots,parse_shx(shots,m.get('shx'))) if ext[0] is not None}
         ids = box_ids(kept, lv.hz_ids, prefix="")
         for sid, x, y, rad in m.get("sh", []):   # flying shots (seen by the agents, not planned around)
             boxes.append((x, y, rad, rad, 0.0))
+            shapes.append(SHAPE_CIRCLE)
             ids.append(f"shot{sid}")
         if m.get("sh") and not getattr(lv, "shots_seen", False):
             lv.shots_seen = True
             print(f"[hazards] {lv.name}: shots in the air (thrown saws / missiles) are now seen by the agents", flush=True)
-        self.boxes = boxes
-        self.track_hazards(boxes, ids)
+        self.boxes, self.hazard_types = boxes, shapes
+        self.track_hazards(boxes, ids, shapes)
         pos = np.array([b[:2] for b in boxes], np.float32).reshape(-1, 2)
         self.hz_vel = np.zeros_like(pos)
         if m["frame"] > 0:                   # velocity of each piece from its last position (by id)
@@ -564,11 +621,13 @@ class Trainer:
                 q = self.hz_prev.get(hid)
                 if q is not None:
                     self.hz_vel[k] = (pos[k] - q) * HZ
+        for k,hid in enumerate(ids):
+            if hid in native_velocities:self.hz_vel[k] = native_velocities[hid]
         self.hz_prev = {hid: pos[k] for k, hid in enumerate(ids)}
         moving = np.hypot(self.hz_vel[:, 0], self.hz_vel[:, 1]) > 8.0 if len(pos) else np.zeros(0, bool)
         if not self.paths_built:             # (normally built when the level info came)
             self.build_paths(reset=m["frame"] != 0)
-        grid = lv.grid_with_hazards(boxes)
+        grid = lv.grid_with_hazards(boxes,shapes)
         self.last_states, self.frame_no, self.wave_no = states, m["frame"], m["wave"]
         if self.args.debug_spawn and m["frame"] in (0, 1, 30):
             sx, sy = lv.spawn
@@ -665,6 +724,8 @@ class Trainer:
             if t > 0:
                 pen += -R_STALL * (1.0 + min(1.0, t / STALL_RAMP))
                 self.stuck_frames += 1
+            if moved:
+                self.repeat_hops[i].progress()
             a_now = tr["a"][-1]                                # a jump started from the ground (a hop) costs
             if ACTIONS[a_now][2] and self.ground_at_act[i] and not (len(tr["a"]) > 1 and ACTIONS[tr["a"][-2]][2]):
                 r += R_HOP
@@ -676,6 +737,8 @@ class Trainer:
             if pen > 0:
                 r -= pen
                 self.stall_paid[i] += pen
+            if physical_jump(ACTIONS[a_now],self.ground_at_act[i],s) and self.launch_at_act[i] is not None:
+                r -= self.repeat_hops[i].takeoff(self.launch_at_act[i],stalled=t>0)
             if st == 1:
                 r += R_DEATH
             elif st == 2:
@@ -684,7 +747,7 @@ class Trainer:
             if st != 0:
                 tr["done"] = True
                 self.alive[i] = False
-                self.ppo.add(tr, 0.0)
+                if self.learning:self.ppo.add(tr, 0.0)
                 self.fit[i] = self.agent_fitness(i, won=st == 2, dead=st == 1)
         live = [i for i, s in enumerate(states) if s[6] == 0 and self.alive[i]]
         acts = [[0, 0, 0, 0]] * n
@@ -693,14 +756,15 @@ class Trainer:
             obs = np.stack([observe(lv, grid, states[i], self.route(i), self.cur_s[i], self.cur_off[i],
                                     moving_features(states[i][0], states[i][1], pos, self.hz_vel, moving),
                                     lv.opened_cells(self.keys_of[i]) if self.keys_of[i] else (),
-                                    self.stuck_inputs(i, m["frame"]), self.jump_held[i], self.shape_inputs)
+                                    self.stuck_inputs(i, m["frame"]), self.jump_held[i], self.shape_inputs,
+                                    self.shot_clock.features(states[i][0],states[i][1]) if self.projectile_inputs else None)
                             for i in live])
             if self.args.test:
                 a = np.array([self.scripted(m["frame"], i) for i in live])
                 lp = v = np.zeros(len(live), np.float32)
                 probs = None
             else:
-                a, lp, v, probs = self.ppo.act(obs)
+                a, lp, v, probs = self.ppo.act(obs,greedy=True) if getattr(self.args,'greedy',False) else self.ppo.act(obs)
             for j, i in enumerate(live):
                 tr = self.traj[i]
                 if self.best_d[i] is None:
@@ -708,6 +772,7 @@ class Trainer:
                 tr["o"].append(obs[j]); tr["a"].append(int(a[j])); tr["lp"].append(float(lp[j])); tr["v"].append(float(v[j]))
                 acts[i] = list(ACTIONS[int(a[j])])
                 self.ground_at_act[i] = not (states[i][4] & 2)
+                self.launch_at_act[i] = tuple(states[i][:2])
                 fl = states[i][4]                              # the jump key as realgame.js holds it
                 if not acts[i][2]:
                     self.jump_held[i] = 0
@@ -760,16 +825,16 @@ class Trainer:
             if st == 1:
                 tr["r"].append(step_cost + R_DEATH)
                 tr["done"] = True
-                self.ppo.add(tr, 0.0)
+                if self.learning:self.ppo.add(tr, 0.0)
             elif st == 2:
                 tr["r"].append(step_cost + self.finish_reward(m["finish"][i] if m["finish"][i] >= 0 else m["frame"]))
                 tr["done"] = True
-                self.ppo.add(tr, 0.0)
+                if self.learning:self.ppo.add(tr, 0.0)
             else:
                 tr["r"].append(step_cost)
                 with torch.no_grad():
                     lv_ = float(self.policy.vf(torch.as_tensor(tr["o"][-1])).item())
-                self.ppo.add(tr, lv_)
+                if self.learning:self.ppo.add(tr, lv_)
         rets = [sum(tr["r"]) for tr in self.traj if tr["r"]]
         hops = 60.0 * sum(self.hops) / max(1, sum(self.frames))         # hops per agent-second
         fin = [(f, i) for i, (st, f) in enumerate(zip(m["status"], m["finish"])) if st == 2 and f >= 0]
@@ -800,7 +865,7 @@ class Trainer:
         self.history.append({"wave": m["wave"], "finished": len(fin), "dead": dead, "fastest": fastest, "fit": best_fit,
                              "path_max": max(prog) if prog else None, "path_mean": float(np.mean(prog)) if prog else None,
                              "ret": float(np.mean(rets)) if rets else None, "hops": hops})
-        if not self.args.test and self.ppo.steps >= self.args.batch:
+        if self.learning and self.ppo.steps >= self.args.batch:
             st = self.ppo.update()
             self.ppo.steps = 0
             self.updates.append(st)
@@ -809,6 +874,11 @@ class Trainer:
             self.save()
         el = (time.time() - self.t0) / 60
         print(line + f"  [{el:.1f} min]", flush=True)
+        self.log.wave(lv.name,m,self.native_steps,time.perf_counter()-self.wave_started,self.eval_mode)
+        if self.eval_mode:
+            self.eval_completed+=1
+            limit=getattr(self.args,'eval_waves',20)
+            if limit and self.eval_completed>=limit:self.stopping=True
         self.new_wave(n)
         # moving hazards seen in new places: routes around their sweep (every 3rd wave at most, 8 times per level,
         # so the routes settle and agents keep the same ones)
@@ -817,25 +887,25 @@ class Trainer:
             self.build_paths(reset=False)
 
     # reward paths
-    def track_hazards(self, boxes: list, ids: list):
+    def track_hazards(self, boxes: list, ids: list, shapes):
         """Remember where each lethal piece of the level started and every place a moving one has been (shots,
         pieces that appear later, are seen by the agents but not planned around)."""
         if self.hz_start is None:
             self.hz_start = {}
         level_ids = self.level.hz_level_ids if self.level is not None else set()
-        for b, hid in zip(boxes, ids):
+        for b, hid, kind in zip(boxes, ids, shapes):
             if box_base(hid) not in level_ids:
                 continue
             if hid not in self.hz_start:
-                self.hz_start[hid] = b
+                self.hz_start[hid] = (*b,kind)
                 continue
             x, y, hw, hh, a = b
-            x0, y0, hw0, hh0, a0 = self.hz_start[hid]
-            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05 or abs(hw - hw0) > 1 or abs(hh - hh0) > 1:
+            x0, y0, hw0, hh0, a0, kind0 = self.hz_start[hid]
+            if abs(x - x0) > 2 or abs(y - y0) > 2 or abs(a - a0) > 0.05 or abs(hw - hw0) > 1 or abs(hh - hh0) > 1 or kind != kind0:
                 if hid not in self.moving:
                     self.moving.add(hid)
-                    self.sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw0, hh0, round(a0, 1)))
-                key = (round(x / 4) * 4, round(y / 4) * 4, hw, hh, round(a, 1))
+                    self.sweep.add((round(x0 / 4) * 4, round(y0 / 4) * 4, hw0, hh0, round(a0, 1), kind0))
+                key = (round(x / 4) * 4, round(y / 4) * 4, hw, hh, round(a, 1), kind)
                 if key not in self.sweep:
                     self.sweep.add(key)
                     self.path_dirty = True
@@ -882,11 +952,13 @@ class Trainer:
 
     def build_paths(self, reset: bool):
         lv = self.level
-        static = [b for hid, b in (self.hz_start or {}).items() if hid not in self.moving]
+        static_rows = [b for hid, b in (self.hz_start or {}).items() if hid not in self.moving]
+        static, static_types = [b[:5] for b in static_rows], [b[5] for b in static_rows]
         t = time.time()
-        sweeps = [(x, y, hw, hh, a) for x, y, hw, hh, a in sorted(self.sweep)]
+        sweep_rows = sorted(self.sweep)
+        sweeps, sweep_types = [b[:5] for b in sweep_rows], [b[5] for b in sweep_rows]
         seeds = [lv.spawn] + list(lv.goals) + list(lv.keys) + list(lv.bandages) +             [p for pair in list(lv.portals) + list(self.links) for p in pair]
-        n_sealed = lv.set_sealed(static, seeds)
+        n_sealed = lv.set_sealed(static, seeds, static_types)
         if n_sealed and not getattr(lv, "sealed_shown", False):
             lv.sealed_shown = True
             print(f"[level] {lv.name}: {n_sealed} cells nobody can get into (inside lava pits / walls) filled in",
@@ -895,7 +967,8 @@ class Trainer:
                              list(lv.portals) + list(self.links), lift=lv.wind | lv.plat_support(),
                              blocks=lv.plat_blocks() | lv.sealed_haz | lv.sealed_wall,
                              doors=lv.plat_doors(),
-                             outside=lv.outside_cells if lv.kill_box is not None else None).find(self.args.paths)
+                             outside=lv.outside_cells if lv.kill_box is not None else None,
+                             hazard_types=static_types, sweep_types=sweep_types).find(self.args.paths)
         self.route_stats = []
         if hasattr(self, "best_k"):          # new routes: progress on them starts again (no reward for that)
             self.best_k = [[None] * len(self.paths) for _ in self.best_k]
@@ -935,8 +1008,10 @@ class Trainer:
 
     # saving
     def save(self, path=None):
+        if self.eval_mode:return  # evaluations never write checkpoint weights
         extra = {"shape_inputs": True} if self.shape_inputs else {}    # without the flag: the file as before
-        torch.save({"policy": self.policy.state_dict(), "obs": obs_size(self.shape_inputs), "actions": ACTIONS,
+        if self.projectile_inputs:extra.update(projectile_inputs=True,projectile_schema=PROJECTILE_SCHEMA)
+        torch.save({"policy": self.policy.state_dict(), "obs": obs_size(self.shape_inputs,self.projectile_inputs), "actions": ACTIONS,
                     **extra}, path or os.path.join(self.run_dir, "model.pt"))
 
     def save_best(self, level: str, t: float, agent: int):
@@ -974,6 +1049,8 @@ class Trainer:
     def on_message(self, msg, data):
         if msg["type"] == "error":
             print("[script error]", msg.get("description"), msg.get("stack", ""), flush=True)
+            self.native_error=msg.get("description")
+            self.stopping=True
             return
         p = msg["payload"]
         ev = p.get("ev")
@@ -1003,6 +1080,8 @@ class Trainer:
                     print(f"[game] {ev} {p}", flush=True)
             else:
                 print(f"[game] {p}", flush=True)
+            if reply is not None and self.stopping:reply['stop']=True
+            self.log.event(p,data,self.level.name if self.level is not None else None,reply)
         except Exception:  # never leave the game waiting
             import traceback
             traceback.print_exc()
@@ -1039,6 +1118,9 @@ class Trainer:
                "finish_frames": 60, "debug": bool(self.args.debug_spawn),
                "finish_quota": max(0, self.args.end_after)}
         cfg['realtest']=bool(getattr(self.args,'realtest',False))
+        cfg['eval']=self.eval_mode
+        cfg['record_states']=bool(getattr(self.args,'record_states',False))
+        cfg['lock_step']=not getattr(self.args,'no_lock_step',False)
         with open(JS, encoding="utf-8") as f:
             src = f.read().replace("__CONFIG__", json.dumps(cfg))
         try:
@@ -1071,7 +1153,7 @@ class Trainer:
             want_stop.set()
         old_sigint = signal.signal(signal.SIGINT, on_sigint)
         try:
-            while not os.path.exists(stop_file) and not want_stop.is_set():
+            while not self.stopping and not os.path.exists(stop_file) and not want_stop.is_set():
                 if mon is not None and not mon.closed:
                     mon.tick()
                     time.sleep(1 / 20)
@@ -1080,7 +1162,7 @@ class Trainer:
             if os.path.exists(stop_file):
                 os.remove(stop_file)
         finally:
-            if not self.args.test:
+            if self.learning and not self.native_error:
                 self.save()
             # stop through the next frame reply: the game thread is never left waiting for an answer
             self.stopping = True
@@ -1097,8 +1179,9 @@ class Trainer:
             session.detach()
             if mon is not None:
                 mon.close()
+            self.log.close()
             signal.signal(signal.SIGINT, old_sigint)
-            print(f"saved in {self.run_dir}", flush=True)
+            print(f"{'evaluation results' if self.eval_mode else 'saved'} in {self.run_dir}", flush=True)
 
 
 def build_parser():
@@ -1108,10 +1191,19 @@ def build_parser():
     ap.add_argument("--wave-seconds", type=float, default=20.0, help="wave time limit (default 20)")
     ap.add_argument("--end-after", type=int, default=5,
                     help="end the wave once this many agents finished (default 5; 0 = wait for all)")
-    ap.add_argument("--batch", type=int, default=16384, help="samples per PPO update (updates between waves)")
+    ap.add_argument("--batch", type=int, default=2048, help="minimum samples per PPO update (default 2048; updates between waves)")
     ap.add_argument("--paths", type=int, default=3, help="different reward paths per level (1-3)")
     ap.add_argument("--load", default=None, help="run folder or .pt to continue from")
     ap.add_argument("--name", default=None, help="run folder name under runs/ (default real_<time>)")
+    ap.add_argument('--eval',action='store_true',help='play a loaded PPO policy without learning or checkpoint writes')
+    ap.add_argument('--eval-level',default=None,help='--eval only: stop if the loaded native level differs')
+    ap.add_argument('--eval-waves',type=int,default=20,help='completed evaluation waves before stopping; 0 is unlimited')
+    ap.add_argument('--seed',type=int,default=None,help='policy RNG seed; eval defaults to 0 (does not seed native game RNG)')
+    ap.add_argument('--greedy',action='store_true',help='--eval only: choose the most probable action instead of sampling')
+    ap.add_argument('--no-lock-step',action='store_true',help='use legacy variable physics timing for comparison')
+    ap.add_argument('--record-states',action='store_true',help='save compressed native states/world/tile telemetry for analysis')
+    ap.add_argument('--projectile-inputs',action=argparse.BooleanOptionalAction,default=True,
+                    help='append observed projectile-source/phase inputs (default enabled; --no-projectile-inputs for legacy widths)')
     ap.add_argument("--test", action="store_true", help="scripted inputs, no learning (checks the mod)")
     ap.add_argument('--realtest',action='store_true',help='after the first native A+, train five more waves, save the best A+ and advance')
     ap.add_argument("--no-monitor", action="store_true", help="no monitor window")
@@ -1125,8 +1217,12 @@ def main():
     ap=build_parser()
     args = ap.parse_args()
     if args.realtest and args.test:ap.error('--realtest cannot be combined with --test')
+    if args.eval and (args.test or not args.load):ap.error('--eval requires --load and cannot use --test')
+    if args.eval_waves<0:ap.error('--eval-waves must be nonnegative')
+    if args.greedy and not args.eval:ap.error('--greedy requires --eval')
+    if args.eval_level and not args.eval:ap.error('--eval-level requires --eval')
     args.paths = max(1, min(args.paths, 3))
-    args.name = args.name or ("real_test" if args.test else time.strftime("real_%Y%m%d-%H%M%S"))
+    args.name = args.name or ("real_test" if args.test else time.strftime("eval_%Y%m%d-%H%M%S" if args.eval else "real_%Y%m%d-%H%M%S"))
     Trainer(args).run()
 
 

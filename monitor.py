@@ -5,7 +5,7 @@ agent coloured by the path it follows (x = dead, ring = finished, white box = le
 controls: the number of agents per wave and how they are split over the routes (both from the next wave;
 "auto" = even split, and half on the fastest route once someone finished).
 Right: the wave and phase, the leader's policy output (action probabilities, value), and learning
-curves per wave and PPO update. The resizable window scales the display and mouse controls together.
+curves per wave and PPO update. Draws at 1920x1080, with filtered resizing and matching mouse controls.
 
 Keys (monitor window focused): P routes on/off in the game, Esc closes the monitor only.
 """
@@ -19,11 +19,12 @@ os.environ.setdefault("SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN", "1")   # do not tak
 import pygame
 import numpy as np
 
+from game.hazards import SHAPE_CIRCLE, SHAPE_SEGMENT
 from realpath import PATH_RGB, SHAPE_HALF, SHAPE_SLOPE, solid_polygon, tile_shape
 
 TILE = 20.0
-WIN_W, WIN_H = 1500, 900
-MAP_W = 860
+WIN_W, WIN_H = 1920, 1080
+MAP_W = 1100
 CTRL_H = 150
 MAP_H = WIN_H - CTRL_H
 PANEL_X = MAP_W + 16
@@ -103,9 +104,9 @@ class Monitor:
         pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
         self.screen = pygame.Surface((WIN_W, WIN_H))
         pygame.display.set_caption("Super Meat Boy RL - training monitor")
-        self.font = pygame.font.SysFont("consolas", 16)
-        self.small = pygame.font.SysFont("consolas", 14)
-        self.big = pygame.font.SysFont("consolas", 20, bold=True)
+        self.font = pygame.font.SysFont("consolas", 18)
+        self.small = pygame.font.SysFont("consolas", 16)
+        self.big = pygame.font.SysFont("consolas", 23, bold=True)
         self.level_id = None
         self.bg = None
         self.closed = False
@@ -142,7 +143,7 @@ class Monitor:
         if view.size == self.screen.get_size():
             window.blit(self.screen, view)
         else:
-            pygame.transform.scale(self.screen, view.size, window.subsurface(view))
+            pygame.transform.smoothscale(self.screen, view.size, window.subsurface(view))
         pygame.display.flip()
 
     def viewport(self):
@@ -316,8 +317,16 @@ class Monitor:
 
     def draw_map(self, lv):
         t, scr = self.t, self.screen
-        for x, y, hw, hh, a in list(t.boxes):     # lethal pieces as the routes see them (rotated boxes)
+        boxes=list(t.boxes)
+        kinds=getattr(t,"hazard_types",[0]*len(boxes))
+        for (x, y, hw, hh, a),kind in zip(boxes,kinds):     # lethal pieces as the routes see them (rotated boxes)
+            if kind == SHAPE_CIRCLE:
+                pygame.draw.circle(scr, HAZ, self.pt(x,y), max(1,round(hw*self.sc)))
+                continue
             c, sn = math.cos(a), math.sin(a)
+            if kind == SHAPE_SEGMENT:
+                pygame.draw.line(scr, HAZ, self.pt(x-hw*c,y-hw*sn), self.pt(x+hw*c,y+hw*sn), 2)
+                continue
             pts = [self.pt(x + u * c - v * sn, y + u * sn + v * c) for u, v in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))]
             pygame.draw.polygon(scr, HAZ, pts)
         kb = getattr(lv, "kill_box", None)

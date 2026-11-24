@@ -46,5 +46,5 @@ assert.deepEqual(msg.shx, [[5, 300, -60]]);
 assert.deepEqual(msg.kb, [-100, 100, -100, 100]);
 assert.equal(msg.hz.length, 2);  // enemy and laser rows, both currently harmless
 assert.ok(msg.hz.every(h => h[7].length === 0));
-assert.ok(!source.includes('Memory.patchCode'));  // preserve ONLYPPO's existing timing behaviour
+assert.equal(context.rpc.exports.shutdown(),true); // opt-out fixture does not acquire a timing patch
 console.log('Native perception producers and frame wire format passed.');

@@ -227,7 +227,7 @@ def box_distance(px, py, box) -> np.ndarray:
 
 class Planner:
     def __init__(self, words: np.ndarray, ox: float, oy: float, spawn, goals, hazards, sweeps=(), keys=(),
-                 bandages=(), portals=(), lift=None, blocks=None, doors=None, outside=None):
+                 bandages=(), portals=(), lift=None, blocks=None, doors=None, outside=None, hazard_types=None, sweep_types=None):
         """words: H x W collision tile words; hazards: [(x, y, half w, half h, angle)] of pieces that stay put;
         sweeps: the same for every position a moving hazard was seen at; keys / bandages: [(x, y)]; portals:
         [((x, y), (x, y))] pairs (touching one end puts the player at the other). H x W masks: lift, cells
@@ -237,6 +237,8 @@ class Planner:
         mode like the bottom row, but not a surface to stand on or push against (they are death, not walls)."""
         self.cls = tile_classes(words)
         self.words = np.asarray(words, np.uint32)                  # the tile words (shape decodes read them)
+        self._progress_shape = tile_shape(self.words)
+        self._progress_edges = {}                # static cell polygons, shared by all reward routes
         k = self.cls
         self.ox, self.oy = ox, oy
         self.H, self.W = words.shape
@@ -249,8 +251,8 @@ class Planner:
         self.keys, self.bandages = [tuple(p) for p in keys], [tuple(p) for p in bandages]
         self.portals = [(tuple(a), tuple(b)) for a, b in portals]
         self.lift = lift if lift is not None else np.zeros(words.shape, dtype=bool)   # wind: rising is free
-        self.hard_static, self.soft_static, near_static = self._hazard_cells(hazards)
-        self.hard_sweep, self.soft_sweep, near_sweep = self._hazard_cells(sweeps)
+        self.hard_static, self.soft_static, near_static = self._hazard_cells(hazards,hazard_types)
+        self.hard_sweep, self.soft_sweep, near_sweep = self._hazard_cells(sweeps,sweep_types)
         if doors is not None:                                      # where moving platforms go: only with timing
             self.hard_sweep = self.hard_sweep | doors
         self.near = near_static | near_sweep
@@ -266,6 +268,58 @@ class Planner:
 
     def center(self, c) -> tuple[float, float]:
         return self.ox + (c[0] + 0.5) * TILE, self.oy + (c[1] + 0.5) * TILE
+
+    def progress_visible(self, x: float, y: float, c: int, r: int, blocked) -> bool:
+        """Local field interpolation must not reach through a tile's actual solid part.
+
+        Only adjacent cell centres are queried. Open-cell connections take the cheap path;
+        half tiles/slopes use cached convex polygon edges, without point-by-point ray marching.
+        Boundary tangencies are allowed: this is field visibility, not a body collision test.
+        """
+        c0, r0 = self.cell(x, y)
+        cx, cy = self.center((c, r))
+        dx, dy = cx - x, cy - y
+        for rr in range(max(0, min(r0, r)), min(self.H - 1, max(r0, r)) + 1):
+            for cc in range(max(0, min(c0, c)), min(self.W - 1, max(c0, c)) + 1):
+                if not blocked[rr, cc]:
+                    continue
+                key = (cc, rr)
+                edges = self._progress_edges.get(key)
+                if edges is None:
+                    sh = self._progress_shape
+                    kind = int(sh.kind[rr, cc]) or SHAPE_FULL  # extra route walls, e.g. fixed platforms
+                    # Keys/crumbles/switches change per agent or during play. The static
+                    # route words cannot declare them solid now; retain their prior interpolation.
+                    if kind == SHAPE_SPECIAL:
+                        self._progress_edges[key] = []
+                        continue
+                    poly = solid_polygon(kind, sh.ox[rr, cc], sh.oy[rr, cc])
+                    px, py = self.ox + cc * TILE, self.oy + rr * TILE
+                    edges = []
+                    for a, b in zip(poly, poly[1:] + poly[:1]):
+                        ex, ey = b[0] - a[0], b[1] - a[1]
+                        length = math.hypot(ex, ey)
+                        nx, ny = -ey / length, ex / length
+                        edges.append((nx, ny, -(nx * (px + a[0] * TILE) + ny * (py + a[1] * TILE))))
+                    self._progress_edges[key] = edges
+                if not edges:
+                    continue
+                lo, hi = 0.0, 1.0
+                for nx, ny, bias in edges:
+                    start, delta = nx * x + ny * y + bias, nx * dx + ny * dy
+                    if abs(delta) < 1e-12:
+                        if start <= 1e-6:
+                            hi = lo
+                            break
+                    elif delta > 0:
+                        lo = max(lo, (1e-6 - start) / delta)
+                    else:
+                        hi = min(hi, (1e-6 - start) / delta)
+                    if lo >= hi:
+                        break
+                if lo < hi:
+                    return False
+        return True
 
     def solid_at(self, x: float, y: float) -> bool:
         c, r = self.cell(x, y)
@@ -299,24 +353,26 @@ class Planner:
                 return False
         return True
 
-    def _hazard_cells(self, boxes):
+    def _hazard_cells(self, boxes, shapes=None):
         """Cells the body cannot occupy without touching a hazard, cells with little margin, cells near one."""
+        from game.hazards import hazard_reaches, hazard_extent, SHAPE_BOX
         hard = np.zeros((self.H, self.W), dtype=bool)
         soft = np.zeros((self.H, self.W), dtype=bool)
         near = np.zeros((self.H, self.W), dtype=bool)
         cx = self.ox + (np.arange(self.W) + 0.5) * TILE
         cy = self.oy + (np.arange(self.H) + 0.5) * TILE
-        for b in boxes:
+        for i,b in enumerate(boxes):
+            kind=SHAPE_BOX if shapes is None else shapes[i]
             x, y, hw, hh, _ = b
-            far = math.hypot(hw, hh) + BODY + NEAR * TILE
+            far = hazard_extent(b,kind,BODY + NEAR * TILE)
             c0, c1 = max(0, int((x - far - self.ox) // TILE)), min(self.W, int((x + far - self.ox) // TILE) + 1)
             r0, r1 = max(0, int((y - far - self.oy) // TILE)), min(self.H, int((y + far - self.oy) // TILE) + 1)
             if c0 >= c1 or r0 >= r1:
                 continue
-            d = box_distance(cx[None, c0:c1], cy[r0:r1, None], b)
-            hard[r0:r1, c0:c1] |= d < HAZ_HARD
-            soft[r0:r1, c0:c1] |= d < HAZ_SOFT
-            near[r0:r1, c0:c1] |= d < BODY + NEAR * TILE
+            px,py=cx[None, c0:c1],cy[r0:r1, None]
+            hard[r0:r1, c0:c1] |= hazard_reaches(px,py,b,kind,HAZ_HARD)
+            soft[r0:r1, c0:c1] |= hazard_reaches(px,py,b,kind,HAZ_SOFT)
+            near[r0:r1, c0:c1] |= hazard_reaches(px,py,b,kind,BODY + NEAR * TILE)
         return hard, soft, near
 
     # ---- search ------------------------------------------------------------------------------------
@@ -778,7 +834,9 @@ class RewardPath:
                 if fv > -math.inf:
                     cx, cy = pl.center((c, r))
                     way = math.hypot(x - cx, y - cy) + (FIELD_UP - 1.0) * max(0.0, cy - y)
-                    val = max(val, float(fv) - FIELD_DECAY * way)
+                    candidate = float(fv) - FIELD_DECAY * way
+                    if candidate > val and pl.progress_visible(x, y, c, r, bl):
+                        val = candidate
         if val == -math.inf:
             return None
         return float(min(max(val, 0.0), self.length))

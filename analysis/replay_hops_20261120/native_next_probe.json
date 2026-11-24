@@ -1,0 +1,21 @@
+[
+  {
+    "type": "send",
+    "payload": {
+      "stage": "native-next-start"
+    }
+  },
+  {
+    "type": "send",
+    "payload": {
+      "stage": "native-next-returned"
+    }
+  },
+  {
+    "type": "send",
+    "payload": {
+      "stage": "level-load",
+      "name": "1-2"
+    }
+  }
+]

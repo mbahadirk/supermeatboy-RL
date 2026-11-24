@@ -1,0 +1,46 @@
+{
+  "waves": 5,
+  "agents": 200,
+  "finished": 0,
+  "dead": 9,
+  "truncated": 191,
+  "input_checkpoint_unchanged": true,
+  "wall_seconds": 263.75951250002254,
+  "per_wave": [
+    {
+      "wave": 1,
+      "ledge": 40,
+      "escaped": 0,
+      "ledge_action_samples": 66365,
+      "jump_action_fraction": 0.9995630226776162
+    },
+    {
+      "wave": 2,
+      "ledge": 40,
+      "escaped": 0,
+      "ledge_action_samples": 66187,
+      "jump_action_fraction": 0.9994258691283787
+    },
+    {
+      "wave": 3,
+      "ledge": 40,
+      "escaped": 0,
+      "ledge_action_samples": 65961,
+      "jump_action_fraction": 0.9991358530040478
+    },
+    {
+      "wave": 4,
+      "ledge": 34,
+      "escaped": 0,
+      "ledge_action_samples": 54394,
+      "jump_action_fraction": 0.9996506967680259
+    },
+    {
+      "wave": 5,
+      "ledge": 37,
+      "escaped": 1,
+      "ledge_action_samples": 59183,
+      "jump_action_fraction": 0.9995099944240745
+    }
+  ]
+}

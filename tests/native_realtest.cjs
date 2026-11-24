@@ -2,7 +2,7 @@
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const load = require('./native_harness.cjs');
-const {context, sent, replacements, hooks, Mem} = load({realtest:true, finish_quota:5});
+const {context, sent, replacements, hooks, Mem, nativeCalls} = load({realtest:true, finish_quota:5});
 context.goPayload={level_name:'4-1',realtest_par:10};
 vm.runInContext(`
   curName='unknown';wave=0;
@@ -48,14 +48,23 @@ const terminalCount=sent.filter(m=>m.ev==='wave_end').length;
 for(let n=0;n<100;n++) replacements.get(0x519d40)(new Mem(0x200000));
 assert.equal(sent.filter(m=>m.ev==='wave_end').length,terminalCount);
 vm.runInContext(`assert.equal(frame,65);`,context);
-// Retry a missed continue pulse after a release interval; the first attempt is not the only chance.
+// Native result-screen continuation works without polling XInput or an attached controller.
 vm.runInContext(`hud.add(0x38c).writeU32(13);`,context);
-for(let n=0;n<60;n++) hooks.get(0x4a1810).onEnter.call({context:{ecx:new Mem(0x210000)}});
+function hudTick(){
+ const receiver={context:{ecx:new Mem(0x210000)}};
+ hooks.get(0x4a1810).onEnter.call(receiver);
+ hooks.get(0x4a1810).onLeave.call(receiver);
+}
+for(let n=0;n<59;n++)hudTick();
+assert.equal(nativeCalls.filter(c=>c.address===0x4aa050).length,0);
+hudTick();
+assert.equal(nativeCalls.filter(c=>c.address===0x4aa050).length,1);
+assert.equal(nativeCalls.find(c=>c.address===0x4aa050).options.abi,'mscdecl');
+assert.equal(nativeCalls.find(c=>c.address===0x4aa050).options.exceptions,'propagate');
 assert.equal(sent.filter(m=>m.ev==='continue').length,1);
-vm.runInContext(`pressA=0;`,context);
-for(let n=0;n<120;n++) hooks.get(0x4a1810).onEnter.call({context:{ecx:new Mem(0x210000)}});
-assert.equal(sent.filter(m=>m.ev==='continue').length,2);
-vm.runInContext(`assert.equal(pressA,8);`,context);
+for(let n=0;n<180;n++)hudTick();
+assert.equal(nativeCalls.filter(c=>c.address===0x4aa050).length,1); // no duplicate transition
+vm.runInContext(`assert.equal(continueRequested,true);`,context);
 
 // The swallowed agent-goal hook captures native HUD time at the successful contact.
 vm.runInContext(`
@@ -81,5 +90,5 @@ hooks.get(0x4e9020).onEnter([{readPointer:()=>({readCString:()=> '4-2'})}]);
 vm.runInContext(`
  assert.equal(curName,'4-2');assert.equal(wave,0);assert.equal(finishRequested,false);
  assert.equal(realtestBest,null);assert.equal(realtestFirstWave,null);
- assert.equal(completeFrames,0);assert.equal(pressA,0);
+ assert.equal(completeFrames,0);assert.equal(continueRequested,false);
 `,context);

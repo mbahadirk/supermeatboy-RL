@@ -7,7 +7,9 @@ import json
 from collections import deque
 from functools import lru_cache
 import numpy as np
-from realpath import ACCEL_TILE, BODY, accel_bits, box_distance, tile_classes, tile_shape
+from realpath import ACCEL_TILE, BODY, accel_bits, tile_classes, tile_shape
+from game.hazards import hazard_reaches, hazard_extent, SHAPE_BOX
+from game.projectiles import parse_shx  # shared raw native contract; retained as public observation parser
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 HZ = 60
@@ -263,30 +265,31 @@ class Level:
         self.plat_set = {(r, c) for r, c, _ in cells}
         return changed
 
-    def hazard_mask(self, boxes) -> np.ndarray:
-        """Open cells a hazard box reaches (the body would touch it there), as in the agents' map."""
+    def hazard_mask(self, boxes, shapes=None) -> np.ndarray:
+        """Open cells a native kill shape reaches, including the character body; untyped boxes stay compatible."""
         out = np.zeros((self.H, self.W), dtype=bool)
         cx = self.ox + (np.arange(self.W) + 0.5) * TILE
         cy = self.oy + (np.arange(self.H) + 0.5) * TILE
-        for b in boxes:
+        for i,b in enumerate(boxes):
+            kind=SHAPE_BOX if shapes is None else shapes[i]
             x, y, hw, hh, _ = b
-            far = float(np.hypot(hw, hh)) + 6.0
+            far = hazard_extent(b,kind)
             c0, c1 = max(0, int((x - far - self.ox) // TILE)), min(self.W, int((x + far - self.ox) // TILE) + 1)
             r0, r1 = max(0, int((y - far - self.oy) // TILE)), min(self.H, int((y + far - self.oy) // TILE) + 1)
             if c0 < c1 and r0 < r1:
-                out[r0:r1, c0:c1] |= box_distance(cx[None, c0:c1], cy[r0:r1, None], b) < 6.0
+                out[r0:r1, c0:c1] |= hazard_reaches(cx[None, c0:c1], cy[r0:r1, None], b,kind)
             c, r = self.cell(x, y)
             if 0 <= c < self.W and 0 <= r < self.H:
                 out[r, c] = True
         return out & ~self.solid0
 
-    def set_sealed(self, boxes, seeds) -> int:
+    def set_sealed(self, boxes, seeds, shapes=None) -> int:
         """Open cells the player cannot get into: not reachable from the spawn, goals, keys or portals without
         going through a wall or a hazard (boxes: the hazards that stay put). Lava pits are drawn as a few
         stacked lava pieces whose boxes leave gaps between them; in the game the pit is all lava. A pocket
         that touches a hazard counts as hazard, one closed in by walls as solid (agents' map, routes,
         monitor). Pockets over SEALED_MAX cells are left open. Returns the number of sealed cells."""
-        haz = self.hazard_mask(boxes) | self.outside_cells   # off screen is death, like a hazard
+        haz = self.hazard_mask(boxes, shapes) | self.outside_cells   # off screen is death, like a hazard
         passable = (~self.solid0 | self.special) & ~haz
         seen = np.zeros((self.H, self.W), dtype=bool)
         todo = []
@@ -419,8 +422,7 @@ class Level:
         return cache[pad]
 
     def apply_tiles(self, changes: list):
-        """Cells the game changed this frame. A special tile (crumble / lock / switch block) whose word differs
-        from the level's start is taken as gone; back to its start word, it is there again."""
+        """Decode current occupancy from tile IDs/flags; neighbour/orientation bits do not mean removal."""
         for idx, w in changes:
             r, c = divmod(int(idx), self.W)
             if not (0 <= r < self.H):
@@ -429,10 +431,7 @@ class Level:
             self.words[r, c] = w
             if old != int(w):
                 self.__dict__.pop("_open_dirs", None)     # open_dirs reads the live words
-            if self.special[r, c]:
-                solid = int(w) == int(self.words0[r, c])
-            else:
-                solid = bool(tile_solid(np.array([w], dtype=np.uint32))[0])
+            solid = bool(tile_solid(np.array([w], dtype=np.uint32))[0])
             if self.tile_log < 12:             # how the game marks a broken / opened tile (for the record)
                 self.tile_log += 1
                 print(f"[tiles] {self.name}: cell ({c},{r}) 0x{old:08x} -> 0x{int(w):08x}"
@@ -472,9 +471,9 @@ class Level:
         gx, gy = min(self.goals, key=lambda g: (g[0] - x) ** 2 + (g[1] - y) ** 2) if self.goals else self.spawn
         return float(np.hypot(gx - x, gy - y) / TILE) + self.diag   # off the known paths: worse than any path
 
-    def grid_with_hazards(self, boxes: list) -> np.ndarray:
-        """Cell codes now: tiles, goals, and the lethal pieces at their current positions (every open cell
-        whose centre is within the body's half size of a hazard box, and the cell the hazard is in)."""
+    def grid_with_hazards(self, boxes: list, shapes=None) -> np.ndarray:
+        """Tiles/goals and current native kill shapes, tested against the player body at cell centres.
+        Without shape tags this retains the old covering-box map for legacy callers."""
         g = self.base.copy()
         if self.wind.any():
             g[self.wind & (g == C_EMPTY)] = C_WIND
@@ -489,13 +488,14 @@ class Level:
             g[self.outside_cells & (g != C_SOLID) & (g != C_GOAL)] = C_HAZARD
         cx = self.ox + (np.arange(self.W) + 0.5) * TILE
         cy = self.oy + (np.arange(self.H) + 0.5) * TILE
-        for b in boxes:
+        for i,b in enumerate(boxes):
+            kind=SHAPE_BOX if shapes is None else shapes[i]
             x, y, hw, hh, _ = b
-            far = float(np.hypot(hw, hh)) + 6.0
+            far = hazard_extent(b,kind)
             c0, c1 = max(0, int((x - far - self.ox) // TILE)), min(self.W, int((x + far - self.ox) // TILE) + 1)
             r0, r1 = max(0, int((y - far - self.oy) // TILE)), min(self.H, int((y + far - self.oy) // TILE) + 1)
             if c0 < c1 and r0 < r1:
-                m = (box_distance(cx[None, c0:c1], cy[r0:r1, None], b) < 6.0) & (g[r0:r1, c0:c1] != C_SOLID)
+                m = (hazard_reaches(cx[None, c0:c1], cy[r0:r1, None], b,kind)) & (g[r0:r1, c0:c1] != C_SOLID)
                 g[r0:r1, c0:c1][m] = C_HAZARD
             c, r = self.cell(x, y)
             if 0 <= c < self.W and 0 <= r < self.H and g[r, c] != C_SOLID:
@@ -605,8 +605,8 @@ def identify_level(info: dict, tiles: bytes) -> str | None:
     d = IMPORT_DIR
     if not os.path.isdir(d):
         return None
-    t = np.frombuffer(tiles, dtype="<u4").reshape(info["H"], info["W"]) & 0xff
-    live = ((t > 0) & (t < 100)).astype(np.uint8)
+    t = np.frombuffer(tiles, dtype="<u4").reshape(info["H"], info["W"])
+    live = tile_solid(t).astype(np.uint8)
     try:   # prefer the files the game's chapters use (there are editor copies such as 4-1_TEST)
         with open(os.path.join(d, "chapters.json")) as fh:
             used = [c["file"] for c in json.load(fh)]

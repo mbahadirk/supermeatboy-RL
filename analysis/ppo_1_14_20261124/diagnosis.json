@@ -1,0 +1,390 @@
+{
+  "route_scope": "Reconstructed routes WITHOUT hazards/sweeps; not a dump of the running trainer routes.",
+  "paths": [
+    {
+      "points": [
+        [
+          -90.0,
+          -290.0
+        ],
+        [
+          -90.0,
+          -250.0
+        ],
+        [
+          -70.0,
+          -230.0
+        ],
+        [
+          -70.0,
+          -190.0
+        ],
+        [
+          -50.0,
+          -170.0
+        ],
+        [
+          -50.0,
+          110.0
+        ],
+        [
+          30.0,
+          110.0
+        ],
+        [
+          30.0,
+          -10.0
+        ],
+        [
+          50.0,
+          -30.0
+        ],
+        [
+          130.0,
+          -30.0
+        ],
+        [
+          130.0,
+          -110.0
+        ],
+        [
+          110.0,
+          -130.0
+        ],
+        [
+          50.0,
+          -130.0
+        ],
+        [
+          32.007041931152344,
+          -132.71995544433594
+        ]
+      ],
+      "mode": "clear",
+      "probes": [
+        {
+          "x": 60,
+          "y": 36.0,
+          "current_value": 662.0168317596291,
+          "winning_candidate": {
+            "center": [
+              90.0,
+              10.0
+            ],
+            "value": 662.0168317596291,
+            "clear": false
+          },
+          "shape_visible_value": 515.3638919463835
+        },
+        {
+          "x": 80,
+          "y": 36.0,
+          "current_value": 673.8589216878192,
+          "winning_candidate": {
+            "center": [
+              90.0,
+              10.0
+            ],
+            "value": 673.8589216878192,
+            "clear": false
+          },
+          "shape_visible_value": 495.3638919463835
+        },
+        {
+          "x": 100,
+          "y": 36.0,
+          "current_value": 682.1432234456317,
+          "winning_candidate": {
+            "center": [
+              110.0,
+              10.0
+            ],
+            "value": 682.1432234456317,
+            "clear": false
+          },
+          "shape_visible_value": 475.3638919463835
+        },
+        {
+          "x": 110,
+          "y": 36.0,
+          "current_value": 684.0,
+          "winning_candidate": {
+            "center": [
+              110.0,
+              10.0
+            ],
+            "value": 684.0,
+            "clear": false
+          },
+          "shape_visible_value": 468.15543124900137
+        },
+        {
+          "x": 120,
+          "y": 36.0,
+          "current_value": 455.3638919463835,
+          "winning_candidate": {
+            "center": [
+              110.0,
+              50.0
+            ],
+            "value": 455.3638919463835,
+            "clear": true
+          },
+          "shape_visible_value": 455.3638919463835
+        },
+        {
+          "x": 140,
+          "y": 36.0,
+          "current_value": 435.3638919463835,
+          "winning_candidate": {
+            "center": [
+              130.0,
+              50.0
+            ],
+            "value": 435.3638919463835,
+            "clear": true
+          },
+          "shape_visible_value": 435.3638919463835
+        },
+        {
+          "x": 160,
+          "y": 36.0,
+          "current_value": 415.3638919463835,
+          "winning_candidate": {
+            "center": [
+              150.0,
+              50.0
+            ],
+            "value": 415.3638919463835,
+            "clear": true
+          },
+          "shape_visible_value": 415.3638919463835
+        }
+      ]
+    },
+    {
+      "points": [
+        [
+          -90.0,
+          -290.0
+        ],
+        [
+          -50.0,
+          -290.0
+        ],
+        [
+          -30.0,
+          -270.0
+        ],
+        [
+          -10.0,
+          -270.0
+        ],
+        [
+          30.0,
+          -230.0
+        ],
+        [
+          30.0,
+          -190.0
+        ],
+        [
+          50.0,
+          -170.0
+        ],
+        [
+          170.0,
+          -170.0
+        ],
+        [
+          170.0,
+          -150.0
+        ],
+        [
+          210.0,
+          -110.0
+        ],
+        [
+          210.0,
+          -90.0
+        ],
+        [
+          170.0,
+          -50.0
+        ],
+        [
+          170.0,
+          -10.0
+        ],
+        [
+          210.0,
+          30.0
+        ],
+        [
+          190.0,
+          50.0
+        ],
+        [
+          30.0,
+          50.0
+        ],
+        [
+          30.0,
+          10.0
+        ],
+        [
+          50.0,
+          10.0
+        ],
+        [
+          90.0,
+          -30.0
+        ],
+        [
+          130.0,
+          -30.0
+        ],
+        [
+          130.0,
+          -110.0
+        ],
+        [
+          110.0,
+          -130.0
+        ],
+        [
+          50.0,
+          -130.0
+        ],
+        [
+          32.007041931152344,
+          -132.71995544433594
+        ]
+      ],
+      "mode": "clear",
+      "probes": [
+        {
+          "x": 60,
+          "y": 36.0,
+          "current_value": 864.8596051971291,
+          "winning_candidate": {
+            "center": [
+              90.0,
+              10.0
+            ],
+            "value": 864.8596051971291,
+            "clear": false
+          },
+          "shape_visible_value": 731.2360232940398
+        },
+        {
+          "x": 80,
+          "y": 36.0,
+          "current_value": 876.7016951253192,
+          "winning_candidate": {
+            "center": [
+              90.0,
+              10.0
+            ],
+            "value": 876.7016951253192,
+            "clear": false
+          },
+          "shape_visible_value": 711.2360232940398
+        },
+        {
+          "x": 100,
+          "y": 36.0,
+          "current_value": 884.9859358479755,
+          "winning_candidate": {
+            "center": [
+              110.0,
+              10.0
+            ],
+            "value": 884.9859358479755,
+            "clear": false
+          },
+          "shape_visible_value": 691.2360232940398
+        },
+        {
+          "x": 110,
+          "y": 36.0,
+          "current_value": 886.8427124023438,
+          "winning_candidate": {
+            "center": [
+              110.0,
+              10.0
+            ],
+            "value": 886.8427124023438,
+            "clear": false
+          },
+          "shape_visible_value": 684.0275625966576
+        },
+        {
+          "x": 120,
+          "y": 36.0,
+          "current_value": 671.2360232940398,
+          "winning_candidate": {
+            "center": [
+              110.0,
+              50.0
+            ],
+            "value": 671.2360232940398,
+            "clear": true
+          },
+          "shape_visible_value": 671.2360232940398
+        },
+        {
+          "x": 140,
+          "y": 36.0,
+          "current_value": 651.2360232940398,
+          "winning_candidate": {
+            "center": [
+              130.0,
+              50.0
+            ],
+            "value": 651.2360232940398,
+            "clear": true
+          },
+          "shape_visible_value": 651.2360232940398
+        },
+        {
+          "x": 160,
+          "y": 36.0,
+          "current_value": 631.2360232940398,
+          "winning_candidate": {
+            "center": [
+              150.0,
+              50.0
+            ],
+            "value": 631.2360232940398,
+            "clear": true
+          },
+          "shape_visible_value": 631.2360232940398
+        }
+      ]
+    }
+  ],
+  "sample": {
+    "rows": 99,
+    "characters": 40,
+    "wall_seconds": 24.79326329997275,
+    "xy_min": [
+      75.0932846069336,
+      35.85721969604492
+    ],
+    "xy_max": [
+      121.12657928466797,
+      36.0099983215332
+    ],
+    "vy_abs_p95": 0.0
+  },
+  "waves": {
+    "count": 65,
+    "finished": 0,
+    "dead": 653,
+    "truncated": 1947,
+    "agents": 2600,
+    "last_ten_dead": 12,
+    "last_ten_truncated": 388
+  }
+}

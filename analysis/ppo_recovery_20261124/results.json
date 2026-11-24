@@ -1,0 +1,98 @@
+{
+  "eval_old_fixed_1_9_20261124_b": {
+    "evaluation": true,
+    "obs_size": 282,
+    "waves": 5,
+    "agents": 200,
+    "finished": 12,
+    "finished_per_wave": [
+      2,
+      3,
+      3,
+      3,
+      1
+    ],
+    "fastest_native_seconds": 5.650018692016602,
+    "dt_ms_min": 16.66666753590107,
+    "dt_ms_max": 16.66666753590107,
+    "wall_seconds": 163.44907959992997,
+    "input_checkpoint_unchanged": true,
+    "written_checkpoints": 0
+  },
+  "eval_current_fixed_1_9_20261124_a": {
+    "evaluation": true,
+    "obs_size": 524,
+    "waves": 5,
+    "agents": 200,
+    "finished": 0,
+    "finished_per_wave": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "fastest_native_seconds": null,
+    "dt_ms_min": 16.66666753590107,
+    "dt_ms_max": 16.66666753590107,
+    "wall_seconds": 215.352164800046,
+    "input_checkpoint_unchanged": true,
+    "written_checkpoints": 0
+  },
+  "eval_current_tiles_fixed_1_9_20261124_a": {
+    "evaluation": true,
+    "obs_size": 524,
+    "waves": 2,
+    "agents": 80,
+    "finished": 0,
+    "finished_per_wave": [
+      0,
+      0
+    ],
+    "fastest_native_seconds": null,
+    "dt_ms_min": 16.66666753590107,
+    "dt_ms_max": 16.66666753590107,
+    "wall_seconds": 86.05668519996107,
+    "input_checkpoint_unchanged": true,
+    "written_checkpoints": 0
+  },
+  "ppo_recovery_1_9_20261124_a": {
+    "evaluation": false,
+    "obs_size": 524,
+    "waves": 5,
+    "agents": 200,
+    "finished": 46,
+    "finished_per_wave": [
+      2,
+      1,
+      13,
+      16,
+      14
+    ],
+    "fastest_native_seconds": 5.216679573059082,
+    "dt_ms_min": 16.66666753590107,
+    "dt_ms_max": 16.66666753590107,
+    "wall_seconds": 178.23130669991951,
+    "input_checkpoint_unchanged": true,
+    "written_checkpoints": 2
+  },
+  "eval_video_single_1_9_20261124_a": {
+    "evaluation": true,
+    "obs_size": 524,
+    "waves": 3,
+    "agents": 3,
+    "finished": 3,
+    "finished_per_wave": [
+      1,
+      1,
+      1
+    ],
+    "fastest_native_seconds": 19.2498779296875,
+    "dt_ms_min": 16.66666753590107,
+    "dt_ms_max": 16.66666753590107,
+    "wall_seconds": 58.372111700009555,
+    "input_checkpoint_unchanged": true,
+    "written_checkpoints": 0
+  },
+  "baseline_pair_source_hashes_equal": true
+}

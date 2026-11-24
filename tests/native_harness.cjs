@@ -22,25 +22,26 @@ class Mem {
   readU8() { return this.readFloat(); }
   readS32() { return this.readFloat(); }
   readPointer() { return new Mem(this.readFloat()); }
-  readByteArray(n) { return new ArrayBuffer(n); }
+  readByteArray(n) { return Uint8Array.from({length:n},(_,i)=>heap.get(this.address+i)||0).buffer; }
   writeFloat(v) { heap.set(this.address, v); return this; }
   writeDouble(v) { return this.writeFloat(v); }
   writeU32(v) { return this.writeFloat(v); }
   writeU16(v) { return this.writeFloat(v); }
   writeU8(v) { return this.writeFloat(v); }
   writePointer(v) { return this.writeFloat(v.address); }
-  writeByteArray() { return this; }
+  writeByteArray(a) { Array.from(a).forEach((b,i)=>heap.set(this.address+i,b)); return this; }
 }
 let allocated = 0x1000000;
 const alloc = n => { const p = new Mem(allocated); allocated += Number(n) || 256; return p; };
-const sent = [];
+const sent = [], nativeCalls = [], patches = [];
+new Mem(0x450ef6).writeByteArray(config.lockBytes || [0x7c,0x53]);
 const context = vm.createContext({
   Mem, assert, Date, Math, ArrayBuffer, Uint8Array, Uint32Array, Float32Array,
   Process: { id: 1, getCurrentThreadId: () => 1,
     getModuleByName: () => ({base: new Mem(0x400000), findExportByName: () => new Mem(0x1000)}) },
-  Memory: {alloc, allocUtf16String: () => alloc(256), copy() {}},
+  Memory: {alloc, allocUtf16String: () => alloc(256), copy() {}, patchCode(p,n,fn) { patches.push({address:p.address,n});fn(p); }},
   Interceptor: {attach(p,h) { hooks.set(p.address,h); return {detach() {}}; }, replace(p,f) { replacements.set(p.address,f); }},
-  NativeFunction: function () { return () => new Mem(0); },
+  NativeFunction: function (p,ret,params,options) { return (...args) => { nativeCalls.push({address:p.address,args,options}); return new Mem(0); }; },
   NativeCallback: function (fn) { return fn; },
   ptr: n => new Mem(n), rpc: {}, setInterval() {},
   send: m => sent.push(JSON.parse(JSON.stringify(m))),
@@ -50,5 +51,5 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'realgame.js'), 'utf8'
 vm.runInContext(source.replace('__CONFIG__', JSON.stringify({agents: 2, pool: 40, wave_frames: 1200,
                                                           finish_frames: 60, finish_quota: 1, ...config})), context);
 
-return {context, heap, Mem, sent, source, hooks, replacements};
+return {context, heap, Mem, sent, source, hooks, replacements, nativeCalls, patches};
 };

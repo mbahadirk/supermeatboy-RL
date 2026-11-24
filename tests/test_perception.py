@@ -16,10 +16,15 @@ from perception_cases import fixture, snapshot
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_current_ppo_observation_parity():
+def test_legacy_box_observation_parity():
     expected = json.loads((Path(__file__).parent / 'data/perception_parity.json').read_text())
     expected.pop('source_hashes')
-    assert snapshot(R) == expected
+    actual=snapshot(R)
+    # Historical 'changed' fixture removed a tile's special bit but retained its solid ID1.
+    # The corrected owner decoder must keep it solid; the old golden incorrectly opened it.
+    changed=actual['cases'].pop('changed');expected['cases'].pop('changed')
+    assert actual == expected
+    assert changed['grid'] != actual['cases']['shapes']['grid']
 
 
 def test_enemy_laser_and_multiple_kill_regions():
@@ -112,7 +117,7 @@ def test_no_model_planner_or_online_dependency_even_when_importing():
     forbidden = {'wm', 'mpc', 'plan', 'agent'}
     for name in forbidden:
         assert not (ROOT / name).exists() and not (ROOT / (name + '.py')).exists()
-    for path in [ROOT / 'realgame.py', ROOT / 'realtest.py', ROOT / 'levels_smb.py', ROOT / 'realpath.py', ROOT / 'monitor.py', *ROOT.glob('game/*.py')]:
+    for path in [ROOT / 'realgame.py', ROOT / 'realtest.py', ROOT / 'ppo_rewards.py', ROOT / 'ppo_session.py', ROOT / 'levels_smb.py', ROOT / 'realpath.py', ROOT / 'monitor.py', *ROOT.glob('game/*.py')]:
         for n in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
             if isinstance(n, ast.Import):
                 assert not any(a.name.split('.')[0] in forbidden for a in n.names)
@@ -135,3 +140,27 @@ def test_native_observation_producers_and_frame_wire_format():
     result = subprocess.run(['node', str(Path(__file__).with_name('native_perception.cjs'))],
                             cwd=ROOT, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_special_tile_neighbour_bits_do_not_open_unbroken_blocks():
+    info,words=fixture();r,c=2,6;words[r,c]=0xc00164
+    lv=R.Level(info,words.tobytes());idx=r*lv.W+c
+    for w in [0x2c00164,0x3c00164,0xc00164]:
+        lv.apply_tiles([[idx,w]])
+        assert lv.solid[r,c] and lv.base[r,c]==R.C_SOLID
+    lv.apply_tiles([[idx,0x100]])
+    assert not lv.solid[r,c] and lv.base[r,c]==R.C_EMPTY
+    lv.apply_tiles([[idx,0xc00164]])
+    assert lv.solid[r,c]
+
+
+def test_widening_preserves_actor_and_value_for_any_new_shape_inputs(tmp_path):
+    torch.manual_seed(10)
+    old=R.Policy();file=tmp_path/'old.pt'
+    torch.save({'policy':old.state_dict(),'obs':R.OBS},file)
+    wide=R.Policy(R.obs_size(True));assert R.load_policy(wide,str(file))
+    base=torch.randn(20,R.OBS);extra=torch.randn(20,R.N_SHAPE)*5
+    joined=torch.cat([base,extra],dim=1)
+    assert torch.allclose(old.pi(base),wide.pi(joined),atol=1e-6,rtol=1e-5)
+    assert torch.allclose(old.vf(base),wide.vf(joined),atol=1e-6,rtol=1e-5)
+    assert not torch.count_nonzero(wide.pi[0].weight[:,R.OBS:])
