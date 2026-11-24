@@ -17,6 +17,7 @@ import numpy as np
 
 from realpath import ACCEL_TILE, BODY, accel_bits, box_distance, tile_classes, tile_shape   # noqa: F401 (ACCEL_TILE: re-exported)
 import contact_reach
+from game.projectiles import parse_shx  # re-export the shared native contract
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the smbrl folder (tools/, imported/)
 
@@ -509,13 +510,6 @@ def parse_lz(raw) -> list[tuple]:
     return out
 
 
-def parse_shx(sh, shx) -> list[tuple]:
-    """realgame.js "shx" ([kind, vx, vy] per "sh" row, same order) as [(kind, vx, vy)] aligned with sh; (None, None,
-    None) per row when missing or of another length (an older script)."""
-    sh = sh or []
-    if not shx or len(shx) != len(sh):
-        return [(None, None, None)] * len(sh)
-    return [(int(k), float(vx), float(vy)) for k, vx, vy in shx]
 
 
 class Level:

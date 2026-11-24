@@ -45,15 +45,14 @@ import numpy as np
 from game.level import SHAPE_CIRCLE, box_ids, hazard_shapes
 from wm.features import hazard_boxes
 from wm.rollout import World
+from game.projectiles import (Launcher, launch_key as _launch_key, shot_track as _observed_shot_track,
+                              LAUNCH_KEY, LAUNCH_P_MIN, LAUNCH_P_TOL)
 
 MATCH_TOL = 1.0          # game units: the recording still holds if every hazard is this close to it
 STILL = 5.0              # units/s: slower than this counts as not moving (radius 0 when extrapolated)
 GROW = 0.5               # extrapolated radius: 2 units + this x speed x time ahead
 REC_RADIUS = 1.0         # recorded positions: this much margin
 PERIOD_MIN = 20          # frames: the shortest period looked for (a box's own repetition in this wave)
-LAUNCH_KEY = 2.0         # units: shots born within this of one point come from one launcher (1-15: exact spawns)
-LAUNCH_P_MIN = 10        # frames: two births closer than this are not a launcher's period
-LAUNCH_P_TOL = 1         # frames: a launcher silent for longer than its period + this has stopped firing
 PERIOD_TRIES = 16        # periods verified per search at most (the shortest candidates first)
 FRAME_CACHE = True       # keep each recorded wave frame's boxes, World and check for the wave (_RecFrame); False:
                          # recompute them on every call (tests/test_future_cache.py compares the two)
@@ -320,25 +319,7 @@ class FutureWorld:
         """Shot `sid`'s positions in its current flight (n, 2), oldest first, ending at `frame`: at most SHOT_FIT
         consecutive frames of this wave, cut where the slot was empty or jumped (a new flight with a reused id:
         a step over SHOT_V_MAX, or a second difference over SHOT_JUMP)."""
-        out = []
-        for f in range(frame, frame - SHOT_FIT, -1):
-            rec = self.cur.get(f)
-            q = next((s for s in rec[2] if s[0] == sid), None) if rec is not None else None
-            if q is None:
-                break
-            p = np.array((float(q[1]), float(q[2])))
-            if out and np.hypot(*(p - out[-1])) > SHOT_V_MAX:
-                break
-            out.append(p)
-            if len(out) >= 3 and np.max(np.abs(out[-3] - 2 * out[-2] + out[-1])) > SHOT_JUMP:
-                # the jump is the longer of the two steps: out[-1] belongs to the slot's previous flight, or (only
-                # decidable when these are the first three) out[-2] already did
-                if len(out) == 3 and np.hypot(*(out[0] - out[1])) > np.hypot(*(out[1] - out[2])):
-                    del out[1:]
-                else:
-                    out.pop()
-                break
-        return np.array(out[::-1], np.float64).reshape(-1, 2)
+        return _observed_shot_track(self.cur, frame, sid, SHOT_FIT, SHOT_V_MAX, SHOT_JUMP)
 
     def periods(self) -> list:
         """This frame's kill boxes repeating with their own period [(index in kill_now, _BoxRun, P)], searched once
@@ -621,29 +602,6 @@ class _BoxRun:
         frames before it."""
         k = np.arange(1, H + 1)
         return self.arr[self.n - 1 + k - P * (-(-k // P))]
-
-
-class Launcher:
-    """What fires shots at one spawn point (FutureWorld._shots_seen): its period P (frames between two births seen
-    in one wave; kept for the level), the last birth in this wave, the shot's id and radius, and its template
-    flight (positions by age from the birth: the last whole flight, complete=True, the shot gone after it)."""
-
-    def __init__(self):
-        self.P: int | None = None
-        self.last: int | None = None
-        self.sid = None
-        self.radius: float | None = None
-        self.template: np.ndarray | None = None
-        self.complete = False
-
-    def born(self, frame: int, sid, radius: float):
-        if self.last is not None and frame - self.last >= LAUNCH_P_MIN:
-            self.P = int(frame - self.last)
-        self.last, self.sid, self.radius = int(frame), sid, float(radius)
-
-
-def _launch_key(x: float, y: float) -> tuple:
-    return int(round(float(x) / LAUNCH_KEY)), int(round(float(y) / LAUNCH_KEY))
 
 
 def _shot_offset(a: list, b: list) -> float:

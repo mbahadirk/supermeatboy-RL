@@ -1,5 +1,315 @@
 # Super Meat Boy RL: project history
 
+## Commit / Colab handoff — 2026-11-24
+
+Read COLAB_HANDOFF.md first for the next agent: exact user scope, local data/checkpoints,
+missing conversion/export/resume/comparison tools and validation limits. Colab work has not
+started. Main pre-existing planner/performance edits remain separate from this session commit.
+
+## Requested Colab WM retraining scope — 2026-11-24
+
+User requests a Colab world model trained from all collected valid data EXCEPT chapter4,
+then comparison with earlier WMs. Explicit answer includes the previously held-out nonchapter4
+levels; old eval_levels.json exclusion list is not the requested new training scope. Runtime
+exclusions have NOT been changed yet. Keep independent trace/attempt validation and freeze sources.
+Preparation blockers verified: ONLYPPO native_frames.jsonl.gz has no WM-shard converter yet
+(raw sh/shx parity does not make it a directly loadable wm_data shard; reward/held/terminal
+missing evidence must not be fabricated). All-source scan also finds thousands of test/tmp
+fixtures: inventory is analysis/colab_all_data_20261124/inventory.json, with85 collected-source
+candidates/12818 shards before quality/duplicate checks, plus native runs. Not an audited final
+training set. Do not blindly recursively glob every wave npz into training.
+Current compare_steps strict path requires all checkpoints share a manifest; old strict models
+have different manifests. Existing --legacy-split cannot bypass that. A common external
+comparison adapter with train-overlap labels is needed, without relabeling checkpoints.
+Baselines inspected: human_v3_gpu step4,tile-shapes-v1,width419,5x256/3 layers; human_v4_gpu
+step4,tile-accel-v1,width664; human_v4p_gpu step4,tile-plat-v1,width664. All gravity-v1; all
+have some chapter4 training listed (2,2,6 levels respectively), so chapter4 generalization
+comparisons are not equally unseen for old/new models. New baseline-aligned training proposal:
+step4,tile-plat-v1,gravity-v1,5 members,hidden256,layers3,seed0; start fresh (current --init
+skips base epochs). Train --load-features on Colab after local source freeze/conversion/split.
+Do not silently sample 'all data': default max_samples500000 caps; all transitions require
+explicit uncapped preparation and a RAM/streaming plan. build caps after feature construction,
+so lowering max_samples alone does not bound preparation RAM. Current trainer saves final
+weights after fit, not resumable optimizer checkpoints per epoch. No training/export started.
+
+## Shared projectile observations ported to ONLYPPO — 2026-11-24
+
+User authorized main's projectile observation mechanism in ONLYPPO, with raw WM-data compatibility.
+Report: main analysis/ppo_projectile_port_20261124/report.md; verify_replay.py/replay_parity.json.
+Byte-identical game/projectiles.py in both worktrees owns parse_shx, existing Launcher period
+contract, spawn grouping and shot_track slot detection. Main game.level re-exports parser;
+mpc.future delegates observation-only helpers; future trajectories/WM/planner stay in main.
+ONLYPPO imports none of wm/mpc/plan/agent. Raw sh/shx alignment/units and WM collector ROW/frame
+schema unchanged. Native shx speed now reaches PPO even on first visible frame; unknown metadata
+keeps fallback estimation. No unverified native fire timer or hardcoded1-20 period was added.
+CLI projectile inputs default on (--projectile-inputs; --no-projectile-inputs for old widths).
+Append2x13 observed source/period/phase fields after prior inputs:524->550 with shape maps,
+282->308 without. period_known/phase_known/velocity_known explicit; period persists within level,
+phase resets each wave and expires after a missed expected shot. Verified periods rank before
+unconfirmed short tracks, then nearest source. Before first fresh birth/known period no exact
+phase claim. This is main's observed shot-clock knowledge, not full FutureWorld forecasts.
+Zero-column migration preserves initial actor/value outputs;308->550 relocates clock columns
+past inserted shape maps; dropping trained features refused. Saved metadata/schema/source hashes
+updated. Original checkpoints untouched; further training needed to use new inputs.
+Validation:ONLYPPO106 tests passed;main41 focused passed;601 actual1-20 recorded frames matched
+main FutureWorld's source periods/last births/ids/radii;four verified119-frame sources. Native
+runtime untouched/no live gameplay test launched; completion improvement remains unmeasured.
+Continue from runs/aplus_v2_batch2048/model.pt into new --name aplus_v2_projectiles using
+--shape-inputs --projectile-inputs --realtest --batch2048 --record-states, after Ctrl+C saves
+current training. Details/limits/command and raw-schema-vs-network-vector distinction in report.
+
+## PPO 1-20 shooter timing audit (proposal only) — 2026-11-24
+
+ONLYPPO analysis/ppo_1_20_shooters_20261124/report.md/results.json and audit.py preserve
+native evidence. Read-only run aplus_v2_batch2048 snapshot53waves/2120trials/0finishes,
+2015deaths.127 agent-wave attempts enteredx>150. Of99 observed deaths in right/end region,
+73 overlap launcher1 projectile and20 static hazard (contact matches, not native cause flags).
+Projectile contact ages0..24frames,median5;42/73 within5frames, some on birth frame.
+Four kind0 launchers: observed flying births every119frames,first sampled frame85;
+projectile speed360units/s. Do not hardcode this period as a universal shooter rule.
+PPO sees flying shot map and nearest2 moving hazards within200units, but no shooter timer,
+pre-fire/reload phase or wave clock. Policy is a feedforward MLP. Native shx velocities are
+sent but Python currently estimates velocity by position differences, zero for first-seen IDs.
+This supports the missing pre-shot-information hypothesis, not proof of sole cause or that
+phase inputs alone guarantee completion. Existing static launcher rules mainly validate
+kind5; actual1-20 kind0 state/timer interpretation needs verification against native births.
+Minimum proposed change: expose native shooter position/direction/phase as appended PPO
+features with existing zero-column widening, and use aligned native shx velocity for new
+shots. Keep ONLYPPO free of WM/action planners; no generic waiting penalty. No runtime,
+weights, live eval or game state was changed by this audit; no new features implemented yet.
+
+## ONLYPPO shorter PPO feedback batch — 2026-11-24
+
+User authorized the 1-20 audit's small batch experiment. ONLYPPO realgame.py now defaults
+--batch to2048 (was16384); explicit --batch still overrides it. Updates remain between waves
+once the threshold is met; the full collected batch is consumed, not truncated to2048.
+No reward, architecture, learning-rate, minibatch-size or realtest progression changes.
+Main runtime unchanged. Existing trainer processes retain their parsed setting until restarted.
+No checkpoint was overwritten or live run started by this edit. Continue from the latest
+runs/aplus_v2_1_14_continue/model.pt in a new run, e.g. --name aplus_v2_batch2048.
+Validation: CLI default2048 and explicit override16384 checked; Python compilation/diff checks.
+Live improvement remains unverified; compare first-saw clearance/survival, not wave count alone.
+
+## PPO 1-20 early-death audit (no runtime change) — 2026-11-24
+
+ONLYPPO analysis/ppo_1_20_20261124/report.md/results.json and audit.py preserve evidence.
+Original realtest kept running; no game attachment, policy update or model overwrite by audit.
+Full snapshot207 waves:0/8280 finishes,8279 deaths/1 timeout. Most sampled individual deaths
+occur frame5 near(-320,-220), under overhead native saw center(-319.88,-173.50),radius47.48;
+spawn(-330,-250). Initial reconstructed route points left, but policy often jumps/right.
+Hazard is present in reconstructed local PPO grid. Exact original live routes not recorded.
+Only100589 action samples accumulated in207 waves (~1.4 full40-agent30s waves). Production
+batch16384/end-of-wave reset simulation implies6 PPO.update feedback rounds (each includes
+multiple minibatch gradient steps), not207. Initial batch carry is unknown; min/max both6.
+Sampled reconstructed returns median~-14.75, dominated by death-15; no positive death exploit
+shown. Current tensors finite,maxabs3.345. Identical reconstructed spawn-neighborhood probes:
+1-19 best jump79.54%,current61.24%,earlier1-13 best28.64%. Some behavior changed; no global
+numeric collapse. Alternative safe starts remain rare. Reconstructed rewards/logits are not
+original training values; full caveats in report. First small experiment: existing --batch2048
+in separate realtest, keeping originals/rewards intact; feedback-frequency benefit is a
+counterfactual scheduling result, not verified completion improvement. No new blanket jump,
+waiting penalty or architecture change was made. More wave count alone is a poor measure here.
+
+## PPO 1-15 weight/replay audit (no runtime change) — 2026-11-24
+
+ONLYPPO analysis/ppo_1_15_20261124/report.md and results.json contain evidence, checkpoint
+SHA256s and reproducible scripts. User run aplus_v2_1_14_continue remained active; only a
+model snapshot and recorded frames were read. At summary snapshot:1-14 had143/880 finishes
+in22 waves;1-15 had0/1200 in30 waves,1146 deaths/54 timeouts. Wave26 real jumping repeats
+under the lower slab;358 grounded-to-upward-air takeoffs,89.31% jump requests. Unlike1-14,
+this is not simply held jump with no physical jumps. Later wave30/partial31 clusters are
+higher (-80..-60 vs -240), so absolute no-progress is not supported; still no finish then.
+Seven checkpoint tensors all finite; no NaN/Inf/numeric explosion or global constant policy.
+Same121 reconstructed lower-region input probes: jump mean before long1-14 stay98.97%,
+after96.10%,successful1-14 best92.89%,current1-15 snapshot97.55%. Bias predates70-wave stay;
+current left/right still differ and entropy~0.805nats. No controlled causal evidence that70
+waves alone caused collapse. Fixed historical1-9 action agreement drifts72.5->62.4% across
+long1-14 stay (current64.2%), suggesting possible partial forgetting, NOT live success rates.
+Exact native later-wave routes/logits not recorded: offline probe routes were reconstructed
+without prior-wave hazard sweep memory. Full limitations in report. No new penalties,
+auto jump changes, weight reset, game attachment or eval gameplay were added. Suggested
+next test targets ceiling/lateral progress, with careful waiting/wall-jump preservation;
+retention needs old-level live checks and on-policy rehearsal, not naive old PPO replay.
+
+## PPO 1-14 progress visibility implemented — 2026-11-24
+
+Supersedes the proposal-only diagnosis below. ONLYPPO realpath.py now rejects local field
+candidates across solid tile geometry using cached analytic polygon clipping from existing
+shape owners. No PPO inputs/reward coefficients/jump semantics changed. Dynamic special tiles
+retain prior handling because static route words cannot determine per-agent opening/breaking.
+96 tests passed, including rotated/flipped half/slope geometry, clear/full-wall connections,
+above/below-floor separation and dynamic special compatibility. Main runtime was not changed.
+Evidence: ONLYPPO analysis/ppo_1_14_20261124/report.md, retest.log, retest_results.json.
+Learning-on realtest from preserved aplus_v2:5 completed waves,0/200 finishes,9 deaths,191 timeouts.
+Test saved to runs/aplus_v2_1_14_visibility_fix/model.pt and stopped; original checkpoint SHA
+unchanged, native timing bytes restored7c53. Correction is implemented;1-14 is NOT solved.
+Ledge jump action fraction99.91..99.97%, actual hops0.0/s first3waves and0.1/s last2: held jump
+rarely becomes a new press on the floor (existing native re-press applies only on airborne walls).
+Wave5 one agent reached lower-left escape region after ledge; no finish. Max progress70->77%
+is not controlled evidence because hazard sweep recognition rebuilt routes after wave3.
+The final dynamic-special guard was tested after the live run;1-14 has zero special tiles,
+so its tested geometry is unchanged. Detailed raw frames/actions now exist for this run.
+
+## PPO 1-14 plateau diagnosis (proposal only) — 2026-11-24
+
+Details refer to the ONLYPPO worktree; main runtime was not changed.
+
+ONLYPPO evidence: analysis/ppo_1_14_20261124/report.md, passive_sample.json, diagnosis.json;
+capture.py and analyze.py reproduce collection/analysis. aplus_v2 snapshot:65 completed1-14
+waves,0/2600 finishes,653 deaths,1947 timeouts; last10 waves12 deaths/388 timeouts.
+Historical raw frames were not enabled. A separate passive25s observer found all40 characters
+on the same ledge (x75..121,y35.86..36.01), above native goal(32,-132.72).
+RewardPath.value() samples nearby free cell centers without checking solid geometry between
+the character and candidate. On half-floor tiles, progress leaks from below the supporting floor.
+Hazard-free reconstructed routes reproduce a local maximum atx110 matching the live cluster;
+this is strong evidence, not an exact dump of live trainer routes or a live causal validation.
+Minimum proposed fix: shape-aware local visibility for field candidates at RewardPath.value,
+reusing existing tile-shape ownership/caching. Improves progress and PPO route lookahead together.
+Do not increase waiting penalties, add level-specific actions or change model inputs. Continue
+from aplus_v2 after correction, with raw telemetry in a separate realtest run. No eval required.
+No runtime, weight or active trainer configuration change was made during this diagnosis.
+
+## Training Monitor Full HD rendering — 2026-11-24
+
+Both main and ONLYPPO monitor.py now draw a native1920x1080 canvas (previously1500x900),
+with map width1100 and fonts18/16/23. Resized windows use smoothscale instead of nearest-neighbor
+scale; aspect-preserving viewport and mouse-coordinate conversion remain shared. Native-size
+presentation directly blits without filtering. No agent/training behavior changed.
+Validation: headless1920x1080,1280x720,900x700 draws and slider mouse mapping passed;
+Full HD preview inspected at .worktrees/onlyppo/analysis/monitor_fullhd_20261124.png.
+ONLYPPO suite40 passed (one existing pygame/pkg_resources warning). Restart the trainer to load
+updated monitor code; save the active run with Ctrl+C before resuming its model.pt.
+
+## ONLYPPO 1-9 recovery — 2026-11-24
+
+Implementation and live evidence are in `.worktrees/onlyppo`; main runtime was not changed.
+See `.worktrees/onlyppo/analysis/ppo_recovery_20261124/report.md` and its shared project notes.
+Fixed native60Hz timing with safe restoration, frozen evaluation/provenance/telemetry, native tile
+identity/live occupancy decoding, and zero initialization of widened checkpoint inputs.
+Matched-source frozen old/current comparison:12/200 vs0/200; corrected tiles alone current0/80.
+Warm-starting old skills into current524-input PPO and training five updates produced46/200 online
+finishes (not a frozen final success rate), best native5.216680s. Recovered model is
+`.worktrees/onlyppo/runs/ppo_recovery_1_9_20261124_a/model.pt`; successful best is
+`levels/1-9/best.pt` under that run. Both need --shape-inputs. Separate frozen single greedy agent
+passed3/3 in19.249878s each (not A+). Original checkpoints preserved; no native map record/video
+written and no training left running. Native timing restored to original7c53 after tests.
+40 tests passed. No WM/action planner added to ONLYPPO. Original regression cause remains partly
+unisolated; timing/map fixes alone do not repair the existing learned stuck policy.
+
+## PPO 1-9 historical/current comparison — 2026-11-24
+
+Report in main worktree: analysis/ppo_1_9_compare_20261124/report.md; reproducible teacher-forced inputs
+and policy_audit.py. No game run, model update or runtime edit. Available current checkpoint is
+ONLYPPO ppo_aplus_v1/model.pt datedNov20; no full current1-9 recording/config exists. Historical d245429
+is a committed proxy, not a proven exact training commit. Isolated archived source/data helpers stay
+under main analysis/, not in ONLYPPO (no WM/planner added).
+
+On335 known-success states with current geometry, archived282-input policy matches recorded actions83.0%
+vs current524 policy27.5% (NOT live success rates). At first right wall: old left77.0%, current19.5%;
+current jump99.96%. Old policy still responds well through current perception; main reward route points
+are identical and reconstructed success return149.58061 vs149.57734. Zeroing extra242 shape features barely
+changes current agreement. Base PPO class AST and existing reward constants match historical code exactly.
+The stronger old collection has fixed16.667ms recorded dt; ONLYPPO preserves variable steps while usingHZ60
+for rewards/input durations/velocity. Physics inconsistency is a strong candidate, not an isolated causal
+proof. Old collector resumed a pretrained model,50 agents/all-agent waves/30s; current began fresh with40
+and A+ +5 advancement. Actual old result:17/350 complete trials (4.86%),already3 successes in first wave.
+New curriculum/initialization differs; quota/A+ advance cannot directly explain an unsolved1-9 where neither
+fires. Current1200-frame budget also exceeds the335-action success. Increasing wait penalty is not justified.
+
+Recommended next experiment: no-learning old/new checkpoint comparison under the same fixed native dt,
+geometry and trial budget, then current full telemetry. No runtime change authorized/implemented in this
+comparison. All17 archived traces are contiguous, start at native spawn, max frame move8.281 units and
+finish within13.817 of native goal. Nov1 137-input/pre-lock result is less comparable than the282-input PPO.
+
+## Archived PPO 1-9 successes found — 2026-11-24
+
+Audit: analysis/ppo_1_9_archive_20261124/report.md (main worktree), inventory.json and successful_traces.json.
+Older real_20261101-151650 has1-9 best.json4.75 frame/60 seconds, agent22,285 actions, best.pt; this
+pre-timing-lock value is not verified wall-clock/A+. collect_2-10_ppo50_01 has1-9 best.json5.5833 seconds,
+agent6,335 actions and best.pt. All335 actions exactly match wm_data/wave_00173.npz agent6 (local wave7;
+saved best's wave166 uses a different counter). That collection has8 1-9 shards with17 distinct successful
+PPO traces; every last status is2 and max endpoint distance to native goal is13.817 units. Full positions,
+velocities, actions/rewards and sibling world JSON.gz are present. Metadata explicitly source:ppo,mode:train;
+--wm-collect recorded experience, not WM/planner action selection. No model/run/game was changed.
+Current ONLYPPO has no saved1-9 best. These archives support later comparison; no new penalty/fix was added.
+
+2026-11-20: ONLYPPO replay fix now uses native Next Level callback (mscdecl, exceptions:propagate);
+Windows debug-print exceptions had interrupted direct calls. Corrected callback loaded1-2 live after
+A+ plus5 extra waves; test agent saved/detached. 1-9 live loop analysis led to event-only repeated-hop
+cost0.03 after3 free local launches, cap0.6/life; standing/waiting incurs no added cost. 33 tests passed.
+See .worktrees/onlyppo/analysis/replay_hops_20261120/report.md and branch PROJECT_STATE.md for evidence
+and limits. Original PPO run preserved. Main runtime code unchanged.
+
+2026-11-20: ONLYPPO previous features pushed at 3c0101b. A subsequent local perception fix in
+`.worktrees/onlyppo` preserves native circle/game-box/laser tags through PPO grids, sealing, existing
+reward routes and monitor drawing (main observed-geometry formulas, no WM/action planner). 28 tests
+passed; live 1-6 unverified. Branch PROJECT_STATE.md is authoritative. Main source remains untouched.
+
+2026-11-20: ONLYPPO realtest mid-level identity fix is in `.worktrees/onlyppo`: configured imported
+assets now drive level identification; initial go reply synchronizes resolved name to native. 22 tests
+passed; live progression unverified. See branch PROJECT_STATE.md for evidence and fresh/resume usage.
+
+2026-11-20: Training Monitor fonts increased from 14/12/18 to 16/14/20 (normal/small/heading).
+Policy rows, chart labels and panel spacing increased accordingly; route summaries wrap within the panel.
+
+2026-11-20: Training Monitor network diagram and its unused per-wave policy snapshots were removed.
+The window is resizable using pygame RESIZABLE and a scaled canvas: map, charts and mouse controls scale together
+with aspect ratio preserved. PPO actions/rewards/updates are unchanged.
+Validation: main tile/monitor checks 18 passed; ONLYPPO suite 21 passed. Headless small/large-window
+drawing and scaled slider clicks passed; Python compilation/diff checks passed. Desktop visual review
+was not performed.
+
+2026-11-20: Main native HUD now shows `BEST <time> | WAVE <number>`, including before the first finish,
+matching ONLYPPO. Uses the existing native wave counter (reset per level); label buffers refresh only
+on wave changes. Node syntax check passed; live visual placement remains unverified.
+
+2026-11-20, ONLYPPO --realtest:
+
+Implemented in the separate `.worktrees/onlyppo` worktree (ONLYPPO branch), using `realgame.py --realtest`.
+Every native A+ triggers save/next-level after PPO wave processing; other results retry. Native HUD time
+and chapter par determine grade, with native-save backup and checked go/finish handoff. No world model,
+action planner or reward change. Branch PROJECT_STATE.md/PROJECT_HISTORY.md contain usage and limits.
+Validation: 21 tests plus syntax/compilation and PPO/reward AST parity; live native progression unverified.
+Main's existing source/run/model changes are preserved; no commit/push performed for this addition.
+
+2026-11-19, implemented authorized fixes after online_check21 audit: ready handoff is judged before the
+CURRENT plan's proof expiry; unusable replacements still stop at the limit and mandatory events retain
+priority. Both plan producers carry owned, time-aligned support_platforms context through async transport;
+Committer uses it on late/translated paths with existing private-key semantics. No safety threshold or
+checkpoint change. Matched valid fixture: cancel2/commit0 -> cancel0/commit1. Two unchanged recorded A+
+paths: support triggers84->32,55 old mismatches resolve,3 new remain exposed. No native FPS/finish claim,
+no live/run/save/model/memory/ONLYPPO changes.4-2 boarding remains separate. Evidence/checks:
+analysis/handoff_support_fix_20261119/report.md; final verification recorded in PROJECT_STATE.md.
+Final full suite702 passed/one existing warning (363.36s); compilation/diff/ONLYPPO checks passed.
+Prepared online_check22 command uses latest online_check21 checkpoint; it has not been executed.
+
+2026-11-19, bounded read-only online_check21 replay audit:844 complete lives across4-18/4-1/4-2/4-3/4-4.
+4-18 retained two A+22.084s finishes at0.262/0.254x (old successful0.147x), still not real-time. Identified
+own prior proof-expiry ordering regression: old proof expires before a ready boundary job can be taken;
+deterministic ready fixture cancels both. Also Committer caches future path support against stationary
+adoption-time bars;55/84 mismatches over two native successes resolve with time-aligned actual future bars.
+Next fix: valid ready handoff before expiry, producer-owned future support trace; retain hard stop and genuine
+support events.4-2 dies600/600,548 same h47#3 after forward boarding overshoot;4-3 succeeds8/13/one A+;
+4-4 dies76/76. Scope/evidence: analysis/replay_check21_20261119/report.md. No production changes in this audit.
+
+2026-11-19, committed/pushed working A+/carrier implementation as f5ef6eb before speed work. Native
+online_check20 wave24 confirms first4-18 A+:22.35s vs24.5s, but151.84s wall/0.147x,205 decisions,
+85.188s combined sync/ahead waits. check_s includes blocking route_triggers, so its53.233ms/frame is not
+pure extra geometry cost. Performance implementation shares compact/cached kill profiles, batches terrain/
+future-support queries, preserves periodic-search history while pruning impossible offsets, filters distant
+transport trigger shapes, and tries a small station-only search with the unchanged all-member16f proof.
+Rejected small searches return to the full planner before adoption; obstacle/key/portal/proven-route/near-goal
+cases retain full search. Same horizon/ensemble/safety/async policy. Native speed/finish under these performance
+edits remains unverified. Details/check results: analysis/perf_check20_20261119/report.md and PROJECT_STATE.md.
+
+The auto/events phase also kept --planners2 in a single-job schedule (zero speculative starts in the native
+success). It now uses the parallel pool while retaining event waits; Plan.execution_limit prevents execution
+or late adoption beyond a carrier proof and caps the primary forecast deadline. This changes timed-job
+scheduling, not the mandatory danger/surprise/support waits. Native scheduling speed still needs measurement.
+Final full regression692 passed/one existing warning in262.38s; compilation/diff/ONLYPPO checks passed.
+Current performance edits are local after the baseline push. Native next-run command is prepared, not run,
+at analysis/perf_check20_20261119/command.ps1; successful-run data and models remain unchanged.
+
 2026-11-19, user reports first actual 4-18 completion with the anticipatory crossing implementation,
 but game runs roughly0.1x. Asked to commit/push the current implementation before optimizing. Latest run
 online_check20; quantitative completion/speed audit pending. Prior offline failure remains historical.
